@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "deny": [
+      "Edit(node_modules/**)",
+      "Edit(dist/**)",
+      "Edit(package-lock.json)",
+      "Edit(yarn.lock)",
+      "Read(.env)",
+      "Read(.env.local)",
+      "Read(.env.development)",
+      "Read(.env.production)",
+      "Read(**/*.key)",
+      "Read(**/*.pem)",
+      "Read(.git/config)",  // May contain auth tokens
+      "Read(gcp-oauth.keys.json)"
+    ]
+  }
+}

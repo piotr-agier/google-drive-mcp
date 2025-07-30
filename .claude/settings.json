@@ -11,7 +11,7 @@
       "Read(.env.production)",
       "Read(**/*.key)",
       "Read(**/*.pem)",
-      "Read(.git/config)",  // May contain auth tokens
+      "Read(.git/config)",
       "Read(gcp-oauth.keys.json)"
     ]
   }

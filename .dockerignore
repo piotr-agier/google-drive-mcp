@@ -7,7 +7,10 @@ npm-debug.log
 .DS_Store
 *.log
 src/
+scripts/
 tsconfig.json
 .vscode/
 .idea/
 gcp-oauth.keys.json
+tokens.json
+auth.log

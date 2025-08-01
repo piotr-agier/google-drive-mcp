@@ -107,6 +107,7 @@ function getMimeTypeFromFilename(filename: string): string {
 }
 
 
+
 /**
  * Resolve a slash-delimited path (e.g. "/some/folder") within Google Drive
  * into a folder ID. Creates folders if they don't exist.
@@ -287,6 +288,37 @@ const UpdateGoogleSlidesSchema = z.object({
     title: z.string(),
     content: z.string()
   })).min(1, "At least one slide is required")
+});
+
+const FormatGoogleDocTextSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  startIndex: z.number().min(1, "Start index must be at least 1"),
+  endIndex: z.number().min(1, "End index must be at least 1"),
+  bold: z.boolean().optional(),
+  italic: z.boolean().optional(),
+  underline: z.boolean().optional(),
+  strikethrough: z.boolean().optional(),
+  fontSize: z.number().optional(),
+  foregroundColor: z.object({
+    red: z.number().min(0).max(1).optional(),
+    green: z.number().min(0).max(1).optional(),
+    blue: z.number().min(0).max(1).optional()
+  }).optional()
+});
+
+const FormatGoogleDocParagraphSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  startIndex: z.number().min(1, "Start index must be at least 1"),
+  endIndex: z.number().min(1, "End index must be at least 1"),
+  namedStyleType: z.enum(['NORMAL_TEXT', 'TITLE', 'SUBTITLE', 'HEADING_1', 'HEADING_2', 'HEADING_3', 'HEADING_4', 'HEADING_5', 'HEADING_6']).optional(),
+  alignment: z.enum(['START', 'CENTER', 'END', 'JUSTIFIED']).optional(),
+  lineSpacing: z.number().optional(),
+  spaceAbove: z.number().optional(),
+  spaceBelow: z.number().optional()
+});
+
+const GetGoogleDocContentSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required")
 });
 
 // -----------------------------------------------------------------------------
@@ -650,6 +682,73 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             }
           },
           required: ["presentationId", "slides"]
+        }
+      },
+      {
+        name: "formatGoogleDocText",
+        description: "Apply text formatting to a range in a Google Doc",
+        inputSchema: {
+          type: "object",
+          properties: {
+            documentId: { type: "string", description: "Document ID" },
+            startIndex: { type: "number", description: "Start index (1-based)" },
+            endIndex: { type: "number", description: "End index (1-based)" },
+            bold: { type: "boolean", description: "Make text bold", optional: true },
+            italic: { type: "boolean", description: "Make text italic", optional: true },
+            underline: { type: "boolean", description: "Underline text", optional: true },
+            strikethrough: { type: "boolean", description: "Strikethrough text", optional: true },
+            fontSize: { type: "number", description: "Font size in points", optional: true },
+            foregroundColor: {
+              type: "object",
+              description: "Text color (RGB values 0-1)",
+              properties: {
+                red: { type: "number", optional: true },
+                green: { type: "number", optional: true },
+                blue: { type: "number", optional: true }
+              },
+              optional: true
+            }
+          },
+          required: ["documentId", "startIndex", "endIndex"]
+        }
+      },
+      {
+        name: "formatGoogleDocParagraph",
+        description: "Apply paragraph formatting to a range in a Google Doc",
+        inputSchema: {
+          type: "object",
+          properties: {
+            documentId: { type: "string", description: "Document ID" },
+            startIndex: { type: "number", description: "Start index (1-based)" },
+            endIndex: { type: "number", description: "End index (1-based)" },
+            namedStyleType: {
+              type: "string",
+              description: "Paragraph style",
+              enum: ["NORMAL_TEXT", "TITLE", "SUBTITLE", "HEADING_1", "HEADING_2", "HEADING_3", "HEADING_4", "HEADING_5", "HEADING_6"],
+              optional: true
+            },
+            alignment: {
+              type: "string",
+              description: "Text alignment",
+              enum: ["START", "CENTER", "END", "JUSTIFIED"],
+              optional: true
+            },
+            lineSpacing: { type: "number", description: "Line spacing multiplier", optional: true },
+            spaceAbove: { type: "number", description: "Space above paragraph in points", optional: true },
+            spaceBelow: { type: "number", description: "Space below paragraph in points", optional: true }
+          },
+          required: ["documentId", "startIndex", "endIndex"]
+        }
+      },
+      {
+        name: "getGoogleDocContent",
+        description: "Get content of a Google Doc with text indices for formatting",
+        inputSchema: {
+          type: "object",
+          properties: {
+            documentId: { type: "string", description: "Document ID" }
+          },
+          required: ["documentId"]
         }
       }
     ]
@@ -1020,9 +1119,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         await docs.documents.batchUpdate({
           documentId: doc.id!,
           requestBody: {
-            requests: [{
-              insertText: { location: { index: 1 }, text: args.content }
-            }]
+            requests: [
+              {
+                insertText: { location: { index: 1 }, text: args.content }
+              },
+              // Ensure the text is formatted as normal text, not as a header
+              {
+                updateParagraphStyle: {
+                  range: {
+                    startIndex: 1,
+                    endIndex: args.content.length + 1
+                  },
+                  paragraphStyle: {
+                    namedStyleType: 'NORMAL_TEXT'
+                  },
+                  fields: 'namedStyleType'
+                }
+              }
+            ]
           }
         });
 
@@ -1067,9 +1181,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         await docs.documents.batchUpdate({
           documentId: args.documentId,
           requestBody: {
-            requests: [{
-              insertText: { location: { index: 1 }, text: args.content }
-            }]
+            requests: [
+              {
+                insertText: { location: { index: 1 }, text: args.content }
+              },
+              // Ensure the text is formatted as normal text, not as a header
+              {
+                updateParagraphStyle: {
+                  range: {
+                    startIndex: 1,
+                    endIndex: args.content.length + 1
+                  },
+                  paragraphStyle: {
+                    namedStyleType: 'NORMAL_TEXT'
+                  },
+                  fields: 'namedStyleType'
+                }
+              }
+            ]
           }
         });
 
@@ -1404,6 +1533,213 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             text: `Updated Google Slides presentation with ${args.slides.length} slide(s)\nLink: https://docs.google.com/presentation/d/${args.presentationId}`,
           }],
           isError: false,
+        };
+      }
+
+      case "formatGoogleDocText": {
+        const validation = FormatGoogleDocTextSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const docs = google.docs({ version: 'v1', auth: authClient });
+        
+        // Build text style object
+        const textStyle: any = {};
+        const fields: string[] = [];
+        
+        if (args.bold !== undefined) {
+          textStyle.bold = args.bold;
+          fields.push('bold');
+        }
+        
+        if (args.italic !== undefined) {
+          textStyle.italic = args.italic;
+          fields.push('italic');
+        }
+        
+        if (args.underline !== undefined) {
+          textStyle.underline = args.underline;
+          fields.push('underline');
+        }
+        
+        if (args.strikethrough !== undefined) {
+          textStyle.strikethrough = args.strikethrough;
+          fields.push('strikethrough');
+        }
+        
+        if (args.fontSize !== undefined) {
+          textStyle.fontSize = {
+            magnitude: args.fontSize,
+            unit: 'PT'
+          };
+          fields.push('fontSize');
+        }
+        
+        if (args.foregroundColor) {
+          textStyle.foregroundColor = {
+            color: {
+              rgbColor: {
+                red: args.foregroundColor.red || 0,
+                green: args.foregroundColor.green || 0,
+                blue: args.foregroundColor.blue || 0
+              }
+            }
+          };
+          fields.push('foregroundColor');
+        }
+        
+        if (fields.length === 0) {
+          return errorResponse("No formatting options specified");
+        }
+        
+        await docs.documents.batchUpdate({
+          documentId: args.documentId,
+          requestBody: {
+            requests: [{
+              updateTextStyle: {
+                range: {
+                  startIndex: args.startIndex,
+                  endIndex: args.endIndex
+                },
+                textStyle,
+                fields: fields.join(',')
+              }
+            }]
+          }
+        });
+        
+        return {
+          content: [{ type: "text", text: `Applied text formatting to range ${args.startIndex}-${args.endIndex}` }],
+          isError: false
+        };
+      }
+
+      case "formatGoogleDocParagraph": {
+        const validation = FormatGoogleDocParagraphSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const docs = google.docs({ version: 'v1', auth: authClient });
+        
+        // Build paragraph style object
+        const paragraphStyle: any = {};
+        const fields: string[] = [];
+        
+        if (args.namedStyleType !== undefined) {
+          paragraphStyle.namedStyleType = args.namedStyleType;
+          fields.push('namedStyleType');
+        }
+        
+        if (args.alignment !== undefined) {
+          paragraphStyle.alignment = args.alignment;
+          fields.push('alignment');
+        }
+        
+        if (args.lineSpacing !== undefined) {
+          paragraphStyle.lineSpacing = args.lineSpacing;
+          fields.push('lineSpacing');
+        }
+        
+        if (args.spaceAbove !== undefined) {
+          paragraphStyle.spaceAbove = {
+            magnitude: args.spaceAbove,
+            unit: 'PT'
+          };
+          fields.push('spaceAbove');
+        }
+        
+        if (args.spaceBelow !== undefined) {
+          paragraphStyle.spaceBelow = {
+            magnitude: args.spaceBelow,
+            unit: 'PT'
+          };
+          fields.push('spaceBelow');
+        }
+        
+        if (fields.length === 0) {
+          return errorResponse("No formatting options specified");
+        }
+        
+        await docs.documents.batchUpdate({
+          documentId: args.documentId,
+          requestBody: {
+            requests: [{
+              updateParagraphStyle: {
+                range: {
+                  startIndex: args.startIndex,
+                  endIndex: args.endIndex
+                },
+                paragraphStyle,
+                fields: fields.join(',')
+              }
+            }]
+          }
+        });
+        
+        return {
+          content: [{ type: "text", text: `Applied paragraph formatting to range ${args.startIndex}-${args.endIndex}` }],
+          isError: false
+        };
+      }
+
+      case "getGoogleDocContent": {
+        const validation = GetGoogleDocContentSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const docs = google.docs({ version: 'v1', auth: authClient });
+        const document = await docs.documents.get({ documentId: args.documentId });
+        
+        let content = '';
+        let currentIndex = 1;
+        const segments: Array<{text: string, startIndex: number, endIndex: number}> = [];
+        
+        // Extract text content with indices
+        if (document.data.body?.content) {
+          for (const element of document.data.body.content) {
+            if (element.paragraph?.elements) {
+              for (const textElement of element.paragraph.elements) {
+                if (textElement.textRun?.content) {
+                  const text = textElement.textRun.content;
+                  segments.push({
+                    text,
+                    startIndex: currentIndex,
+                    endIndex: currentIndex + text.length
+                  });
+                  content += text;
+                  currentIndex += text.length;
+                }
+              }
+            }
+          }
+        }
+        
+        // Format the response to show text with indices
+        let formattedContent = 'Document content with indices:\n\n';
+        let lineStart = 1;
+        const lines = content.split('\n');
+        
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          const lineEnd = lineStart + line.length;
+          if (line.trim()) {
+            formattedContent += `[${lineStart}-${lineEnd}] ${line}\n`;
+          }
+          lineStart = lineEnd + 1; // +1 for the newline character
+        }
+        
+        return {
+          content: [{
+            type: "text",
+            text: formattedContent + `\nTotal length: ${content.length} characters`
+          }],
+          isError: false
         };
       }
 

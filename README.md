@@ -344,6 +344,31 @@ Add the server to your Claude Desktop configuration:
   - `documentId`: Document ID
   - `content`: New content
 
+- **getGoogleDocContent** - Get document content with text indices
+  - `documentId`: Document ID
+  - Returns text with character positions for formatting
+
+- **formatGoogleDocText** - Apply text formatting to a range
+  - `documentId`: Document ID
+  - `startIndex`: Start position (1-based)
+  - `endIndex`: End position (1-based)
+  - `bold`: Make text bold (optional)
+  - `italic`: Make text italic (optional)
+  - `underline`: Underline text (optional)
+  - `strikethrough`: Strikethrough text (optional)
+  - `fontSize`: Font size in points (optional)
+  - `foregroundColor`: Text color as RGB (0-1) (optional)
+
+- **formatGoogleDocParagraph** - Apply paragraph formatting to a range
+  - `documentId`: Document ID
+  - `startIndex`: Start position (1-based)
+  - `endIndex`: End position (1-based)
+  - `namedStyleType`: Style like HEADING_1, HEADING_2, etc. (optional)
+  - `alignment`: START, CENTER, END, or JUSTIFIED (optional)
+  - `lineSpacing`: Line spacing multiplier (optional)
+  - `spaceAbove`: Space above paragraph in points (optional)
+  - `spaceBelow`: Space below paragraph in points (optional)
+
 - **createGoogleSheet** - Create a Google Sheet
   - `name`: Spreadsheet name
   - `data`: 2D array of cell values

@@ -321,6 +321,96 @@ const GetGoogleDocContentSchema = z.object({
   documentId: z.string().min(1, "Document ID is required")
 });
 
+// Google Slides Formatting Schemas
+const GetGoogleSlidesContentSchema = z.object({
+  presentationId: z.string().min(1, "Presentation ID is required"),
+  slideIndex: z.number().min(0).optional()
+});
+
+const FormatGoogleSlidesTextSchema = z.object({
+  presentationId: z.string().min(1, "Presentation ID is required"),
+  objectId: z.string().min(1, "Object ID is required"),
+  startIndex: z.number().min(0).optional(),
+  endIndex: z.number().min(0).optional(),
+  bold: z.boolean().optional(),
+  italic: z.boolean().optional(),
+  underline: z.boolean().optional(),
+  strikethrough: z.boolean().optional(),
+  fontSize: z.number().optional(),
+  fontFamily: z.string().optional(),
+  foregroundColor: z.object({
+    red: z.number().min(0).max(1).optional(),
+    green: z.number().min(0).max(1).optional(),
+    blue: z.number().min(0).max(1).optional()
+  }).optional()
+});
+
+const FormatGoogleSlidesParagraphSchema = z.object({
+  presentationId: z.string().min(1, "Presentation ID is required"),
+  objectId: z.string().min(1, "Object ID is required"),
+  alignment: z.enum(['START', 'CENTER', 'END', 'JUSTIFIED']).optional(),
+  lineSpacing: z.number().optional(),
+  bulletStyle: z.enum(['NONE', 'DISC', 'ARROW', 'SQUARE', 'DIAMOND', 'STAR', 'NUMBERED']).optional()
+});
+
+const StyleGoogleSlidesShapeSchema = z.object({
+  presentationId: z.string().min(1, "Presentation ID is required"),
+  objectId: z.string().min(1, "Shape object ID is required"),
+  backgroundColor: z.object({
+    red: z.number().min(0).max(1).optional(),
+    green: z.number().min(0).max(1).optional(),
+    blue: z.number().min(0).max(1).optional(),
+    alpha: z.number().min(0).max(1).optional()
+  }).optional(),
+  outlineColor: z.object({
+    red: z.number().min(0).max(1).optional(),
+    green: z.number().min(0).max(1).optional(),
+    blue: z.number().min(0).max(1).optional()
+  }).optional(),
+  outlineWeight: z.number().optional(),
+  outlineDashStyle: z.enum(['SOLID', 'DOT', 'DASH', 'DASH_DOT', 'LONG_DASH', 'LONG_DASH_DOT']).optional()
+});
+
+const SetGoogleSlidesBackgroundSchema = z.object({
+  presentationId: z.string().min(1, "Presentation ID is required"),
+  pageObjectIds: z.array(z.string()).min(1, "At least one page object ID is required"),
+  backgroundColor: z.object({
+    red: z.number().min(0).max(1).optional(),
+    green: z.number().min(0).max(1).optional(),
+    blue: z.number().min(0).max(1).optional(),
+    alpha: z.number().min(0).max(1).optional()
+  })
+});
+
+const CreateGoogleSlidesTextBoxSchema = z.object({
+  presentationId: z.string().min(1, "Presentation ID is required"),
+  pageObjectId: z.string().min(1, "Page object ID is required"),
+  text: z.string().min(1, "Text content is required"),
+  x: z.number(),
+  y: z.number(),
+  width: z.number(),
+  height: z.number(),
+  fontSize: z.number().optional(),
+  bold: z.boolean().optional(),
+  italic: z.boolean().optional()
+});
+
+const CreateGoogleSlidesShapeSchema = z.object({
+  presentationId: z.string().min(1, "Presentation ID is required"),
+  pageObjectId: z.string().min(1, "Page object ID is required"),
+  shapeType: z.enum(['RECTANGLE', 'ELLIPSE', 'DIAMOND', 'TRIANGLE', 'STAR', 'ROUND_RECTANGLE', 'ARROW']),
+  x: z.number(),
+  y: z.number(),
+  width: z.number(),
+  height: z.number(),
+  backgroundColor: z.object({
+    red: z.number().min(0).max(1).optional(),
+    green: z.number().min(0).max(1).optional(),
+    blue: z.number().min(0).max(1).optional(),
+    alpha: z.number().min(0).max(1).optional()
+  }).optional()
+});
+
 // -----------------------------------------------------------------------------
 // SERVER SETUP
 // -----------------------------------------------------------------------------
@@ -749,6 +839,191 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             documentId: { type: "string", description: "Document ID" }
           },
           required: ["documentId"]
+        }
+      },
+      {
+        name: "getGoogleSlidesContent",
+        description: "Get content of Google Slides with element IDs for formatting",
+        inputSchema: {
+          type: "object",
+          properties: {
+            presentationId: { type: "string", description: "Presentation ID" },
+            slideIndex: { type: "number", description: "Specific slide index (optional)", optional: true }
+          },
+          required: ["presentationId"]
+        }
+      },
+      {
+        name: "formatGoogleSlidesText",
+        description: "Apply text formatting to elements in Google Slides",
+        inputSchema: {
+          type: "object",
+          properties: {
+            presentationId: { type: "string", description: "Presentation ID" },
+            objectId: { type: "string", description: "Object ID of the text element" },
+            startIndex: { type: "number", description: "Start index (0-based)", optional: true },
+            endIndex: { type: "number", description: "End index (0-based)", optional: true },
+            bold: { type: "boolean", description: "Make text bold", optional: true },
+            italic: { type: "boolean", description: "Make text italic", optional: true },
+            underline: { type: "boolean", description: "Underline text", optional: true },
+            strikethrough: { type: "boolean", description: "Strikethrough text", optional: true },
+            fontSize: { type: "number", description: "Font size in points", optional: true },
+            fontFamily: { type: "string", description: "Font family name", optional: true },
+            foregroundColor: {
+              type: "object",
+              description: "Text color (RGB values 0-1)",
+              properties: {
+                red: { type: "number", optional: true },
+                green: { type: "number", optional: true },
+                blue: { type: "number", optional: true }
+              },
+              optional: true
+            }
+          },
+          required: ["presentationId", "objectId"]
+        }
+      },
+      {
+        name: "formatGoogleSlidesParagraph",
+        description: "Apply paragraph formatting to text in Google Slides",
+        inputSchema: {
+          type: "object",
+          properties: {
+            presentationId: { type: "string", description: "Presentation ID" },
+            objectId: { type: "string", description: "Object ID of the text element" },
+            alignment: {
+              type: "string",
+              description: "Text alignment",
+              enum: ["START", "CENTER", "END", "JUSTIFIED"],
+              optional: true
+            },
+            lineSpacing: { type: "number", description: "Line spacing multiplier", optional: true },
+            bulletStyle: {
+              type: "string",
+              description: "Bullet style",
+              enum: ["NONE", "DISC", "ARROW", "SQUARE", "DIAMOND", "STAR", "NUMBERED"],
+              optional: true
+            }
+          },
+          required: ["presentationId", "objectId"]
+        }
+      },
+      {
+        name: "styleGoogleSlidesShape",
+        description: "Style shapes in Google Slides",
+        inputSchema: {
+          type: "object",
+          properties: {
+            presentationId: { type: "string", description: "Presentation ID" },
+            objectId: { type: "string", description: "Shape object ID" },
+            backgroundColor: {
+              type: "object",
+              description: "Background color (RGBA values 0-1)",
+              properties: {
+                red: { type: "number", optional: true },
+                green: { type: "number", optional: true },
+                blue: { type: "number", optional: true },
+                alpha: { type: "number", optional: true }
+              },
+              optional: true
+            },
+            outlineColor: {
+              type: "object",
+              description: "Outline color (RGB values 0-1)",
+              properties: {
+                red: { type: "number", optional: true },
+                green: { type: "number", optional: true },
+                blue: { type: "number", optional: true }
+              },
+              optional: true
+            },
+            outlineWeight: { type: "number", description: "Outline thickness in points", optional: true },
+            outlineDashStyle: {
+              type: "string",
+              description: "Outline dash style",
+              enum: ["SOLID", "DOT", "DASH", "DASH_DOT", "LONG_DASH", "LONG_DASH_DOT"],
+              optional: true
+            }
+          },
+          required: ["presentationId", "objectId"]
+        }
+      },
+      {
+        name: "setGoogleSlidesBackground",
+        description: "Set background color for slides",
+        inputSchema: {
+          type: "object",
+          properties: {
+            presentationId: { type: "string", description: "Presentation ID" },
+            pageObjectIds: {
+              type: "array",
+              description: "Array of slide IDs to update",
+              items: { type: "string" }
+            },
+            backgroundColor: {
+              type: "object",
+              description: "Background color (RGBA values 0-1)",
+              properties: {
+                red: { type: "number", optional: true },
+                green: { type: "number", optional: true },
+                blue: { type: "number", optional: true },
+                alpha: { type: "number", optional: true }
+              }
+            }
+          },
+          required: ["presentationId", "pageObjectIds", "backgroundColor"]
+        }
+      },
+      {
+        name: "createGoogleSlidesTextBox",
+        description: "Create a text box in Google Slides",
+        inputSchema: {
+          type: "object",
+          properties: {
+            presentationId: { type: "string", description: "Presentation ID" },
+            pageObjectId: { type: "string", description: "Slide ID" },
+            text: { type: "string", description: "Text content" },
+            x: { type: "number", description: "X position in EMU (1/360000 cm)" },
+            y: { type: "number", description: "Y position in EMU" },
+            width: { type: "number", description: "Width in EMU" },
+            height: { type: "number", description: "Height in EMU" },
+            fontSize: { type: "number", description: "Font size in points", optional: true },
+            bold: { type: "boolean", description: "Make text bold", optional: true },
+            italic: { type: "boolean", description: "Make text italic", optional: true }
+          },
+          required: ["presentationId", "pageObjectId", "text", "x", "y", "width", "height"]
+        }
+      },
+      {
+        name: "createGoogleSlidesShape",
+        description: "Create a shape in Google Slides",
+        inputSchema: {
+          type: "object",
+          properties: {
+            presentationId: { type: "string", description: "Presentation ID" },
+            pageObjectId: { type: "string", description: "Slide ID" },
+            shapeType: {
+              type: "string",
+              description: "Shape type",
+              enum: ["RECTANGLE", "ELLIPSE", "DIAMOND", "TRIANGLE", "STAR", "ROUND_RECTANGLE", "ARROW"]
+            },
+            x: { type: "number", description: "X position in EMU" },
+            y: { type: "number", description: "Y position in EMU" },
+            width: { type: "number", description: "Width in EMU" },
+            height: { type: "number", description: "Height in EMU" },
+            backgroundColor: {
+              type: "object",
+              description: "Fill color (RGBA values 0-1)",
+              properties: {
+                red: { type: "number", optional: true },
+                green: { type: "number", optional: true },
+                blue: { type: "number", optional: true },
+                alpha: { type: "number", optional: true }
+              },
+              optional: true
+            }
+          },
+          required: ["presentationId", "pageObjectId", "shapeType", "x", "y", "width", "height"]
         }
       }
     ]
@@ -1739,6 +2014,506 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             type: "text",
             text: formattedContent + `\nTotal length: ${content.length} characters`
           }],
+          isError: false
+        };
+      }
+
+      case "getGoogleSlidesContent": {
+        const validation = GetGoogleSlidesContentSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const slidesService = google.slides({ version: 'v1', auth: authClient });
+        const presentation = await slidesService.presentations.get({
+          presentationId: args.presentationId
+        });
+
+        if (!presentation.data.slides) {
+          return errorResponse("No slides found in presentation");
+        }
+
+        let content = 'Presentation content with element IDs:\n\n';
+        const slides = args.slideIndex !== undefined 
+          ? [presentation.data.slides[args.slideIndex]]
+          : presentation.data.slides;
+
+        slides.forEach((slide, index) => {
+          if (!slide || !slide.objectId) return;
+          
+          content += `\nSlide ${args.slideIndex ?? index} (ID: ${slide.objectId}):\n`;
+          content += '----------------------------\n';
+
+          if (slide.pageElements) {
+            slide.pageElements.forEach((element) => {
+              if (!element.objectId) return;
+
+              if (element.shape?.text) {
+                content += `  Text Box (ID: ${element.objectId}):\n`;
+                const textElements = element.shape.text.textElements || [];
+                let text = '';
+                textElements.forEach((textElement) => {
+                  if (textElement.textRun?.content) {
+                    text += textElement.textRun.content;
+                  }
+                });
+                content += `    "${text.trim()}"\n`;
+              } else if (element.shape) {
+                content += `  Shape (ID: ${element.objectId}): ${element.shape.shapeType || 'Unknown'}\n`;
+              } else if (element.image) {
+                content += `  Image (ID: ${element.objectId})\n`;
+              } else if (element.video) {
+                content += `  Video (ID: ${element.objectId})\n`;
+              } else if (element.table) {
+                content += `  Table (ID: ${element.objectId})\n`;
+              }
+            });
+          }
+        });
+
+        return {
+          content: [{ type: "text", text: content }],
+          isError: false
+        };
+      }
+
+      case "formatGoogleSlidesText": {
+        const validation = FormatGoogleSlidesTextSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const slidesService = google.slides({ version: 'v1', auth: authClient });
+        const textStyle: any = {};
+        const fields: string[] = [];
+
+        if (args.bold !== undefined) {
+          textStyle.bold = args.bold;
+          fields.push('bold');
+        }
+
+        if (args.italic !== undefined) {
+          textStyle.italic = args.italic;
+          fields.push('italic');
+        }
+
+        if (args.underline !== undefined) {
+          textStyle.underline = args.underline;
+          fields.push('underline');
+        }
+
+        if (args.strikethrough !== undefined) {
+          textStyle.strikethrough = args.strikethrough;
+          fields.push('strikethrough');
+        }
+
+        if (args.fontSize !== undefined) {
+          textStyle.fontSize = {
+            magnitude: args.fontSize,
+            unit: 'PT'
+          };
+          fields.push('fontSize');
+        }
+
+        if (args.fontFamily !== undefined) {
+          textStyle.fontFamily = args.fontFamily;
+          fields.push('fontFamily');
+        }
+
+        if (args.foregroundColor) {
+          textStyle.foregroundColor = {
+            opaqueColor: {
+              rgbColor: {
+                red: args.foregroundColor.red || 0,
+                green: args.foregroundColor.green || 0,
+                blue: args.foregroundColor.blue || 0
+              }
+            }
+          };
+          fields.push('foregroundColor');
+        }
+
+        if (fields.length === 0) {
+          return errorResponse("No formatting options specified");
+        }
+
+        const updateRequest: any = {
+          updateTextStyle: {
+            objectId: args.objectId,
+            style: textStyle,
+            fields: fields.join(',')
+          }
+        };
+
+        // Add text range if specified
+        if (args.startIndex !== undefined && args.endIndex !== undefined) {
+          updateRequest.updateTextStyle.textRange = {
+            type: 'FIXED_RANGE',
+            startIndex: args.startIndex,
+            endIndex: args.endIndex
+          };
+        } else {
+          updateRequest.updateTextStyle.textRange = { type: 'ALL' };
+        }
+
+        await slidesService.presentations.batchUpdate({
+          presentationId: args.presentationId,
+          requestBody: { requests: [updateRequest] }
+        });
+
+        return {
+          content: [{ type: "text", text: `Applied text formatting to object ${args.objectId}` }],
+          isError: false
+        };
+      }
+
+      case "formatGoogleSlidesParagraph": {
+        const validation = FormatGoogleSlidesParagraphSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const slidesService = google.slides({ version: 'v1', auth: authClient });
+        const requests: any[] = [];
+
+        if (args.alignment) {
+          requests.push({
+            updateParagraphStyle: {
+              objectId: args.objectId,
+              style: { alignment: args.alignment },
+              fields: 'alignment'
+            }
+          });
+        }
+
+        if (args.lineSpacing !== undefined) {
+          requests.push({
+            updateParagraphStyle: {
+              objectId: args.objectId,
+              style: { lineSpacing: args.lineSpacing },
+              fields: 'lineSpacing'
+            }
+          });
+        }
+
+        if (args.bulletStyle) {
+          if (args.bulletStyle === 'NONE') {
+            requests.push({
+              deleteParagraphBullets: {
+                objectId: args.objectId
+              }
+            });
+          } else if (args.bulletStyle === 'NUMBERED') {
+            requests.push({
+              createParagraphBullets: {
+                objectId: args.objectId,
+                bulletPreset: 'NUMBERED_DIGIT_ALPHA_ROMAN'
+              }
+            });
+          } else {
+            requests.push({
+              createParagraphBullets: {
+                objectId: args.objectId,
+                bulletPreset: `BULLET_${args.bulletStyle}_CIRCLE_SQUARE`
+              }
+            });
+          }
+        }
+
+        if (requests.length === 0) {
+          return errorResponse("No formatting options specified");
+        }
+
+        await slidesService.presentations.batchUpdate({
+          presentationId: args.presentationId,
+          requestBody: { requests }
+        });
+
+        return {
+          content: [{ type: "text", text: `Applied paragraph formatting to object ${args.objectId}` }],
+          isError: false
+        };
+      }
+
+      case "styleGoogleSlidesShape": {
+        const validation = StyleGoogleSlidesShapeSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const slidesService = google.slides({ version: 'v1', auth: authClient });
+        const shapeProperties: any = {};
+        const fields: string[] = [];
+
+        if (args.backgroundColor) {
+          shapeProperties.shapeBackgroundFill = {
+            solidFill: {
+              color: {
+                rgbColor: {
+                  red: args.backgroundColor.red || 0,
+                  green: args.backgroundColor.green || 0,
+                  blue: args.backgroundColor.blue || 0
+                }
+              },
+              alpha: args.backgroundColor.alpha || 1
+            }
+          };
+          fields.push('shapeBackgroundFill');
+        }
+
+        const outline: any = {};
+        let hasOutlineChanges = false;
+
+        if (args.outlineColor) {
+          outline.outlineFill = {
+            solidFill: {
+              color: {
+                rgbColor: {
+                  red: args.outlineColor.red || 0,
+                  green: args.outlineColor.green || 0,
+                  blue: args.outlineColor.blue || 0
+                }
+              }
+            }
+          };
+          hasOutlineChanges = true;
+        }
+
+        if (args.outlineWeight !== undefined) {
+          outline.weight = {
+            magnitude: args.outlineWeight,
+            unit: 'PT'
+          };
+          hasOutlineChanges = true;
+        }
+
+        if (args.outlineDashStyle !== undefined) {
+          outline.dashStyle = args.outlineDashStyle;
+          hasOutlineChanges = true;
+        }
+
+        if (hasOutlineChanges) {
+          shapeProperties.outline = outline;
+          fields.push('outline');
+        }
+
+        if (fields.length === 0) {
+          return errorResponse("No styling options specified");
+        }
+
+        await slidesService.presentations.batchUpdate({
+          presentationId: args.presentationId,
+          requestBody: {
+            requests: [{
+              updateShapeProperties: {
+                objectId: args.objectId,
+                shapeProperties,
+                fields: fields.join(',')
+              }
+            }]
+          }
+        });
+
+        return {
+          content: [{ type: "text", text: `Applied styling to shape ${args.objectId}` }],
+          isError: false
+        };
+      }
+
+      case "setGoogleSlidesBackground": {
+        const validation = SetGoogleSlidesBackgroundSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const slidesService = google.slides({ version: 'v1', auth: authClient });
+        const requests = args.pageObjectIds.map(pageObjectId => ({
+          updatePageProperties: {
+            objectId: pageObjectId,
+            pageProperties: {
+              pageBackgroundFill: {
+                solidFill: {
+                  color: {
+                    rgbColor: {
+                      red: args.backgroundColor.red || 0,
+                      green: args.backgroundColor.green || 0,
+                      blue: args.backgroundColor.blue || 0
+                    }
+                  },
+                  alpha: args.backgroundColor.alpha || 1
+                }
+              }
+            },
+            fields: 'pageBackgroundFill'
+          }
+        }));
+
+        await slidesService.presentations.batchUpdate({
+          presentationId: args.presentationId,
+          requestBody: { requests }
+        });
+
+        return {
+          content: [{ type: "text", text: `Set background color for ${args.pageObjectIds.length} slide(s)` }],
+          isError: false
+        };
+      }
+
+      case "createGoogleSlidesTextBox": {
+        const validation = CreateGoogleSlidesTextBoxSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const slidesService = google.slides({ version: 'v1', auth: authClient });
+        const elementId = `textBox_${uuidv4().substring(0, 8)}`;
+
+        const requests: any[] = [
+          {
+            createShape: {
+              objectId: elementId,
+              shapeType: 'TEXT_BOX',
+              elementProperties: {
+                pageObjectId: args.pageObjectId,
+                size: {
+                  width: { magnitude: args.width, unit: 'EMU' },
+                  height: { magnitude: args.height, unit: 'EMU' }
+                },
+                transform: {
+                  scaleX: 1,
+                  scaleY: 1,
+                  translateX: args.x,
+                  translateY: args.y,
+                  unit: 'EMU'
+                }
+              }
+            }
+          },
+          {
+            insertText: {
+              objectId: elementId,
+              text: args.text,
+              insertionIndex: 0
+            }
+          }
+        ];
+
+        // Apply optional formatting
+        if (args.fontSize || args.bold || args.italic) {
+          const textStyle: any = {};
+          const fields: string[] = [];
+
+          if (args.fontSize) {
+            textStyle.fontSize = {
+              magnitude: args.fontSize,
+              unit: 'PT'
+            };
+            fields.push('fontSize');
+          }
+
+          if (args.bold !== undefined) {
+            textStyle.bold = args.bold;
+            fields.push('bold');
+          }
+
+          if (args.italic !== undefined) {
+            textStyle.italic = args.italic;
+            fields.push('italic');
+          }
+
+          if (fields.length > 0) {
+            requests.push({
+              updateTextStyle: {
+                objectId: elementId,
+                style: textStyle,
+                fields: fields.join(','),
+                textRange: { type: 'ALL' }
+              }
+            });
+          }
+        }
+
+        await slidesService.presentations.batchUpdate({
+          presentationId: args.presentationId,
+          requestBody: { requests }
+        });
+
+        return {
+          content: [{ type: "text", text: `Created text box with ID: ${elementId}` }],
+          isError: false
+        };
+      }
+
+      case "createGoogleSlidesShape": {
+        const validation = CreateGoogleSlidesShapeSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const slidesService = google.slides({ version: 'v1', auth: authClient });
+        const elementId = `shape_${uuidv4().substring(0, 8)}`;
+
+        const createRequest: any = {
+          createShape: {
+            objectId: elementId,
+            shapeType: args.shapeType,
+            elementProperties: {
+              pageObjectId: args.pageObjectId,
+              size: {
+                width: { magnitude: args.width, unit: 'EMU' },
+                height: { magnitude: args.height, unit: 'EMU' }
+              },
+              transform: {
+                scaleX: 1,
+                scaleY: 1,
+                translateX: args.x,
+                translateY: args.y,
+                unit: 'EMU'
+              }
+            }
+          }
+        };
+
+        const requests = [createRequest];
+
+        // Apply background color if specified
+        if (args.backgroundColor) {
+          requests.push({
+            updateShapeProperties: {
+              objectId: elementId,
+              shapeProperties: {
+                shapeBackgroundFill: {
+                  solidFill: {
+                    color: {
+                      rgbColor: {
+                        red: args.backgroundColor.red || 0,
+                        green: args.backgroundColor.green || 0,
+                        blue: args.backgroundColor.blue || 0
+                      }
+                    },
+                    alpha: args.backgroundColor.alpha || 1
+                  }
+                }
+              },
+              fields: 'shapeBackgroundFill'
+            }
+          });
+        }
+
+        await slidesService.presentations.batchUpdate({
+          presentationId: args.presentationId,
+          requestBody: { requests }
+        });
+
+        return {
+          content: [{ type: "text", text: `Created ${args.shapeType} shape with ID: ${elementId}` }],
           isError: false
         };
       }

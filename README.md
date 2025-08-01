@@ -388,6 +388,56 @@ Add the server to your Claude Desktop configuration:
   - `presentationId`: Presentation ID
   - `slides`: Array of slides with title and content (replaces all existing slides)
 
+### Google Slides Formatting Tools
+
+- **getGoogleSlidesContent** - Get presentation content with element IDs
+  - `presentationId`: Presentation ID
+  - `slideIndex`: Specific slide index (optional)
+  - Returns element IDs for formatting
+
+- **formatGoogleSlidesText** - Apply text formatting to slide elements
+  - `presentationId`: Presentation ID
+  - `objectId`: Element ID
+  - `startIndex`/`endIndex`: Text range (optional)
+  - `bold`, `italic`, `underline`, `strikethrough`: Text styling
+  - `fontSize`: Font size in points
+  - `fontFamily`: Font name
+  - `foregroundColor`: Text color (RGB 0-1)
+
+- **formatGoogleSlidesParagraph** - Apply paragraph formatting
+  - `presentationId`: Presentation ID
+  - `objectId`: Element ID
+  - `alignment`: START, CENTER, END, or JUSTIFIED
+  - `lineSpacing`: Line spacing multiplier
+  - `bulletStyle`: NONE, DISC, ARROW, SQUARE, DIAMOND, STAR, or NUMBERED
+
+- **styleGoogleSlidesShape** - Style shapes and elements
+  - `presentationId`: Presentation ID
+  - `objectId`: Shape ID
+  - `backgroundColor`: Fill color (RGBA 0-1)
+  - `outlineColor`: Border color (RGB 0-1)
+  - `outlineWeight`: Border thickness in points
+  - `outlineDashStyle`: SOLID, DOT, DASH, etc.
+
+- **setGoogleSlidesBackground** - Set slide background color
+  - `presentationId`: Presentation ID
+  - `pageObjectIds`: Array of slide IDs
+  - `backgroundColor`: Background color (RGBA 0-1)
+
+- **createGoogleSlidesTextBox** - Create formatted text box
+  - `presentationId`: Presentation ID
+  - `pageObjectId`: Slide ID
+  - `text`: Text content
+  - `x`, `y`, `width`, `height`: Position/size in EMU (1/360000 cm)
+  - `fontSize`, `bold`, `italic`: Text formatting (optional)
+
+- **createGoogleSlidesShape** - Create styled shape
+  - `presentationId`: Presentation ID
+  - `pageObjectId`: Slide ID
+  - `shapeType`: RECTANGLE, ELLIPSE, DIAMOND, TRIANGLE, STAR, ROUND_RECTANGLE, or ARROW
+  - `x`, `y`, `width`, `height`: Position/size in EMU
+  - `backgroundColor`: Fill color (RGBA 0-1) (optional)
+
 ## Authentication Flow
 
 The server uses OAuth 2.0 for secure authentication:

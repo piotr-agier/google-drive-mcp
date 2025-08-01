@@ -388,6 +388,62 @@ Add the server to your Claude Desktop configuration:
   - `presentationId`: Presentation ID
   - `slides`: Array of slides with title and content (replaces all existing slides)
 
+### Google Sheets Formatting Tools
+
+- **getGoogleSheetContent** - Get spreadsheet content with cell information
+  - `spreadsheetId`: Spreadsheet ID
+  - `range`: Range to get (e.g., 'Sheet1!A1:C10')
+  - Returns cell values for the specified range
+
+- **formatGoogleSheetCells** - Format cell properties
+  - `spreadsheetId`: Spreadsheet ID
+  - `range`: Range to format (e.g., 'A1:C10')
+  - `backgroundColor`: Cell background color (RGB 0-1) (optional)
+  - `horizontalAlignment`: LEFT, CENTER, or RIGHT (optional)
+  - `verticalAlignment`: TOP, MIDDLE, or BOTTOM (optional)
+  - `wrapStrategy`: OVERFLOW_CELL, CLIP, or WRAP (optional)
+
+- **formatGoogleSheetText** - Apply text formatting to cells
+  - `spreadsheetId`: Spreadsheet ID
+  - `range`: Range to format (e.g., 'A1:C10')
+  - `bold`: Make text bold (optional)
+  - `italic`: Make text italic (optional)
+  - `strikethrough`: Strikethrough text (optional)
+  - `underline`: Underline text (optional)
+  - `fontSize`: Font size in points (optional)
+  - `fontFamily`: Font name (optional)
+  - `foregroundColor`: Text color (RGB 0-1) (optional)
+
+- **formatGoogleSheetNumbers** - Apply number/date formatting
+  - `spreadsheetId`: Spreadsheet ID
+  - `range`: Range to format (e.g., 'A1:C10')
+  - `pattern`: Format pattern (e.g., '#,##0.00', 'yyyy-mm-dd', '$#,##0.00', '0.00%')
+  - `type`: NUMBER, CURRENCY, PERCENT, DATE, TIME, DATE_TIME, or SCIENTIFIC (optional)
+
+- **setGoogleSheetBorders** - Configure cell borders
+  - `spreadsheetId`: Spreadsheet ID
+  - `range`: Range to format (e.g., 'A1:C10')
+  - `style`: SOLID, DASHED, DOTTED, or DOUBLE
+  - `width`: Border thickness 1-3 (optional)
+  - `color`: Border color (RGB 0-1) (optional)
+  - `top`, `bottom`, `left`, `right`: Apply to specific borders (optional)
+  - `innerHorizontal`, `innerVertical`: Apply to inner borders (optional)
+
+- **mergeGoogleSheetCells** - Merge cells in a range
+  - `spreadsheetId`: Spreadsheet ID
+  - `range`: Range to merge (e.g., 'A1:C3')
+  - `mergeType`: MERGE_ALL, MERGE_COLUMNS, or MERGE_ROWS
+
+- **addGoogleSheetConditionalFormat** - Add conditional formatting rules
+  - `spreadsheetId`: Spreadsheet ID
+  - `range`: Range to apply formatting (e.g., 'A1:C10')
+  - `condition`: Condition configuration
+    - `type`: NUMBER_GREATER, NUMBER_LESS, TEXT_CONTAINS, TEXT_STARTS_WITH, TEXT_ENDS_WITH, or CUSTOM_FORMULA
+    - `value`: Value to compare or formula
+  - `format`: Format to apply when condition is true
+    - `backgroundColor`: Cell color (RGB 0-1) (optional)
+    - `textFormat`: Text formatting with bold and foregroundColor (optional)
+
 ### Google Slides Formatting Tools
 
 - **getGoogleSlidesContent** - Get presentation content with element IDs

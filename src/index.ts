@@ -1948,7 +1948,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           fields: 'sheets(properties(sheetId,title))'
         });
 
-        const sheetName = args.range.split('!')[0] || 'Sheet1';
+        const sheetName = args.range.includes('!') ? args.range.split('!')[0] : 'Sheet1';
         const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
         if (!sheet?.properties?.sheetId) {
           return errorResponse(`Sheet "${sheetName}" not found`);
@@ -2011,7 +2011,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           fields: 'sheets(properties(sheetId,title))'
         });
 
-        const sheetName = args.range.split('!')[0] || 'Sheet1';
+        const sheetName = args.range.includes('!') ? args.range.split('!')[0] : 'Sheet1';
         const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
         if (!sheet?.properties?.sheetId) {
           return errorResponse(`Sheet "${sheetName}" not found`);
@@ -2092,7 +2092,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           fields: 'sheets(properties(sheetId,title))'
         });
 
-        const sheetName = args.range.split('!')[0] || 'Sheet1';
+        const sheetName = args.range.includes('!') ? args.range.split('!')[0] : 'Sheet1';
         const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
         if (!sheet?.properties?.sheetId) {
           return errorResponse(`Sheet "${sheetName}" not found`);
@@ -2144,7 +2144,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           fields: 'sheets(properties(sheetId,title))'
         });
 
-        const sheetName = args.range.split('!')[0] || 'Sheet1';
+        const sheetName = args.range.includes('!') ? args.range.split('!')[0] : 'Sheet1';
         const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
         if (!sheet?.properties?.sheetId) {
           return errorResponse(`Sheet "${sheetName}" not found`);
@@ -2202,7 +2202,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           fields: 'sheets(properties(sheetId,title))'
         });
 
-        const sheetName = args.range.split('!')[0] || 'Sheet1';
+        const sheetName = args.range.includes('!') ? args.range.split('!')[0] : 'Sheet1';
         const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
         if (!sheet?.properties?.sheetId) {
           return errorResponse(`Sheet "${sheetName}" not found`);
@@ -2244,7 +2244,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           fields: 'sheets(properties(sheetId,title))'
         });
 
-        const sheetName = args.range.split('!')[0] || 'Sheet1';
+        const sheetName = args.range.includes('!') ? args.range.split('!')[0] : 'Sheet1';
         const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
         if (!sheet?.properties?.sheetId) {
           return errorResponse(`Sheet "${sheetName}" not found`);

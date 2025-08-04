@@ -1948,15 +1948,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           fields: 'sheets(properties(sheetId,title))'
         });
 
+        console.error(`[DEBUG] formatGoogleSheetCells - range: ${args.range}`);
+        console.error(`[DEBUG] rangeData.data:`, JSON.stringify(rangeData.data, null, 2));
+        
         const sheetName = args.range.includes('!') ? args.range.split('!')[0] : 'Sheet1';
+        console.error(`[DEBUG] Calculated sheetName: "${sheetName}"`);
+        
         const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
-        if (!sheet?.properties?.sheetId) {
+        console.error(`[DEBUG] Found sheet:`, sheet ? JSON.stringify(sheet, null, 2) : 'null');
+        
+        if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
+          console.error(`[DEBUG] Available sheets:`, rangeData.data.sheets?.map(s => s.properties?.title).join(', '));
           return errorResponse(`Sheet "${sheetName}" not found`);
         }
 
         // Parse A1 notation to grid range
         const a1Range = args.range.includes('!') ? args.range.split('!')[1] : args.range;
-        const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId);
+        const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
 
         const requests: any[] = [{
           repeatCell: {
@@ -2013,12 +2021,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const sheetName = args.range.includes('!') ? args.range.split('!')[0] : 'Sheet1';
         const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
-        if (!sheet?.properties?.sheetId) {
+        if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
           return errorResponse(`Sheet "${sheetName}" not found`);
         }
 
         const a1Range = args.range.includes('!') ? args.range.split('!')[1] : args.range;
-        const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId);
+        const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
 
         const textFormat: any = {};
         const fields: string[] = [];
@@ -2094,12 +2102,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const sheetName = args.range.includes('!') ? args.range.split('!')[0] : 'Sheet1';
         const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
-        if (!sheet?.properties?.sheetId) {
+        if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
           return errorResponse(`Sheet "${sheetName}" not found`);
         }
 
         const a1Range = args.range.includes('!') ? args.range.split('!')[1] : args.range;
-        const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId);
+        const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
 
         const numberFormat: any = {
           pattern: args.pattern
@@ -2146,12 +2154,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const sheetName = args.range.includes('!') ? args.range.split('!')[0] : 'Sheet1';
         const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
-        if (!sheet?.properties?.sheetId) {
+        if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
           return errorResponse(`Sheet "${sheetName}" not found`);
         }
 
         const a1Range = args.range.includes('!') ? args.range.split('!')[1] : args.range;
-        const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId);
+        const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
 
         const border = {
           style: args.style,
@@ -2204,12 +2212,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const sheetName = args.range.includes('!') ? args.range.split('!')[0] : 'Sheet1';
         const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
-        if (!sheet?.properties?.sheetId) {
+        if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
           return errorResponse(`Sheet "${sheetName}" not found`);
         }
 
         const a1Range = args.range.includes('!') ? args.range.split('!')[1] : args.range;
-        const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId);
+        const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
 
         const requests = [{
           mergeCells: {
@@ -2246,12 +2254,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const sheetName = args.range.includes('!') ? args.range.split('!')[0] : 'Sheet1';
         const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
-        if (!sheet?.properties?.sheetId) {
+        if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
           return errorResponse(`Sheet "${sheetName}" not found`);
         }
 
         const a1Range = args.range.includes('!') ? args.range.split('!')[1] : args.range;
-        const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId);
+        const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
 
         // Build condition based on type
         const booleanCondition: any = {};

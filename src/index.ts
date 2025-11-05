@@ -552,6 +552,17 @@ const CreateGoogleSlidesShapeSchema = z.object({
   }).optional()
 });
 
+const GetGoogleSlidesSpeakerNotesSchema = z.object({
+  presentationId: z.string().min(1, "Presentation ID is required"),
+  slideIndex: z.number().min(0, "Slide index must be non-negative")
+});
+
+const UpdateGoogleSlidesSpeakerNotesSchema = z.object({
+  presentationId: z.string().min(1, "Presentation ID is required"),
+  slideIndex: z.number().min(0, "Slide index must be non-negative"),
+  notes: z.string()
+});
+
 // -----------------------------------------------------------------------------
 // SERVER SETUP
 // -----------------------------------------------------------------------------
@@ -1380,6 +1391,31 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             }
           },
           required: ["presentationId", "pageObjectId", "shapeType", "x", "y", "width", "height"]
+        }
+      },
+      {
+        name: "getGoogleSlidesSpeakerNotes",
+        description: "Get speaker notes from a specific slide in Google Slides",
+        inputSchema: {
+          type: "object",
+          properties: {
+            presentationId: { type: "string", description: "Presentation ID" },
+            slideIndex: { type: "number", description: "Slide index (0-based)" }
+          },
+          required: ["presentationId", "slideIndex"]
+        }
+      },
+      {
+        name: "updateGoogleSlidesSpeakerNotes",
+        description: "Update speaker notes for a specific slide in Google Slides",
+        inputSchema: {
+          type: "object",
+          properties: {
+            presentationId: { type: "string", description: "Presentation ID" },
+            slideIndex: { type: "number", description: "Slide index (0-based)" },
+            notes: { type: "string", description: "Speaker notes content" }
+          },
+          required: ["presentationId", "slideIndex", "notes"]
         }
       }
     ]
@@ -3326,6 +3362,144 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         return {
           content: [{ type: "text", text: `Created ${args.shapeType} shape with ID: ${elementId}` }],
+          isError: false
+        };
+      }
+
+      case "getGoogleSlidesSpeakerNotes": {
+        const validation = GetGoogleSlidesSpeakerNotesSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const slidesService = google.slides({ version: 'v1', auth: authClient });
+
+        // Get the presentation to access the slide
+        const presentation = await slidesService.presentations.get({
+          presentationId: args.presentationId
+        });
+
+        if (!presentation.data.slides || args.slideIndex >= presentation.data.slides.length) {
+          return errorResponse(`Slide index ${args.slideIndex} not found in presentation`);
+        }
+
+        const slide = presentation.data.slides[args.slideIndex];
+
+        // Get the notes page object ID from the slide properties
+        const notesObjectId = slide.slideProperties?.notesPage?.notesProperties?.speakerNotesObjectId;
+
+        if (!notesObjectId) {
+          return {
+            content: [{ type: "text", text: "No speaker notes found for this slide" }],
+            isError: false
+          };
+        }
+
+        // Get the notes page to read the speaker notes text
+        const notesPageObjectId = slide.slideProperties?.notesPage?.objectId;
+        if (!notesPageObjectId) {
+          return {
+            content: [{ type: "text", text: "No speaker notes found for this slide" }],
+            isError: false
+          };
+        }
+
+        // Get the presentation again with the notes page included
+        const fullPresentation = await slidesService.presentations.get({
+          presentationId: args.presentationId
+        });
+
+        // Find the notes page for this slide
+        const notesPage = fullPresentation.data.slides?.[args.slideIndex]?.slideProperties?.notesPage;
+
+        if (!notesPage || !notesPage.pageElements) {
+          return {
+            content: [{ type: "text", text: "No speaker notes found for this slide" }],
+            isError: false
+          };
+        }
+
+        // Find the speaker notes shape
+        const speakerNotesElement = notesPage.pageElements.find(
+          element => element.objectId === notesObjectId
+        );
+
+        if (!speakerNotesElement || !speakerNotesElement.shape?.text) {
+          return {
+            content: [{ type: "text", text: "No speaker notes found for this slide" }],
+            isError: false
+          };
+        }
+
+        // Extract the text from the speaker notes
+        let notesText = '';
+        const textElements = speakerNotesElement.shape.text.textElements || [];
+        textElements.forEach((textElement) => {
+          if (textElement.textRun?.content) {
+            notesText += textElement.textRun.content;
+          }
+        });
+
+        return {
+          content: [{ type: "text", text: notesText.trim() || "No speaker notes found for this slide" }],
+          isError: false
+        };
+      }
+
+      case "updateGoogleSlidesSpeakerNotes": {
+        const validation = UpdateGoogleSlidesSpeakerNotesSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const slidesService = google.slides({ version: 'v1', auth: authClient });
+
+        // Get the presentation to access the slide
+        const presentation = await slidesService.presentations.get({
+          presentationId: args.presentationId
+        });
+
+        if (!presentation.data.slides || args.slideIndex >= presentation.data.slides.length) {
+          return errorResponse(`Slide index ${args.slideIndex} not found in presentation`);
+        }
+
+        const slide = presentation.data.slides[args.slideIndex];
+
+        // Get the notes page object ID from the slide properties
+        const notesObjectId = slide.slideProperties?.notesPage?.notesProperties?.speakerNotesObjectId;
+
+        if (!notesObjectId) {
+          return errorResponse("This slide does not have a speaker notes object. Speaker notes may need to be initialized manually in Google Slides first.");
+        }
+
+        // Create the batchUpdate request to replace the speaker notes text
+        const requests = [
+          {
+            deleteText: {
+              objectId: notesObjectId,
+              textRange: {
+                type: 'ALL'
+              }
+            }
+          },
+          {
+            insertText: {
+              objectId: notesObjectId,
+              text: args.notes,
+              insertionIndex: 0
+            }
+          }
+        ];
+
+        await slidesService.presentations.batchUpdate({
+          presentationId: args.presentationId,
+          requestBody: { requests }
+        });
+
+        return {
+          content: [{ type: "text", text: `Successfully updated speaker notes for slide ${args.slideIndex}` }],
           isError: false
         };
       }

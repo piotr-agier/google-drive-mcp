@@ -124,7 +124,9 @@ async function resolvePath(pathStr: string): Promise<string> {
     let response = await drive.files.list({
       q: `'${currentFolderId}' in parents and name = '${part}' and mimeType = '${FOLDER_MIME_TYPE}' and trashed = false`,
       fields: 'files(id)',
-      spaces: 'drive'
+      spaces: 'drive',
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true
     });
 
     // If the folder segment doesn't exist, create it
@@ -136,7 +138,8 @@ async function resolvePath(pathStr: string): Promise<string> {
       };
       const folder = await drive.files.create({
         requestBody: folderMetadata,
-        fields: 'id'
+        fields: 'id',
+        supportsAllDrives: true
       });
 
       if (!folder.data.id) {
@@ -238,7 +241,9 @@ async function checkFileExists(name: string, parentFolderId: string = 'root'): P
     const res = await drive.files.list({
       q: query,
       fields: 'files(id, name, mimeType)',
-      pageSize: 1
+      pageSize: 1,
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true
     });
     
     if (res.data.files && res.data.files.length > 0) {
@@ -608,11 +613,15 @@ server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
     pageSize: number,
     fields: string,
     pageToken?: string,
-    q: string
+    q: string,
+    includeItemsFromAllDrives: boolean,
+    supportsAllDrives: boolean
   } = {
     pageSize,
     fields: "nextPageToken, files(id, name, mimeType)",
-    q: `trashed = false`
+    q: `trashed = false`,
+    includeItemsFromAllDrives: true,
+    supportsAllDrives: true
   };
 
   if (request.params?.cursor) {
@@ -641,6 +650,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   const file = await drive.files.get({
     fileId,
     fields: "mimeType",
+    supportsAllDrives: true
   });
   const mimeType = file.data.mimeType;
 
@@ -660,7 +670,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     }
 
     const res = await drive.files.export(
-      { fileId, mimeType: exportMimeType },
+      { fileId, mimeType: exportMimeType, supportsAllDrives: true },
       { responseType: "text" },
     );
 
@@ -677,7 +687,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   } else {
     // Regular file download
     const res = await drive.files.get(
-      { fileId, alt: "media" },
+      { fileId, alt: "media", supportsAllDrives: true },
       { responseType: "arraybuffer" },
     );
     const contentMime = mimeType || "application/octet-stream";
@@ -1404,6 +1414,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           q: formattedQuery,
           pageSize: 10,
           fields: "files(id, name, mimeType, modifiedTime, size)",
+          includeItemsFromAllDrives: true,
+          supportsAllDrives: true
         });
 
         const fileList = res.data.files?.map((f: drive_v3.Schema$File) => `${f.name} (${f.mimeType})`).join("\n") || '';
@@ -1453,6 +1465,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             mimeType: fileMetadata.mimeType,
             body: args.content,
           },
+          supportsAllDrives: true
         });
 
         log('File created successfully', { fileId: file.data?.id });
@@ -1475,7 +1488,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Check file MIME type
         const existingFile = await drive.files.get({
           fileId: args.fileId,
-          fields: 'mimeType, name, parents'
+          fields: 'mimeType, name, parents',
+          supportsAllDrives: true
         });
 
         const currentMimeType = existingFile.data.mimeType || 'text/plain';
@@ -1497,7 +1511,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             mimeType: updateMetadata.mimeType || currentMimeType,
             body: args.content
           },
-          fields: 'id, name, modifiedTime, webViewLink'
+          fields: 'id, name, modifiedTime, webViewLink',
+          supportsAllDrives: true
         });
 
         return {
@@ -1534,7 +1549,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const folder = await drive.files.create({
           requestBody: folderMetadata,
-          fields: 'id, name, webViewLink'
+          fields: 'id, name, webViewLink',
+          supportsAllDrives: true
         });
 
         log('Folder created successfully', { folderId: folder.data.id, name: folder.data.name });
@@ -1563,7 +1579,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           pageSize: Math.min(args.pageSize || 50, 100),
           pageToken: args.pageToken,
           fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size)",
-          orderBy: "name"
+          orderBy: "name",
+          includeItemsFromAllDrives: true,
+          supportsAllDrives: true
         });
 
         const files = res.data.files || [];
@@ -1590,14 +1608,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         const args = validation.data;
 
-        const item = await drive.files.get({ fileId: args.itemId, fields: 'name' });
+        const item = await drive.files.get({ fileId: args.itemId, fields: 'name', supportsAllDrives: true });
         
         // Move to trash instead of permanent deletion
         await drive.files.update({
           fileId: args.itemId,
           requestBody: {
             trashed: true
-          }
+          },
+          supportsAllDrives: true
         });
 
         log('Item moved to trash successfully', { itemId: args.itemId, name: item.data.name });
@@ -1615,7 +1634,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const args = validation.data;
 
         // If it's a text file, check extension
-        const item = await drive.files.get({ fileId: args.itemId, fields: 'name, mimeType' });
+        const item = await drive.files.get({ fileId: args.itemId, fields: 'name, mimeType', supportsAllDrives: true });
         if (Object.values(TEXT_MIME_TYPES).includes(item.data.mimeType || '')) {
           validateTextFileExtension(args.newName);
         }
@@ -1623,7 +1642,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const updatedItem = await drive.files.update({
           fileId: args.itemId,
           requestBody: { name: args.newName },
-          fields: 'id, name, modifiedTime'
+          fields: 'id, name, modifiedTime',
+          supportsAllDrives: true
         });
 
         return {
@@ -1651,20 +1671,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorResponse("Cannot move a folder into itself.");
         }
 
-        const item = await drive.files.get({ fileId: args.itemId, fields: 'name, parents' });
+        const item = await drive.files.get({ fileId: args.itemId, fields: 'name, parents', supportsAllDrives: true });
 
         // Perform move
         await drive.files.update({
           fileId: args.itemId,
           addParents: destinationFolderId,
           removeParents: item.data.parents?.join(',') || '',
-          fields: 'id, name, parents'
+          fields: 'id, name, parents',
+          supportsAllDrives: true
         });
 
         // Get the destination folder name for a nice response
         const destinationFolder = await drive.files.get({
           fileId: destinationFolderId,
-          fields: 'name'
+          fields: 'name',
+          supportsAllDrives: true
         });
 
         return {
@@ -1719,7 +1741,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               mimeType: 'application/vnd.google-apps.document',
               parents: [parentFolderId]
             },
-            fields: 'id, name, webViewLink'
+            fields: 'id, name, webViewLink',
+            supportsAllDrives: true
           });
         } catch (createError: any) {
           log('Drive files.create error details:', {
@@ -1864,7 +1887,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         await drive.files.update({
           fileId: spreadsheet.data.spreadsheetId || '',
           addParents: parentFolderId,
-          fields: 'id, name, webViewLink'
+          fields: 'id, name, webViewLink',
+          supportsAllDrives: true
         });
 
         // Now update with data
@@ -2363,6 +2387,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           fileId: presentation.data.presentationId!,
           addParents: parentFolderId,
           removeParents: 'root',
+          supportsAllDrives: true
         });
 
         for (const slide of args.slides) {

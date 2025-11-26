@@ -256,7 +256,7 @@ async function checkFileExists(name: string, parentFolderId: string = 'root'): P
 // -----------------------------------------------------------------------------
 const SearchSchema = z.object({
   query: z.string().min(1, "Search query is required"),
-  pageSize: z.number().min(1).max(100).optional(),
+  pageSize: z.number().int().min(1).max(100).optional(),
   pageToken: z.string().optional()
 });
 
@@ -279,7 +279,7 @@ const CreateFolderSchema = z.object({
 
 const ListFolderSchema = z.object({
   folderId: z.string().optional(),
-  pageSize: z.number().min(1).max(100).optional(),
+  pageSize: z.number().int().min(1).max(100).optional(),
   pageToken: z.string().optional()
 });
 

@@ -255,7 +255,9 @@ async function checkFileExists(name: string, parentFolderId: string = 'root'): P
 // INPUT VALIDATION SCHEMAS
 // -----------------------------------------------------------------------------
 const SearchSchema = z.object({
-  query: z.string().min(1, "Search query is required")
+  query: z.string().min(1, "Search query is required"),
+  pageSize: z.number().min(1).max(100).optional(),
+  pageToken: z.string().optional()
 });
 
 const CreateTextFileSchema = z.object({
@@ -716,6 +718,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: "object",
           properties: {
             query: { type: "string", description: "Search query" },
+            pageSize: { type: "number", description: "Results per page (default 50, max 100)" },
+            pageToken: { type: "string", description: "Token for next page of results" }
           },
           required: ["query"],
         },
@@ -1395,22 +1399,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!validation.success) {
           return errorResponse(validation.error.errors[0].message);
         }
-        const { query: userQuery } = validation.data;
+        const { query: userQuery, pageSize, pageToken } = validation.data;
 
         const escapedQuery = userQuery.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
         const formattedQuery = `fullText contains '${escapedQuery}' and trashed = false`;
 
         const res = await drive.files.list({
           q: formattedQuery,
-          pageSize: 10,
-          fields: "files(id, name, mimeType, modifiedTime, size)",
+          pageSize: Math.min(pageSize || 50, 100),
+          pageToken: pageToken,
+          fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size)",
         });
 
         const fileList = res.data.files?.map((f: drive_v3.Schema$File) => `${f.name} (${f.mimeType})`).join("\n") || '';
         log('Search results', { query: userQuery, resultCount: res.data.files?.length });
 
+        let response = `Found ${res.data.files?.length ?? 0} files:\n${fileList}`;
+        if (res.data.nextPageToken) {
+          response += `\n\nMore results available. Use pageToken: ${res.data.nextPageToken}`;
+        }
+
         return {
-          content: [{ type: "text", text: `Found ${res.data.files?.length ?? 0} files:\n${fileList}` }],
+          content: [{ type: "text", text: response }],
           isError: false,
         };
       }

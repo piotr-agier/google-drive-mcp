@@ -1887,6 +1887,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         await drive.files.update({
           fileId: spreadsheet.data.spreadsheetId || '',
           addParents: parentFolderId,
+          removeParents: 'root',
           fields: 'id, name, webViewLink',
           supportsAllDrives: true
         });

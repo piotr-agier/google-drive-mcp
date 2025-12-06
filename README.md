@@ -7,6 +7,7 @@ A Model Context Protocol (MCP) server that provides secure integration with Goog
 - **Multi-format Support**: Work with Google Docs, Sheets, Slides, and regular files
 - **File Management**: Create, update, delete, rename, and move files and folders
 - **Advanced Search**: Search across your entire Google Drive
+- **Shared Drives Support**: Full access to Google Shared Drives (formerly Team Drives) in addition to My Drive
 - **Folder Navigation**: List and navigate through folder hierarchies with path support (e.g., `/Work/Projects`)
 - **MCP Resource Protocol**: Files accessible as MCP resources for reading content
 - **Secure Authentication**: OAuth 2.0 with automatic token refresh

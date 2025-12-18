@@ -316,13 +316,15 @@ const UpdateGoogleDocSchema = z.object({
 const CreateGoogleSheetSchema = z.object({
   name: z.string().min(1, "Sheet name is required"),
   data: z.array(z.array(z.string())),
-  parentFolderId: z.string().optional()
+  parentFolderId: z.string().optional(),
+  valueInputOption: z.enum(["RAW", "USER_ENTERED"]).optional()
 });
 
 const UpdateGoogleSheetSchema = z.object({
   spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
   range: z.string().min(1, "Range is required"),
-  data: z.array(z.array(z.string()))
+  data: z.array(z.array(z.string())),
+  valueInputOption: z.enum(["RAW", "USER_ENTERED"]).optional()
 });
 
 const GetGoogleSheetContentSchema = z.object({
@@ -857,7 +859,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "createGoogleSheet",
-        description: "Create a new Google Sheet",
+        description: "Create a new Google Sheet. By default uses RAW mode which stores values as-is. Set valueInputOption to 'USER_ENTERED' only when you need formulas to be evaluated.",
         inputSchema: {
           type: "object",
           properties: {
@@ -867,22 +869,33 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: "Data as array of arrays",
               items: { type: "array", items: { type: "string" } }
             },
-            parentFolderId: { type: "string", description: "Parent folder ID (defaults to root)", optional: true }
+            parentFolderId: { type: "string", description: "Parent folder ID (defaults to root)", optional: true },
+            valueInputOption: {
+              type: "string",
+              enum: ["RAW", "USER_ENTERED"],
+              description: "RAW (default): Values stored exactly as provided - formulas stored as text strings. Safe for untrusted data. USER_ENTERED: Values parsed like spreadsheet UI - formulas (=SUM, =IF, etc.) are evaluated. SECURITY WARNING: USER_ENTERED can execute formulas, only use with trusted data, never with user-provided input that could contain malicious formulas like =IMPORTDATA() or =IMPORTRANGE()."
+            }
           },
           required: ["name", "data"]
         }
       },
       {
         name: "updateGoogleSheet",
-        description: "Update an existing Google Sheet",
+        description: "Update an existing Google Sheet. By default uses RAW mode which stores values as-is. Set valueInputOption to 'USER_ENTERED' only when you need formulas to be evaluated.",
         inputSchema: {
           type: "object",
           properties: {
             spreadsheetId: { type: "string", description: "Sheet ID" },
-            range: { type: "string", description: "Range to update" },
+            range: { type: "string", description: "Range to update (e.g., 'Sheet1!A1:C10')" },
             data: {
               type: "array",
+              description: "2D array of values to write",
               items: { type: "array", items: { type: "string" } }
+            },
+            valueInputOption: {
+              type: "string",
+              enum: ["RAW", "USER_ENTERED"],
+              description: "RAW (default): Values stored exactly as provided - formulas stored as text strings. Safe for untrusted data. USER_ENTERED: Values parsed like spreadsheet UI - formulas (=SUM, =IF, etc.) are evaluated. SECURITY WARNING: USER_ENTERED can execute formulas, only use with trusted data, never with user-provided input that could contain malicious formulas like =IMPORTDATA() or =IMPORTRANGE()."
             }
           },
           required: ["spreadsheetId", "range", "data"]
@@ -1942,7 +1955,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         await sheets.spreadsheets.values.update({
           spreadsheetId: spreadsheet.data.spreadsheetId!,
           range: 'Sheet1!A1',
-          valueInputOption: 'RAW',
+          valueInputOption: args.valueInputOption || 'RAW',
           requestBody: { values: args.data }
         });
 
@@ -1963,7 +1976,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         await sheets.spreadsheets.values.update({
           spreadsheetId: args.spreadsheetId,
           range: args.range,
-          valueInputOption: 'RAW',
+          valueInputOption: args.valueInputOption || 'RAW',
           requestBody: { values: args.data }
         });
 

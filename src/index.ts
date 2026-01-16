@@ -330,6 +330,10 @@ const GetGoogleSheetContentSchema = z.object({
   range: z.string().min(1, "Range is required")
 });
 
+const GetSpreadsheetInfoSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required")
+});
+
 const FormatGoogleSheetCellsSchema = z.object({
   spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
   range: z.string().min(1, "Range is required"),
@@ -887,6 +891,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             range: { type: "string", description: "Range to get (e.g., 'Sheet1!A1:C10')" }
           },
           required: ["spreadsheetId", "range"]
+        }
+      },
+      {
+        name: "getSpreadsheetInfo",
+        description: "Get detailed information about a Google Spreadsheet including all sheets/tabs, their IDs, and dimensions",
+        inputSchema: {
+          type: "object",
+          properties: {
+            spreadsheetId: { type: "string", description: "The ID of the Google Spreadsheet (from the URL)" }
+          },
+          required: ["spreadsheetId"]
         }
       },
       {
@@ -1963,6 +1978,44 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         return {
           content: [{ type: "text", text: content }],
+          isError: false
+        };
+      }
+
+      case "getSpreadsheetInfo": {
+        const validation = GetSpreadsheetInfoSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const sheets = google.sheets({ version: 'v4', auth: authClient });
+        const response = await sheets.spreadsheets.get({
+          spreadsheetId: args.spreadsheetId,
+          includeGridData: false
+        });
+
+        const metadata = response.data;
+        let result = `**Spreadsheet Information:**\n\n`;
+        result += `**Title:** ${metadata.properties?.title || 'Untitled'}\n`;
+        result += `**ID:** ${metadata.spreadsheetId}\n`;
+        result += `**URL:** https://docs.google.com/spreadsheets/d/${metadata.spreadsheetId}\n\n`;
+
+        const sheetList = metadata.sheets || [];
+        result += `**Sheets (${sheetList.length}):**\n`;
+        sheetList.forEach((sheet, index) => {
+          const props = sheet.properties;
+          result += `${index + 1}. **${props?.title || 'Untitled'}**\n`;
+          result += `   - Sheet ID: ${props?.sheetId}\n`;
+          result += `   - Grid: ${props?.gridProperties?.rowCount || 0} rows × ${props?.gridProperties?.columnCount || 0} columns\n`;
+          if (props?.hidden) {
+            result += `   - Status: Hidden\n`;
+          }
+          result += `\n`;
+        });
+
+        return {
+          content: [{ type: "text", text: result }],
           isError: false
         };
       }

@@ -967,6 +967,35 @@ const AddGoogleSheetConditionalFormatSchema = z.object({
   })
 });
 
+// Phase 2: Additional Sheets tools
+const GetSpreadsheetInfoSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required")
+});
+
+const AppendSpreadsheetRowsSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  range: z.string().min(1, "Range is required"),
+  values: z.array(z.array(z.any())),
+  valueInputOption: z.enum(["RAW", "USER_ENTERED"]).optional().default("USER_ENTERED")
+});
+
+const AddSpreadsheetSheetSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  sheetTitle: z.string().min(1, "Sheet title is required")
+});
+
+const ListGoogleSheetsSchema = z.object({
+  maxResults: z.number().int().min(1).max(100).optional().default(20),
+  query: z.string().optional(),
+  orderBy: z.enum(["name", "modifiedTime", "createdTime"]).optional().default("modifiedTime")
+});
+
+const CopyFileSchema = z.object({
+  fileId: z.string().min(1, "File ID is required"),
+  newName: z.string().optional(),
+  parentFolderId: z.string().optional()
+});
+
 const CreateGoogleSlidesSchema = z.object({
   name: z.string().min(1, "Presentation name is required"),
   slides: z.array(z.object({
@@ -2263,6 +2292,70 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             }
           },
           required: ["spreadsheetId", "range", "condition", "format"]
+        }
+      },
+      // Phase 2: Additional Sheets tools
+      {
+        name: "getSpreadsheetInfo",
+        description: "Gets detailed information about a Google Spreadsheet including all sheets/tabs",
+        inputSchema: {
+          type: "object",
+          properties: {
+            spreadsheetId: { type: "string", description: "The ID of the Google Spreadsheet (from the URL)" }
+          },
+          required: ["spreadsheetId"]
+        }
+      },
+      {
+        name: "appendSpreadsheetRows",
+        description: "Appends rows of data to the end of a sheet in a Google Spreadsheet",
+        inputSchema: {
+          type: "object",
+          properties: {
+            spreadsheetId: { type: "string", description: "The ID of the Google Spreadsheet (from the URL)" },
+            range: { type: "string", description: "A1 notation range indicating where to append (e.g., 'A1' or 'Sheet1!A1'). Data will be appended starting from this range." },
+            values: { type: "array", description: "2D array of values to append. Each inner array represents a row.", items: { type: "array" } },
+            valueInputOption: { type: "string", description: "How input data should be interpreted (RAW or USER_ENTERED)", enum: ["RAW", "USER_ENTERED"], default: "USER_ENTERED" }
+          },
+          required: ["spreadsheetId", "range", "values"]
+        }
+      },
+      {
+        name: "addSpreadsheetSheet",
+        description: "Adds a new sheet/tab to an existing Google Spreadsheet",
+        inputSchema: {
+          type: "object",
+          properties: {
+            spreadsheetId: { type: "string", description: "The ID of the Google Spreadsheet (from the URL)" },
+            sheetTitle: { type: "string", description: "Title for the new sheet/tab" }
+          },
+          required: ["spreadsheetId", "sheetTitle"]
+        }
+      },
+      {
+        name: "listGoogleSheets",
+        description: "Lists Google Spreadsheets from your Google Drive with optional filtering",
+        inputSchema: {
+          type: "object",
+          properties: {
+            maxResults: { type: "number", description: "Maximum number of spreadsheets to return (1-100)", default: 20 },
+            query: { type: "string", description: "Search query to filter spreadsheets by name or content" },
+            orderBy: { type: "string", description: "Sort order for results", enum: ["name", "modifiedTime", "createdTime"], default: "modifiedTime" }
+          },
+          required: []
+        }
+      },
+      {
+        name: "copyFile",
+        description: "Creates a copy of a Google Drive file or document",
+        inputSchema: {
+          type: "object",
+          properties: {
+            fileId: { type: "string", description: "ID of the file to copy" },
+            newName: { type: "string", description: "Name for the copied file. If not provided, will use 'Copy of [original name]'" },
+            parentFolderId: { type: "string", description: "ID of folder where copy should be placed. If not provided, places in same location as original." }
+          },
+          required: ["fileId"]
         }
       },
       {
@@ -3608,6 +3701,187 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         return {
           content: [{ type: "text", text: `Added conditional formatting to range ${args.range}` }],
+          isError: false
+        };
+      }
+
+      // Phase 2: Additional Sheets tools
+      case "getSpreadsheetInfo": {
+        const validation = GetSpreadsheetInfoSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const sheets = google.sheets({ version: 'v4', auth: authClient });
+        const response = await sheets.spreadsheets.get({
+          spreadsheetId: args.spreadsheetId,
+          fields: 'spreadsheetId,properties.title,sheets.properties'
+        });
+
+        const metadata = response.data;
+        let result = `**Spreadsheet Information:**\n\n`;
+        result += `**Title:** ${metadata.properties?.title || 'Untitled'}\n`;
+        result += `**ID:** ${metadata.spreadsheetId}\n`;
+        result += `**URL:** https://docs.google.com/spreadsheets/d/${metadata.spreadsheetId}\n\n`;
+
+        const sheetList = metadata.sheets || [];
+        result += `**Sheets (${sheetList.length}):**\n`;
+        for (let i = 0; i < sheetList.length; i++) {
+          const props = sheetList[i].properties;
+          result += `${i + 1}. **${props?.title || 'Untitled'}**\n`;
+          result += `   - Sheet ID: ${props?.sheetId}\n`;
+          result += `   - Grid: ${props?.gridProperties?.rowCount || 0} rows × ${props?.gridProperties?.columnCount || 0} columns\n`;
+          if (props?.hidden) {
+            result += `   - Status: Hidden\n`;
+          }
+          result += `\n`;
+        }
+
+        return {
+          content: [{ type: "text", text: result }],
+          isError: false
+        };
+      }
+
+      case "appendSpreadsheetRows": {
+        const validation = AppendSpreadsheetRowsSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const sheets = google.sheets({ version: 'v4', auth: authClient });
+        const response = await sheets.spreadsheets.values.append({
+          spreadsheetId: args.spreadsheetId,
+          range: args.range,
+          valueInputOption: args.valueInputOption || 'USER_ENTERED',
+          insertDataOption: 'INSERT_ROWS',
+          requestBody: { values: args.values }
+        });
+
+        const updatedCells = response.data.updates?.updatedCells || 0;
+        const updatedRows = response.data.updates?.updatedRows || 0;
+        const updatedRange = response.data.updates?.updatedRange || args.range;
+
+        return {
+          content: [{ type: "text", text: `Successfully appended ${updatedRows} row(s) (${updatedCells} cells) to spreadsheet. Updated range: ${updatedRange}` }],
+          isError: false
+        };
+      }
+
+      case "addSpreadsheetSheet": {
+        const validation = AddSpreadsheetSheetSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const sheets = google.sheets({ version: 'v4', auth: authClient });
+        const response = await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: args.spreadsheetId,
+          requestBody: {
+            requests: [{
+              addSheet: {
+                properties: {
+                  title: args.sheetTitle
+                }
+              }
+            }]
+          }
+        });
+
+        const addedSheet = response.data.replies?.[0]?.addSheet?.properties;
+        if (!addedSheet) {
+          return errorResponse('Failed to add sheet - no sheet properties returned.');
+        }
+
+        return {
+          content: [{ type: "text", text: `Successfully added sheet "${addedSheet.title}" (Sheet ID: ${addedSheet.sheetId}) to spreadsheet.` }],
+          isError: false
+        };
+      }
+
+      case "listGoogleSheets": {
+        const validation = ListGoogleSheetsSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        let queryString = "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false";
+        if (args.query) {
+          queryString += ` and (name contains '${args.query}' or fullText contains '${args.query}')`;
+        }
+
+        const response = await drive.files.list({
+          q: queryString,
+          pageSize: args.maxResults || 20,
+          orderBy: args.orderBy === 'name' ? 'name' : args.orderBy,
+          fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName,emailAddress))',
+          supportsAllDrives: true,
+          includeItemsFromAllDrives: true
+        });
+
+        const files = response.data.files || [];
+        if (files.length === 0) {
+          return {
+            content: [{ type: "text", text: "No Google Spreadsheets found matching your criteria." }],
+            isError: false
+          };
+        }
+
+        let result = `Found ${files.length} Google Spreadsheet(s):\n\n`;
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          const modifiedDate = file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Unknown';
+          const owner = file.owners?.[0]?.displayName || 'Unknown';
+          result += `${i + 1}. **${file.name}**\n`;
+          result += `   ID: ${file.id}\n`;
+          result += `   Modified: ${modifiedDate}\n`;
+          result += `   Owner: ${owner}\n`;
+          result += `   Link: ${file.webViewLink}\n\n`;
+        }
+
+        return {
+          content: [{ type: "text", text: result }],
+          isError: false
+        };
+      }
+
+      case "copyFile": {
+        const validation = CopyFileSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        // Get original file info
+        const originalFile = await drive.files.get({
+          fileId: args.fileId,
+          fields: 'name,parents',
+          supportsAllDrives: true
+        });
+
+        const copyMetadata: any = {
+          name: args.newName || `Copy of ${originalFile.data.name}`
+        };
+
+        if (args.parentFolderId) {
+          copyMetadata.parents = [args.parentFolderId];
+        } else if (originalFile.data.parents) {
+          copyMetadata.parents = originalFile.data.parents;
+        }
+
+        const response = await drive.files.copy({
+          fileId: args.fileId,
+          requestBody: copyMetadata,
+          fields: 'id,name,webViewLink,parents',
+          supportsAllDrives: true
+        });
+
+        return {
+          content: [{ type: "text", text: `Successfully copied file as "${response.data.name}"\nNew file ID: ${response.data.id}\nLink: ${response.data.webViewLink}` }],
           isError: false
         };
       }

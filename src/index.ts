@@ -21,6 +21,9 @@ import { downloadDriveFile } from './download-file.js';
 // Drive service - will be created with auth when needed
 let drive: any = null;
 
+// Calendar service - will be created with auth when needed
+let calendar: any = null;
+
 // Helper to ensure drive service has current auth
 function ensureDriveService() {
   if (!authClient) {
@@ -63,6 +66,15 @@ function ensureDriveService() {
         });
       }
     });
+}
+
+// Helper to ensure calendar service has current auth
+function ensureCalendarService() {
+  if (!authClient) {
+    throw new Error('Authentication required');
+  }
+  calendar = google.calendar({ version: 'v3', auth: authClient });
+  log('Calendar service created/updated');
 }
 
 // -----------------------------------------------------------------------------
@@ -272,6 +284,527 @@ async function checkFileExists(name: string, parentFolderId: string = 'root'): P
     log('Error checking file existence:', error);
     return null;
   }
+}
+
+// -----------------------------------------------------------------------------
+// GOOGLE DOCS HELPER FUNCTIONS
+// -----------------------------------------------------------------------------
+
+// Helper function for hex color validation and conversion
+const hexColorRegex = /^#?([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/;
+function validateHexColor(color: string): boolean {
+  return hexColorRegex.test(color);
+}
+
+function hexToRgbColor(hex: string): { red: number; green: number; blue: number } | null {
+  if (!hex) return null;
+  let hexClean = hex.startsWith('#') ? hex.slice(1) : hex;
+
+  if (hexClean.length === 3) {
+    hexClean = hexClean[0] + hexClean[0] + hexClean[1] + hexClean[1] + hexClean[2] + hexClean[2];
+  }
+  if (hexClean.length !== 6) return null;
+  const bigint = parseInt(hexClean, 16);
+  if (isNaN(bigint)) return null;
+
+  const r = ((bigint >> 16) & 255) / 255;
+  const g = ((bigint >> 8) & 255) / 255;
+  const b = (bigint & 255) / 255;
+
+  return { red: r, green: g, blue: b };
+}
+
+// Execute batch update for Google Docs
+async function executeBatchUpdate(documentId: string, requests: any[]): Promise<any> {
+  if (!requests || requests.length === 0) {
+    return {};
+  }
+
+  await ensureAuthenticated();
+  const docs = google.docs({ version: 'v1', auth: authClient });
+
+  try {
+    const response = await docs.documents.batchUpdate({
+      documentId: documentId,
+      requestBody: { requests },
+    });
+    return response.data;
+  } catch (error: any) {
+    log('Google Docs batchUpdate error:', error.message);
+    if (error.code === 404) throw new Error(`Document not found (ID: ${documentId})`);
+    if (error.code === 403) throw new Error(`Permission denied for document (ID: ${documentId})`);
+    throw new Error(`Google Docs API Error: ${error.message}`);
+  }
+}
+
+// Find text in a document and return the range indices
+async function findTextRange(documentId: string, textToFind: string, instance: number = 1): Promise<{ startIndex: number; endIndex: number } | null> {
+  await ensureAuthenticated();
+  const docs = google.docs({ version: 'v1', auth: authClient });
+
+  try {
+    const res = await docs.documents.get({
+      documentId,
+      fields: 'body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,startIndex,endIndex))',
+    });
+
+    if (!res.data.body?.content) {
+      return null;
+    }
+
+    // Collect all text segments with their positions
+    let fullText = '';
+    const segments: { text: string; start: number; end: number }[] = [];
+
+    const collectTextFromContent = (content: any[]) => {
+      content.forEach(element => {
+        if (element.paragraph?.elements) {
+          element.paragraph.elements.forEach((pe: any) => {
+            if (pe.textRun?.content && pe.startIndex !== undefined && pe.endIndex !== undefined) {
+              const text = pe.textRun.content;
+              fullText += text;
+              segments.push({ text, start: pe.startIndex, end: pe.endIndex });
+            }
+          });
+        }
+
+        // Handle tables recursively
+        if (element.table?.tableRows) {
+          element.table.tableRows.forEach((row: any) => {
+            if (row.tableCells) {
+              row.tableCells.forEach((cell: any) => {
+                if (cell.content) {
+                  collectTextFromContent(cell.content);
+                }
+              });
+            }
+          });
+        }
+      });
+    };
+
+    collectTextFromContent(res.data.body.content);
+    segments.sort((a, b) => a.start - b.start);
+
+    // Find the specified instance
+    let foundCount = 0;
+    let searchStartIndex = 0;
+
+    while (foundCount < instance) {
+      const currentIndex = fullText.indexOf(textToFind, searchStartIndex);
+      if (currentIndex === -1) break;
+
+      foundCount++;
+
+      if (foundCount === instance) {
+        const targetStartInFullText = currentIndex;
+        const targetEndInFullText = currentIndex + textToFind.length;
+        let currentPosInFullText = 0;
+        let startIndex = -1;
+        let endIndex = -1;
+
+        for (const seg of segments) {
+          const segStartInFullText = currentPosInFullText;
+          const segEndInFullText = segStartInFullText + seg.text.length;
+
+          if (startIndex === -1 && targetStartInFullText >= segStartInFullText && targetStartInFullText < segEndInFullText) {
+            startIndex = seg.start + (targetStartInFullText - segStartInFullText);
+          }
+
+          if (targetEndInFullText > segStartInFullText && targetEndInFullText <= segEndInFullText) {
+            endIndex = seg.start + (targetEndInFullText - segStartInFullText);
+            break;
+          }
+
+          currentPosInFullText = segEndInFullText;
+        }
+
+        if (startIndex !== -1 && endIndex !== -1) {
+          return { startIndex, endIndex };
+        }
+      }
+
+      searchStartIndex = currentIndex + 1;
+    }
+
+    return null;
+  } catch (error: any) {
+    log('Error finding text in document:', error.message);
+    if (error.code === 404) throw new Error(`Document not found (ID: ${documentId})`);
+    throw new Error(`Failed to search document: ${error.message}`);
+  }
+}
+
+// Get paragraph range containing a specific index
+async function getParagraphRange(documentId: string, indexWithin: number): Promise<{ startIndex: number; endIndex: number } | null> {
+  await ensureAuthenticated();
+  const docs = google.docs({ version: 'v1', auth: authClient });
+
+  try {
+    const res = await docs.documents.get({
+      documentId,
+      fields: 'body(content(startIndex,endIndex,paragraph,table))',
+    });
+
+    if (!res.data.body?.content) {
+      return null;
+    }
+
+    const findParagraphInContent = (content: any[]): { startIndex: number; endIndex: number } | null => {
+      for (const element of content) {
+        if (element.startIndex !== undefined && element.endIndex !== undefined) {
+          if (indexWithin >= element.startIndex && indexWithin < element.endIndex) {
+            if (element.paragraph) {
+              return { startIndex: element.startIndex, endIndex: element.endIndex };
+            }
+
+            // Check table cells recursively
+            if (element.table?.tableRows) {
+              for (const row of element.table.tableRows) {
+                if (row.tableCells) {
+                  for (const cell of row.tableCells) {
+                    if (cell.content) {
+                      const result = findParagraphInContent(cell.content);
+                      if (result) return result;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      return null;
+    };
+
+    return findParagraphInContent(res.data.body.content);
+  } catch (error: any) {
+    log('Error getting paragraph range:', error.message);
+    throw new Error(`Failed to find paragraph: ${error.message}`);
+  }
+}
+
+// Build text style update request
+function buildUpdateTextStyleRequest(
+  startIndex: number,
+  endIndex: number,
+  style: {
+    bold?: boolean;
+    italic?: boolean;
+    underline?: boolean;
+    strikethrough?: boolean;
+    fontSize?: number;
+    fontFamily?: string;
+    foregroundColor?: string;
+    backgroundColor?: string;
+    linkUrl?: string;
+  }
+): { request: any; fields: string[] } | null {
+  const textStyle: any = {};
+  const fieldsToUpdate: string[] = [];
+
+  if (style.bold !== undefined) { textStyle.bold = style.bold; fieldsToUpdate.push('bold'); }
+  if (style.italic !== undefined) { textStyle.italic = style.italic; fieldsToUpdate.push('italic'); }
+  if (style.underline !== undefined) { textStyle.underline = style.underline; fieldsToUpdate.push('underline'); }
+  if (style.strikethrough !== undefined) { textStyle.strikethrough = style.strikethrough; fieldsToUpdate.push('strikethrough'); }
+  if (style.fontSize !== undefined) { textStyle.fontSize = { magnitude: style.fontSize, unit: 'PT' }; fieldsToUpdate.push('fontSize'); }
+  if (style.fontFamily !== undefined) { textStyle.weightedFontFamily = { fontFamily: style.fontFamily }; fieldsToUpdate.push('weightedFontFamily'); }
+
+  if (style.foregroundColor !== undefined) {
+    const rgbColor = hexToRgbColor(style.foregroundColor);
+    if (!rgbColor) throw new Error(`Invalid foreground hex color: ${style.foregroundColor}`);
+    textStyle.foregroundColor = { color: { rgbColor } };
+    fieldsToUpdate.push('foregroundColor');
+  }
+
+  if (style.backgroundColor !== undefined) {
+    const rgbColor = hexToRgbColor(style.backgroundColor);
+    if (!rgbColor) throw new Error(`Invalid background hex color: ${style.backgroundColor}`);
+    textStyle.backgroundColor = { color: { rgbColor } };
+    fieldsToUpdate.push('backgroundColor');
+  }
+
+  if (style.linkUrl !== undefined) {
+    textStyle.link = { url: style.linkUrl };
+    fieldsToUpdate.push('link');
+  }
+
+  if (fieldsToUpdate.length === 0) return null;
+
+  return {
+    request: {
+      updateTextStyle: {
+        range: { startIndex, endIndex },
+        textStyle,
+        fields: fieldsToUpdate.join(','),
+      }
+    },
+    fields: fieldsToUpdate
+  };
+}
+
+// Build paragraph style update request
+function buildUpdateParagraphStyleRequest(
+  startIndex: number,
+  endIndex: number,
+  style: {
+    alignment?: 'START' | 'END' | 'CENTER' | 'JUSTIFIED';
+    indentStart?: number;
+    indentEnd?: number;
+    spaceAbove?: number;
+    spaceBelow?: number;
+    namedStyleType?: string;
+    keepWithNext?: boolean;
+  }
+): { request: any; fields: string[] } | null {
+  const paragraphStyle: any = {};
+  const fieldsToUpdate: string[] = [];
+
+  if (style.alignment !== undefined) { paragraphStyle.alignment = style.alignment; fieldsToUpdate.push('alignment'); }
+  if (style.indentStart !== undefined) { paragraphStyle.indentStart = { magnitude: style.indentStart, unit: 'PT' }; fieldsToUpdate.push('indentStart'); }
+  if (style.indentEnd !== undefined) { paragraphStyle.indentEnd = { magnitude: style.indentEnd, unit: 'PT' }; fieldsToUpdate.push('indentEnd'); }
+  if (style.spaceAbove !== undefined) { paragraphStyle.spaceAbove = { magnitude: style.spaceAbove, unit: 'PT' }; fieldsToUpdate.push('spaceAbove'); }
+  if (style.spaceBelow !== undefined) { paragraphStyle.spaceBelow = { magnitude: style.spaceBelow, unit: 'PT' }; fieldsToUpdate.push('spaceBelow'); }
+  if (style.namedStyleType !== undefined) { paragraphStyle.namedStyleType = style.namedStyleType; fieldsToUpdate.push('namedStyleType'); }
+  if (style.keepWithNext !== undefined) { paragraphStyle.keepWithNext = style.keepWithNext; fieldsToUpdate.push('keepWithNext'); }
+
+  if (fieldsToUpdate.length === 0) return null;
+
+  return {
+    request: {
+      updateParagraphStyle: {
+        range: { startIndex, endIndex },
+        paragraphStyle,
+        fields: fieldsToUpdate.join(','),
+      }
+    },
+    fields: fieldsToUpdate
+  };
+}
+
+// -----------------------------------------------------------------------------
+// TABLE & MEDIA HELPER FUNCTIONS
+// -----------------------------------------------------------------------------
+
+// Insert an inline image from a URL
+async function insertInlineImageHelper(
+  documentId: string,
+  imageUrl: string,
+  index: number,
+  width?: number,
+  height?: number
+): Promise<any> {
+  // Validate URL format
+  try {
+    new URL(imageUrl);
+  } catch (e) {
+    throw new Error(`Invalid image URL format: ${imageUrl}`);
+  }
+
+  const request: any = {
+    insertInlineImage: {
+      location: { index },
+      uri: imageUrl
+    }
+  };
+
+  if (width && height) {
+    request.insertInlineImage.objectSize = {
+      height: { magnitude: height, unit: 'PT' },
+      width: { magnitude: width, unit: 'PT' }
+    };
+  }
+
+  return executeBatchUpdate(documentId, [request]);
+}
+
+// Upload a local image to Drive and return its URL
+async function uploadImageToDriveHelper(
+  localFilePath: string,
+  parentFolderId?: string
+): Promise<string> {
+  const fs = await import('fs');
+  const path = await import('path');
+
+  // Verify file exists
+  if (!fs.existsSync(localFilePath)) {
+    throw new Error(`Image file not found: ${localFilePath}`);
+  }
+
+  // Get file name and mime type
+  const fileName = path.basename(localFilePath);
+  const mimeTypeMap: { [key: string]: string } = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.gif': 'image/gif',
+    '.bmp': 'image/bmp',
+    '.webp': 'image/webp',
+    '.svg': 'image/svg+xml'
+  };
+
+  const ext = path.extname(localFilePath).toLowerCase();
+  const mimeType = mimeTypeMap[ext] || 'application/octet-stream';
+
+  // Upload file to Drive
+  const fileMetadata: any = {
+    name: fileName,
+    mimeType: mimeType
+  };
+
+  if (parentFolderId) {
+    fileMetadata.parents = [parentFolderId];
+  }
+
+  const media = {
+    mimeType: mimeType,
+    body: fs.createReadStream(localFilePath)
+  };
+
+  const uploadResponse = await drive.files.create({
+    requestBody: fileMetadata,
+    media: media,
+    fields: 'id,webViewLink,webContentLink'
+  });
+
+  const fileId = uploadResponse.data.id;
+  if (!fileId) {
+    throw new Error('Failed to upload image to Drive - no file ID returned');
+  }
+
+  // Make the file publicly readable
+  await drive.permissions.create({
+    fileId: fileId,
+    requestBody: {
+      role: 'reader',
+      type: 'anyone'
+    }
+  });
+
+  // Get the webContentLink
+  const fileInfo = await drive.files.get({
+    fileId: fileId,
+    fields: 'webContentLink'
+  });
+
+  const webContentLink = fileInfo.data.webContentLink;
+  if (!webContentLink) {
+    throw new Error('Failed to get public URL for uploaded image');
+  }
+
+  return webContentLink;
+}
+
+// -----------------------------------------------------------------------------
+// CALENDAR HELPER FUNCTIONS
+// -----------------------------------------------------------------------------
+
+interface CalendarEventInfo {
+  id: string;
+  summary?: string;
+  description?: string;
+  location?: string;
+  start?: { dateTime?: string; date?: string; timeZone?: string };
+  end?: { dateTime?: string; date?: string; timeZone?: string };
+  status?: string;
+  htmlLink?: string;
+  hangoutLink?: string;
+  meetingLink?: string;
+  attendees?: { email: string; displayName?: string; responseStatus?: string }[];
+  organizer?: { email?: string; displayName?: string };
+  recurrence?: string[];
+  created?: string;
+  updated?: string;
+}
+
+function formatCalendarEvent(event: any): CalendarEventInfo {
+  const result: CalendarEventInfo = {
+    id: event.id || '',
+    summary: event.summary,
+    description: event.description,
+    location: event.location,
+    status: event.status,
+    htmlLink: event.htmlLink,
+    created: event.created,
+    updated: event.updated,
+  };
+
+  if (event.start) {
+    result.start = {
+      dateTime: event.start.dateTime,
+      date: event.start.date,
+      timeZone: event.start.timeZone,
+    };
+  }
+
+  if (event.end) {
+    result.end = {
+      dateTime: event.end.dateTime,
+      date: event.end.date,
+      timeZone: event.end.timeZone,
+    };
+  }
+
+  if (event.hangoutLink) {
+    result.hangoutLink = event.hangoutLink;
+  }
+
+  if (event.conferenceData?.entryPoints) {
+    const videoEntry = event.conferenceData.entryPoints.find((ep: any) => ep.entryPointType === 'video');
+    if (videoEntry?.uri) {
+      result.meetingLink = videoEntry.uri;
+    }
+  }
+
+  if (event.attendees) {
+    result.attendees = event.attendees.map((a: any) => ({
+      email: a.email || '',
+      displayName: a.displayName,
+      responseStatus: a.responseStatus,
+    }));
+  }
+
+  if (event.organizer) {
+    result.organizer = {
+      email: event.organizer.email,
+      displayName: event.organizer.displayName,
+    };
+  }
+
+  if (event.recurrence) {
+    result.recurrence = event.recurrence;
+  }
+
+  return result;
+}
+
+function formatEventForDisplay(event: CalendarEventInfo): string {
+  const lines: string[] = [];
+  lines.push(`**${event.summary || '(No title)'}**`);
+
+  if (event.start) {
+    const startStr = event.start.dateTime || event.start.date || '';
+    const endStr = event.end?.dateTime || event.end?.date || '';
+    if (event.start.date) {
+      // All-day event
+      lines.push(`Date: ${startStr}${endStr && endStr !== startStr ? ` - ${endStr}` : ''}`);
+    } else {
+      lines.push(`Time: ${startStr} - ${endStr}`);
+    }
+  }
+
+  if (event.location) lines.push(`Location: ${event.location}`);
+  if (event.description) lines.push(`Description: ${event.description}`);
+  if (event.hangoutLink || event.meetingLink) {
+    lines.push(`Meeting: ${event.meetingLink || event.hangoutLink}`);
+  }
+  if (event.attendees && event.attendees.length > 0) {
+    lines.push(`Attendees: ${event.attendees.map(a => a.email).join(', ')}`);
+  }
+  if (event.htmlLink) lines.push(`Link: ${event.htmlLink}`);
+  lines.push(`Event ID: ${event.id}`);
+
+  return lines.join('\n');
 }
 
 // -----------------------------------------------------------------------------
@@ -597,6 +1130,215 @@ const DownloadFileSchema = z.object({
   overwrite: z.boolean().optional().default(false),
 });
 
+// --- New Doc Editing Schemas ---
+const InsertTextSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  text: z.string().min(1, "Text to insert is required"),
+  index: z.number().int().min(1, "Index must be at least 1 (1-based)")
+});
+
+const DeleteRangeSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  startIndex: z.number().int().min(1, "Start index must be at least 1"),
+  endIndex: z.number().int().min(1, "End index must be at least 1")
+}).refine(data => data.endIndex > data.startIndex, {
+  message: "End index must be greater than start index",
+  path: ["endIndex"]
+});
+
+const ReadGoogleDocSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  format: z.enum(['text', 'json', 'markdown']).optional().default('text'),
+  maxLength: z.number().int().min(1).optional()
+});
+
+const ListDocumentTabsSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  includeContent: z.boolean().optional().default(false)
+});
+
+// Enhanced text/paragraph style schemas with text-find targeting
+const ApplyTextStyleSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  // Flat targeting - use EITHER indices OR text-find (not nested union)
+  startIndex: z.number().int().min(1).optional(),
+  endIndex: z.number().int().min(1).optional(),
+  textToFind: z.string().min(1).optional(),
+  matchInstance: z.number().int().min(1).optional().default(1),
+  // Style options
+  bold: z.boolean().optional(),
+  italic: z.boolean().optional(),
+  underline: z.boolean().optional(),
+  strikethrough: z.boolean().optional(),
+  fontSize: z.number().min(1).optional(),
+  fontFamily: z.string().optional(),
+  foregroundColor: z.string().optional(),
+  backgroundColor: z.string().optional(),
+  linkUrl: z.string().url().optional()
+});
+
+const ApplyParagraphStyleSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  // Flat targeting - use EITHER indices OR text-find OR indexWithinParagraph
+  startIndex: z.number().int().min(1).optional(),
+  endIndex: z.number().int().min(1).optional(),
+  textToFind: z.string().min(1).optional(),
+  matchInstance: z.number().int().min(1).optional().default(1),
+  indexWithinParagraph: z.number().int().min(1).optional(),
+  // Style options
+  alignment: z.enum(['START', 'END', 'CENTER', 'JUSTIFIED']).optional(),
+  indentStart: z.number().min(0).optional(),
+  indentEnd: z.number().min(0).optional(),
+  spaceAbove: z.number().min(0).optional(),
+  spaceBelow: z.number().min(0).optional(),
+  namedStyleType: z.enum(['NORMAL_TEXT', 'TITLE', 'SUBTITLE', 'HEADING_1', 'HEADING_2', 'HEADING_3', 'HEADING_4', 'HEADING_5', 'HEADING_6']).optional(),
+  keepWithNext: z.boolean().optional()
+});
+
+// Comment tool schemas
+const ListCommentsSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required")
+});
+
+const GetCommentSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  commentId: z.string().min(1, "Comment ID is required")
+});
+
+const AddCommentSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  startIndex: z.number().int().min(1, "Start index must be at least 1"),
+  endIndex: z.number().int().min(1, "End index must be at least 1"),
+  commentText: z.string().min(1, "Comment text is required")
+});
+
+const ReplyToCommentSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  commentId: z.string().min(1, "Comment ID is required"),
+  replyText: z.string().min(1, "Reply text is required")
+});
+
+const DeleteCommentSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  commentId: z.string().min(1, "Comment ID is required")
+});
+
+// --- Calendar Schemas ---
+const ListCalendarsSchema = z.object({
+  showHidden: z.boolean().optional().default(false).describe("Include hidden calendars")
+});
+
+const GetCalendarEventsSchema = z.object({
+  calendarId: z.string().optional().default("primary").describe("Calendar ID (default: primary)"),
+  timeMin: z.string().optional().describe("Start of time range (RFC3339, e.g., '2024-01-01T00:00:00Z')"),
+  timeMax: z.string().optional().describe("End of time range (RFC3339)"),
+  query: z.string().optional().describe("Free text search in events"),
+  maxResults: z.number().int().min(1).max(250).optional().default(50).describe("Maximum events to return (1-250)"),
+  singleEvents: z.boolean().optional().default(true).describe("Expand recurring events into instances"),
+  orderBy: z.enum(["startTime", "updated"]).optional().default("startTime").describe("Sort order")
+});
+
+const GetCalendarEventSchema = z.object({
+  eventId: z.string().min(1, "Event ID is required"),
+  calendarId: z.string().optional().default("primary").describe("Calendar ID (default: primary)")
+});
+
+const CreateCalendarEventSchema = z.object({
+  summary: z.string().min(1, "Event title is required"),
+  calendarId: z.string().optional().default("primary").describe("Calendar ID (default: primary)"),
+  description: z.string().optional().describe("Event description"),
+  location: z.string().optional().describe("Event location"),
+  start: z.object({
+    dateTime: z.string().optional().describe("RFC3339 timestamp for timed events"),
+    date: z.string().optional().describe("Date for all-day events (YYYY-MM-DD)"),
+    timeZone: z.string().optional().describe("Time zone (e.g., 'America/Los_Angeles')")
+  }).describe("Start time"),
+  end: z.object({
+    dateTime: z.string().optional().describe("RFC3339 timestamp for timed events"),
+    date: z.string().optional().describe("Date for all-day events (YYYY-MM-DD)"),
+    timeZone: z.string().optional().describe("Time zone (e.g., 'America/Los_Angeles')")
+  }).describe("End time"),
+  attendees: z.array(z.string()).optional().describe("Email addresses of attendees"),
+  sendUpdates: z.enum(["all", "externalOnly", "none"]).optional().default("all").describe("Send notifications to attendees"),
+  conferenceType: z.enum(["hangoutsMeet"]).optional().describe("Add Google Meet link"),
+  recurrence: z.array(z.string()).optional().describe("RRULE strings for recurring events"),
+  visibility: z.enum(["default", "public", "private", "confidential"]).optional().describe("Event visibility")
+});
+
+const UpdateCalendarEventSchema = z.object({
+  eventId: z.string().min(1, "Event ID is required"),
+  calendarId: z.string().optional().default("primary").describe("Calendar ID (default: primary)"),
+  summary: z.string().optional().describe("New event title"),
+  description: z.string().optional().describe("New event description"),
+  location: z.string().optional().describe("New event location"),
+  start: z.object({
+    dateTime: z.string().optional(),
+    date: z.string().optional(),
+    timeZone: z.string().optional()
+  }).optional().describe("New start time"),
+  end: z.object({
+    dateTime: z.string().optional(),
+    date: z.string().optional(),
+    timeZone: z.string().optional()
+  }).optional().describe("New end time"),
+  attendees: z.array(z.string()).optional().describe("Updated attendee emails (replaces existing)"),
+  sendUpdates: z.enum(["all", "externalOnly", "none"]).optional().default("all").describe("Send notifications about the update")
+});
+
+const DeleteCalendarEventSchema = z.object({
+  eventId: z.string().min(1, "Event ID is required"),
+  calendarId: z.string().optional().default("primary").describe("Calendar ID (default: primary)"),
+  sendUpdates: z.enum(["all", "externalOnly", "none"]).optional().default("all").describe("Send cancellation notifications to attendees")
+});
+
+// --- Table & Media Schemas ---
+const InsertTableSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  rows: z.number().int().min(1, "Must have at least 1 row"),
+  columns: z.number().int().min(1, "Must have at least 1 column"),
+  index: z.number().int().min(1, "Index must be at least 1 (1-based)")
+});
+
+const EditTableCellSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  tableStartIndex: z.number().int().min(1, "Table start index is required"),
+  rowIndex: z.number().int().min(0, "Row index must be at least 0 (0-based)"),
+  columnIndex: z.number().int().min(0, "Column index must be at least 0 (0-based)"),
+  textContent: z.string().optional().describe("New text content for the cell"),
+  bold: z.boolean().optional(),
+  italic: z.boolean().optional(),
+  fontSize: z.number().optional(),
+  alignment: z.enum(["START", "CENTER", "END", "JUSTIFIED"]).optional()
+});
+
+const InsertImageFromUrlSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  imageUrl: z.string().url("Must be a valid URL"),
+  index: z.number().int().min(1, "Index must be at least 1 (1-based)"),
+  width: z.number().optional().describe("Width in points"),
+  height: z.number().optional().describe("Height in points")
+});
+
+const InsertLocalImageSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  localImagePath: z.string().min(1, "Local image path is required"),
+  index: z.number().int().min(1, "Index must be at least 1 (1-based)"),
+  width: z.number().optional().describe("Width in points"),
+  height: z.number().optional().describe("Height in points"),
+  uploadToSameFolder: z.boolean().optional().default(true).describe("Upload to same folder as document")
+});
+
+// Google Docs Discovery & Management Schemas
+const ListGoogleDocsSchema = z.object({
+  maxResults: z.number().int().min(1).max(100).optional().default(20).describe("Maximum number of documents to return (1-100)."),
+  query: z.string().optional().describe("Search query to filter documents by name or content."),
+  orderBy: z.enum(["name", "modifiedTime", "createdTime"]).optional().default("modifiedTime").describe("Sort order for results.")
+});
+
+const GetDocumentInfoSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required")
+});
+
 // -----------------------------------------------------------------------------
 // SERVER SETUP
 // -----------------------------------------------------------------------------
@@ -636,16 +1378,18 @@ async function ensureAuthenticated() {
         hasCredentials: !!authClient?.credentials,
         hasAccessToken: !!authClient?.credentials?.access_token
       });
-      // Ensure drive service is created with auth
+      // Ensure drive and calendar services are created with auth
       ensureDriveService();
+      ensureCalendarService();
     } finally {
       // Clear the promise after completion (success or failure)
       authenticationPromise = null;
     }
   }
-  
-  // If we already have authClient, ensure drive is up to date
+
+  // If we already have authClient, ensure services are up to date
   ensureDriveService();
+  ensureCalendarService();
 }
 
 // -----------------------------------------------------------------------------
@@ -887,6 +1631,386 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             content: { type: "string", description: "New content" }
           },
           required: ["documentId", "content"]
+        }
+      },
+      // --- New Doc Editing Tools ---
+      {
+        name: "insertText",
+        description: "Insert text at a specific index in a Google Doc (surgical edit, doesn't replace entire doc)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            documentId: { type: "string", description: "The document ID" },
+            text: { type: "string", description: "Text to insert" },
+            index: { type: "number", description: "Position to insert at (1-based)" }
+          },
+          required: ["documentId", "text", "index"]
+        }
+      },
+      {
+        name: "deleteRange",
+        description: "Delete content between start and end indices in a Google Doc",
+        inputSchema: {
+          type: "object",
+          properties: {
+            documentId: { type: "string", description: "The document ID" },
+            startIndex: { type: "number", description: "Start index (1-based, inclusive)" },
+            endIndex: { type: "number", description: "End index (exclusive)" }
+          },
+          required: ["documentId", "startIndex", "endIndex"]
+        }
+      },
+      {
+        name: "readGoogleDoc",
+        description: "Read content of a Google Doc with format options",
+        inputSchema: {
+          type: "object",
+          properties: {
+            documentId: { type: "string", description: "The document ID" },
+            format: { type: "string", enum: ["text", "json", "markdown"], description: "Output format (default: text)" },
+            maxLength: { type: "number", description: "Maximum characters to return" }
+          },
+          required: ["documentId"]
+        }
+      },
+      {
+        name: "listDocumentTabs",
+        description: "List all tabs in a Google Doc with their IDs and hierarchy",
+        inputSchema: {
+          type: "object",
+          properties: {
+            documentId: { type: "string", description: "The document ID" },
+            includeContent: { type: "boolean", description: "Include content summary (character count) for each tab" }
+          },
+          required: ["documentId"]
+        }
+      },
+      {
+        name: "applyTextStyle",
+        description: "Apply text formatting (bold, italic, color, etc.) to a range or found text. Use EITHER startIndex+endIndex OR textToFind for targeting.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            documentId: { type: "string", description: "The document ID" },
+            startIndex: { type: "number", description: "Start index (1-based) - use with endIndex" },
+            endIndex: { type: "number", description: "End index (exclusive) - use with startIndex" },
+            textToFind: { type: "string", description: "Text to find and format (alternative to indices)" },
+            matchInstance: { type: "number", description: "Which instance of textToFind (default: 1)" },
+            bold: { type: "boolean", description: "Make text bold" },
+            italic: { type: "boolean", description: "Make text italic" },
+            underline: { type: "boolean", description: "Underline text" },
+            strikethrough: { type: "boolean", description: "Strikethrough text" },
+            fontSize: { type: "number", description: "Font size in points" },
+            fontFamily: { type: "string", description: "Font family name" },
+            foregroundColor: { type: "string", description: "Hex color (e.g., #FF0000)" },
+            backgroundColor: { type: "string", description: "Hex background color" },
+            linkUrl: { type: "string", description: "URL for hyperlink" }
+          },
+          required: ["documentId"]
+        }
+      },
+      {
+        name: "applyParagraphStyle",
+        description: "Apply paragraph formatting. Use EITHER startIndex+endIndex OR textToFind OR indexWithinParagraph for targeting.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            documentId: { type: "string", description: "The document ID" },
+            startIndex: { type: "number", description: "Start index (1-based) - use with endIndex" },
+            endIndex: { type: "number", description: "End index (exclusive) - use with startIndex" },
+            textToFind: { type: "string", description: "Text within the target paragraph" },
+            matchInstance: { type: "number", description: "Which instance of textToFind (default: 1)" },
+            indexWithinParagraph: { type: "number", description: "Any index within the target paragraph" },
+            alignment: { type: "string", enum: ["START", "END", "CENTER", "JUSTIFIED"], description: "Text alignment" },
+            indentStart: { type: "number", description: "Left indent in points" },
+            indentEnd: { type: "number", description: "Right indent in points" },
+            spaceAbove: { type: "number", description: "Space above in points" },
+            spaceBelow: { type: "number", description: "Space below in points" },
+            namedStyleType: { type: "string", enum: ["NORMAL_TEXT", "TITLE", "SUBTITLE", "HEADING_1", "HEADING_2", "HEADING_3", "HEADING_4", "HEADING_5", "HEADING_6"], description: "Named paragraph style" },
+            keepWithNext: { type: "boolean", description: "Keep with next paragraph" }
+          },
+          required: ["documentId"]
+        }
+      },
+      // =========================================================================
+      // COMMENT TOOLS (use Drive API v3)
+      // =========================================================================
+      {
+        name: "listComments",
+        description: "List all comments in a Google Document",
+        inputSchema: {
+          type: "object",
+          properties: {
+            documentId: { type: "string", description: "The document ID" }
+          },
+          required: ["documentId"]
+        }
+      },
+      {
+        name: "getComment",
+        description: "Get a specific comment with its full thread of replies",
+        inputSchema: {
+          type: "object",
+          properties: {
+            documentId: { type: "string", description: "The document ID" },
+            commentId: { type: "string", description: "The comment ID" }
+          },
+          required: ["documentId", "commentId"]
+        }
+      },
+      {
+        name: "addComment",
+        description: "Add a comment anchored to a specific text range. Note: Due to Google API limitations, programmatic comments appear in 'All Comments' but may not be visibly anchored in the document UI.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            documentId: { type: "string", description: "The document ID" },
+            startIndex: { type: "number", description: "Start index (1-based)" },
+            endIndex: { type: "number", description: "End index (exclusive)" },
+            commentText: { type: "string", description: "The comment content" }
+          },
+          required: ["documentId", "startIndex", "endIndex", "commentText"]
+        }
+      },
+      {
+        name: "replyToComment",
+        description: "Add a reply to an existing comment",
+        inputSchema: {
+          type: "object",
+          properties: {
+            documentId: { type: "string", description: "The document ID" },
+            commentId: { type: "string", description: "The comment ID to reply to" },
+            replyText: { type: "string", description: "The reply content" }
+          },
+          required: ["documentId", "commentId", "replyText"]
+        }
+      },
+      {
+        name: "deleteComment",
+        description: "Delete a comment from the document",
+        inputSchema: {
+          type: "object",
+          properties: {
+            documentId: { type: "string", description: "The document ID" },
+            commentId: { type: "string", description: "The comment ID to delete" }
+          },
+          required: ["documentId", "commentId"]
+        }
+      },
+      // =========================================================================
+      // CALENDAR TOOLS
+      // =========================================================================
+      {
+        name: "listCalendars",
+        description: "List all accessible Google Calendars for the authenticated user",
+        inputSchema: {
+          type: "object",
+          properties: {
+            showHidden: { type: "boolean", description: "Include hidden calendars (default: false)" }
+          }
+        }
+      },
+      {
+        name: "getCalendarEvents",
+        description: "Get events from a Google Calendar with optional filtering",
+        inputSchema: {
+          type: "object",
+          properties: {
+            calendarId: { type: "string", description: "Calendar ID (default: primary)" },
+            timeMin: { type: "string", description: "Start of time range (RFC3339, e.g., '2024-01-01T00:00:00Z')" },
+            timeMax: { type: "string", description: "End of time range (RFC3339)" },
+            query: { type: "string", description: "Free text search in events" },
+            maxResults: { type: "number", description: "Maximum events to return (1-250, default: 50)" },
+            singleEvents: { type: "boolean", description: "Expand recurring events into instances (default: true)" },
+            orderBy: { type: "string", enum: ["startTime", "updated"], description: "Sort order (default: startTime)" }
+          }
+        }
+      },
+      {
+        name: "getCalendarEvent",
+        description: "Get a single calendar event by ID",
+        inputSchema: {
+          type: "object",
+          properties: {
+            eventId: { type: "string", description: "The event ID to retrieve" },
+            calendarId: { type: "string", description: "Calendar ID (default: primary)" }
+          },
+          required: ["eventId"]
+        }
+      },
+      {
+        name: "createCalendarEvent",
+        description: "Create a new calendar event. Supports timed events, all-day events, and Google Meet integration.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            summary: { type: "string", description: "Event title" },
+            calendarId: { type: "string", description: "Calendar ID (default: primary)" },
+            description: { type: "string", description: "Event description" },
+            location: { type: "string", description: "Event location" },
+            start: {
+              type: "object",
+              description: "Start time (use dateTime for timed events, date for all-day)",
+              properties: {
+                dateTime: { type: "string", description: "RFC3339 timestamp (e.g., '2024-01-15T09:00:00-08:00')" },
+                date: { type: "string", description: "Date for all-day events (YYYY-MM-DD)" },
+                timeZone: { type: "string", description: "Time zone (e.g., 'America/Los_Angeles')" }
+              }
+            },
+            end: {
+              type: "object",
+              description: "End time",
+              properties: {
+                dateTime: { type: "string" },
+                date: { type: "string" },
+                timeZone: { type: "string" }
+              }
+            },
+            attendees: { type: "array", items: { type: "string" }, description: "Email addresses of attendees" },
+            sendUpdates: { type: "string", enum: ["all", "externalOnly", "none"], description: "Send notifications (default: none)" },
+            conferenceType: { type: "string", enum: ["hangoutsMeet"], description: "Add Google Meet link" },
+            recurrence: { type: "array", items: { type: "string" }, description: "RRULE strings for recurring events" },
+            visibility: { type: "string", enum: ["default", "public", "private", "confidential"], description: "Event visibility" }
+          },
+          required: ["summary", "start", "end"]
+        }
+      },
+      {
+        name: "updateCalendarEvent",
+        description: "Update an existing calendar event",
+        inputSchema: {
+          type: "object",
+          properties: {
+            eventId: { type: "string", description: "The event ID to update" },
+            calendarId: { type: "string", description: "Calendar ID (default: primary)" },
+            summary: { type: "string", description: "New event title" },
+            description: { type: "string", description: "New event description" },
+            location: { type: "string", description: "New event location" },
+            start: {
+              type: "object",
+              properties: {
+                dateTime: { type: "string" },
+                date: { type: "string" },
+                timeZone: { type: "string" }
+              }
+            },
+            end: {
+              type: "object",
+              properties: {
+                dateTime: { type: "string" },
+                date: { type: "string" },
+                timeZone: { type: "string" }
+              }
+            },
+            attendees: { type: "array", items: { type: "string" }, description: "Updated attendee emails (replaces existing)" },
+            sendUpdates: { type: "string", enum: ["all", "externalOnly", "none"], description: "Send notifications (default: none)" }
+          },
+          required: ["eventId"]
+        }
+      },
+      {
+        name: "deleteCalendarEvent",
+        description: "Delete a calendar event",
+        inputSchema: {
+          type: "object",
+          properties: {
+            eventId: { type: "string", description: "The event ID to delete" },
+            calendarId: { type: "string", description: "Calendar ID (default: primary)" },
+            sendUpdates: { type: "string", enum: ["all", "externalOnly", "none"], description: "Send cancellation notifications (default: none)" }
+          },
+          required: ["eventId"]
+        }
+      },
+      // =========================================================================
+      // TABLE & MEDIA TOOLS
+      // =========================================================================
+      {
+        name: "insertTable",
+        description: "Insert a new table with the specified dimensions at a given index",
+        inputSchema: {
+          type: "object",
+          properties: {
+            documentId: { type: "string", description: "The document ID" },
+            rows: { type: "number", description: "Number of rows for the new table" },
+            columns: { type: "number", description: "Number of columns for the new table" },
+            index: { type: "number", description: "The index (1-based) where the table should be inserted" }
+          },
+          required: ["documentId", "rows", "columns", "index"]
+        }
+      },
+      {
+        name: "editTableCell",
+        description: "Edit the content and/or style of a specific table cell. Requires knowing the table start index.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            documentId: { type: "string", description: "The document ID" },
+            tableStartIndex: { type: "number", description: "The starting index of the TABLE element" },
+            rowIndex: { type: "number", description: "Row index (0-based)" },
+            columnIndex: { type: "number", description: "Column index (0-based)" },
+            textContent: { type: "string", description: "New text content for the cell (replaces existing)" },
+            bold: { type: "boolean", description: "Make text bold" },
+            italic: { type: "boolean", description: "Make text italic" },
+            fontSize: { type: "number", description: "Font size in points" },
+            alignment: { type: "string", enum: ["START", "CENTER", "END", "JUSTIFIED"], description: "Text alignment" }
+          },
+          required: ["documentId", "tableStartIndex", "rowIndex", "columnIndex"]
+        }
+      },
+      {
+        name: "insertImageFromUrl",
+        description: "Insert an inline image into a Google Document from a publicly accessible URL",
+        inputSchema: {
+          type: "object",
+          properties: {
+            documentId: { type: "string", description: "The document ID" },
+            imageUrl: { type: "string", description: "Publicly accessible URL to the image" },
+            index: { type: "number", description: "The index (1-based) where the image should be inserted" },
+            width: { type: "number", description: "Width of the image in points" },
+            height: { type: "number", description: "Height of the image in points" }
+          },
+          required: ["documentId", "imageUrl", "index"]
+        }
+      },
+      {
+        name: "insertLocalImage",
+        description: "Upload a local image file to Google Drive and insert it into a Google Document",
+        inputSchema: {
+          type: "object",
+          properties: {
+            documentId: { type: "string", description: "The document ID" },
+            localImagePath: { type: "string", description: "Absolute path to the local image file" },
+            index: { type: "number", description: "The index (1-based) where the image should be inserted" },
+            width: { type: "number", description: "Width of the image in points" },
+            height: { type: "number", description: "Height of the image in points" },
+            uploadToSameFolder: { type: "boolean", description: "Upload to same folder as document (default: true)" }
+          },
+          required: ["documentId", "localImagePath", "index"]
+        }
+      },
+      // Google Docs Discovery & Management Tools
+      {
+        name: "listGoogleDocs",
+        description: "Lists Google Documents from your Google Drive with optional filtering.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            maxResults: { type: "integer", description: "Maximum number of documents to return (1-100)." },
+            query: { type: "string", description: "Search query to filter documents by name or content." },
+            orderBy: { type: "string", enum: ["name", "modifiedTime", "createdTime"], description: "Sort order for results." }
+          },
+          required: []
+        }
+      },
+      {
+        name: "getDocumentInfo",
+        description: "Gets detailed information about a specific Google Document.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            documentId: { type: "string", description: "The ID of the Google Document (from the URL)." }
+          },
+          required: ["documentId"]
         }
       },
       {
@@ -3651,6 +4775,1038 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }],
           isError: false,
         };
+      }
+
+      // =========================================================================
+      // NEW GOOGLE DOCS EDITING TOOLS (ported from google-workspace-work)
+      // =========================================================================
+
+      case "insertText": {
+        const validation = InsertTextSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const docs = google.docs({ version: 'v1', auth: authClient });
+        await docs.documents.batchUpdate({
+          documentId: args.documentId,
+          requestBody: {
+            requests: [{
+              insertText: {
+                location: { index: args.index },
+                text: args.text
+              }
+            }]
+          }
+        });
+
+        return {
+          content: [{ type: "text", text: `Successfully inserted ${args.text.length} characters at index ${args.index}` }],
+          isError: false
+        };
+      }
+
+      case "deleteRange": {
+        const validation = DeleteRangeSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        if (args.endIndex <= args.startIndex) {
+          return errorResponse("endIndex must be greater than startIndex");
+        }
+
+        const docs = google.docs({ version: 'v1', auth: authClient });
+        await docs.documents.batchUpdate({
+          documentId: args.documentId,
+          requestBody: {
+            requests: [{
+              deleteContentRange: {
+                range: {
+                  startIndex: args.startIndex,
+                  endIndex: args.endIndex
+                }
+              }
+            }]
+          }
+        });
+
+        return {
+          content: [{ type: "text", text: `Successfully deleted content from index ${args.startIndex} to ${args.endIndex}` }],
+          isError: false
+        };
+      }
+
+      case "readGoogleDoc": {
+        const validation = ReadGoogleDocSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const docs = google.docs({ version: 'v1', auth: authClient });
+        const docResponse = await docs.documents.get({
+          documentId: args.documentId
+        });
+
+        const doc = docResponse.data;
+        const format = args.format || 'text';
+
+        if (format === 'json') {
+          let result = JSON.stringify(doc, null, 2);
+          if (args.maxLength && result.length > args.maxLength) {
+            result = result.substring(0, args.maxLength) + '\n... (truncated)';
+          }
+          return {
+            content: [{ type: "text", text: result }],
+            isError: false
+          };
+        }
+
+        // Extract plain text from document
+        let text = '';
+        const body = doc.body;
+        if (body?.content) {
+          for (const element of body.content) {
+            if (element.paragraph?.elements) {
+              for (const elem of element.paragraph.elements) {
+                if (elem.textRun?.content) {
+                  text += elem.textRun.content;
+                }
+              }
+            } else if (element.table) {
+              // Handle tables
+              for (const row of element.table.tableRows || []) {
+                for (const cell of row.tableCells || []) {
+                  for (const cellContent of cell.content || []) {
+                    if (cellContent.paragraph?.elements) {
+                      for (const elem of cellContent.paragraph.elements) {
+                        if (elem.textRun?.content) {
+                          text += elem.textRun.content;
+                        }
+                      }
+                    }
+                  }
+                  text += '\t';
+                }
+                text += '\n';
+              }
+            }
+          }
+        }
+
+        if (format === 'markdown') {
+          // Basic markdown conversion - could be enhanced
+          text = `# ${doc.title}\n\n${text}`;
+        }
+
+        if (args.maxLength && text.length > args.maxLength) {
+          text = text.substring(0, args.maxLength) + '\n... (truncated)';
+        }
+
+        return {
+          content: [{ type: "text", text }],
+          isError: false
+        };
+      }
+
+      case "listDocumentTabs": {
+        const validation = ListDocumentTabsSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const docs = google.docs({ version: 'v1', auth: authClient });
+        // Use includeTabsContent to get the new tabs structure
+        const docResponse = await docs.documents.get({
+          documentId: args.documentId,
+          includeTabsContent: true
+        });
+
+        const doc = docResponse.data;
+
+        // Check if document has tabs (newer API feature)
+        const tabs = (doc as any).tabs;
+        if (!tabs || tabs.length === 0) {
+          // Single-tab document or legacy format - check for body content
+          let contentInfo = '';
+          if (args.includeContent) {
+            let charCount = 0;
+            const body = doc.body;
+            if (body?.content) {
+              for (const element of body.content) {
+                if (element.paragraph?.elements) {
+                  for (const elem of element.paragraph.elements) {
+                    if (elem.textRun?.content) {
+                      charCount += elem.textRun.content.length;
+                    }
+                  }
+                }
+              }
+            }
+            contentInfo = ` (${charCount} characters)`;
+          }
+          return {
+            content: [{ type: "text", text: `Document "${doc.title}" has a single tab (standard format).${contentInfo}` }],
+            isError: false
+          };
+        }
+
+        // Process tabs
+        const processTab = (tab: any, depth: number = 0): string => {
+          const indent = '  '.repeat(depth);
+          let result = `${indent}- Tab: "${tab.tabProperties?.title || 'Untitled'}" (ID: ${tab.tabProperties?.tabId})`;
+
+          if (args.includeContent && tab.documentTab?.body?.content) {
+            let charCount = 0;
+            for (const element of tab.documentTab.body.content) {
+              if (element.paragraph?.elements) {
+                for (const elem of element.paragraph.elements) {
+                  if (elem.textRun?.content) {
+                    charCount += elem.textRun.content.length;
+                  }
+                }
+              }
+            }
+            result += ` (${charCount} characters)`;
+          }
+
+          if (tab.childTabs) {
+            for (const childTab of tab.childTabs) {
+              result += '\n' + processTab(childTab, depth + 1);
+            }
+          }
+
+          return result;
+        };
+
+        let tabList = `Document "${doc.title}" tabs:\n`;
+        for (const tab of tabs) {
+          tabList += processTab(tab) + '\n';
+        }
+
+        return {
+          content: [{ type: "text", text: tabList }],
+          isError: false
+        };
+      }
+
+      case "applyTextStyle": {
+        const validation = ApplyTextStyleSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        let startIndex: number;
+        let endIndex: number;
+
+        // Determine target range (flat parameters)
+        if (args.startIndex !== undefined && args.endIndex !== undefined) {
+          startIndex = args.startIndex;
+          endIndex = args.endIndex;
+        } else if (args.textToFind !== undefined) {
+          const range = await findTextRange(
+            args.documentId,
+            args.textToFind,
+            args.matchInstance || 1
+          );
+          if (!range) {
+            return errorResponse(`Text "${args.textToFind}" not found in document`);
+          }
+          startIndex = range.startIndex;
+          endIndex = range.endIndex;
+        } else {
+          return errorResponse("Must provide either startIndex+endIndex or textToFind");
+        }
+
+        // Build style object from flat parameters
+        const style = {
+          bold: args.bold,
+          italic: args.italic,
+          underline: args.underline,
+          strikethrough: args.strikethrough,
+          fontSize: args.fontSize,
+          fontFamily: args.fontFamily,
+          foregroundColor: args.foregroundColor,
+          backgroundColor: args.backgroundColor,
+          linkUrl: args.linkUrl
+        };
+
+        // Build the update request
+        const styleResult = buildUpdateTextStyleRequest(startIndex, endIndex, style);
+        if (!styleResult) {
+          return errorResponse("No valid style options provided");
+        }
+
+        const docs = google.docs({ version: 'v1', auth: authClient });
+        await docs.documents.batchUpdate({
+          documentId: args.documentId,
+          requestBody: {
+            requests: [styleResult.request]
+          }
+        });
+
+        return {
+          content: [{ type: "text", text: `Successfully applied text style to range ${startIndex}-${endIndex}` }],
+          isError: false
+        };
+      }
+
+      case "applyParagraphStyle": {
+        const validation = ApplyParagraphStyleSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        let startIndex: number;
+        let endIndex: number;
+
+        // Determine target range (flat parameters)
+        if (args.startIndex !== undefined && args.endIndex !== undefined) {
+          startIndex = args.startIndex;
+          endIndex = args.endIndex;
+        } else if (args.textToFind !== undefined) {
+          const range = await findTextRange(
+            args.documentId,
+            args.textToFind,
+            args.matchInstance || 1
+          );
+          if (!range) {
+            return errorResponse(`Text "${args.textToFind}" not found in document`);
+          }
+          // For paragraph style, get the full paragraph range
+          const paraRange = await getParagraphRange(args.documentId, range.startIndex);
+          if (!paraRange) {
+            return errorResponse("Could not determine paragraph boundaries");
+          }
+          startIndex = paraRange.startIndex;
+          endIndex = paraRange.endIndex;
+        } else if (args.indexWithinParagraph !== undefined) {
+          const paraRange = await getParagraphRange(args.documentId, args.indexWithinParagraph);
+          if (!paraRange) {
+            return errorResponse("Could not determine paragraph boundaries");
+          }
+          startIndex = paraRange.startIndex;
+          endIndex = paraRange.endIndex;
+        } else {
+          return errorResponse("Must provide either startIndex+endIndex, textToFind, or indexWithinParagraph");
+        }
+
+        // Build style object from flat parameters
+        const style = {
+          alignment: args.alignment,
+          indentStart: args.indentStart,
+          indentEnd: args.indentEnd,
+          spaceAbove: args.spaceAbove,
+          spaceBelow: args.spaceBelow,
+          namedStyleType: args.namedStyleType,
+          keepWithNext: args.keepWithNext
+        };
+
+        // Build the update request
+        const styleResult = buildUpdateParagraphStyleRequest(startIndex, endIndex, style);
+        if (!styleResult) {
+          return errorResponse("No valid style options provided");
+        }
+
+        const docs = google.docs({ version: 'v1', auth: authClient });
+        await docs.documents.batchUpdate({
+          documentId: args.documentId,
+          requestBody: {
+            requests: [styleResult.request]
+          }
+        });
+
+        return {
+          content: [{ type: "text", text: `Successfully applied paragraph style to range ${startIndex}-${endIndex}` }],
+          isError: false
+        };
+      }
+
+      // =========================================================================
+      // COMMENT TOOLS (use Drive API v3)
+      // =========================================================================
+
+      case "listComments": {
+        const validation = ListCommentsSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        // Use Drive API v3 for comments
+        const response = await drive.comments.list({
+          fileId: args.documentId,
+          fields: 'comments(id,content,quotedFileContent,author,createdTime,resolved,replies)',
+          pageSize: 100
+        });
+
+        const comments = response.data.comments || [];
+
+        if (comments.length === 0) {
+          return {
+            content: [{ type: "text", text: "No comments found in this document." }],
+            isError: false
+          };
+        }
+
+        // Format comments for display
+        const formattedComments = comments.map((comment: any, index: number) => {
+          const replies = comment.replies?.length || 0;
+          const status = comment.resolved ? ' [RESOLVED]' : '';
+          const author = comment.author?.displayName || 'Unknown';
+          const date = comment.createdTime ? new Date(comment.createdTime).toLocaleDateString() : 'Unknown date';
+          const quotedText = comment.quotedFileContent?.value || 'No quoted text';
+          const anchor = quotedText !== 'No quoted text' ? ` (anchored to: "${quotedText.substring(0, 100)}${quotedText.length > 100 ? '...' : ''}")` : '';
+
+          let result = `${index + 1}. ${author} (${date})${status}${anchor}\n   ${comment.content}`;
+
+          if (replies > 0) {
+            result += `\n   └─ ${replies} ${replies === 1 ? 'reply' : 'replies'}`;
+          }
+
+          result += `\n   Comment ID: ${comment.id}`;
+          return result;
+        }).join('\n\n');
+
+        return {
+          content: [{ type: "text", text: `Found ${comments.length} comment${comments.length === 1 ? '' : 's'}:\n\n${formattedComments}` }],
+          isError: false
+        };
+      }
+
+      case "getComment": {
+        const validation = GetCommentSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const response = await drive.comments.get({
+          fileId: args.documentId,
+          commentId: args.commentId,
+          fields: 'id,content,quotedFileContent,author,createdTime,resolved,replies(id,content,author,createdTime)'
+        });
+
+        const comment = response.data;
+        const author = comment.author?.displayName || 'Unknown';
+        const date = comment.createdTime ? new Date(comment.createdTime).toLocaleDateString() : 'Unknown date';
+        const status = comment.resolved ? ' [RESOLVED]' : '';
+        const quotedText = comment.quotedFileContent?.value || 'No quoted text';
+        const anchor = quotedText !== 'No quoted text' ? `\nAnchored to: "${quotedText}"` : '';
+
+        let result = `${author} (${date})${status}${anchor}\n${comment.content}`;
+
+        if (comment.replies && comment.replies.length > 0) {
+          result += '\n\nReplies:';
+          comment.replies.forEach((reply: any, index: number) => {
+            const replyAuthor = reply.author?.displayName || 'Unknown';
+            const replyDate = reply.createdTime ? new Date(reply.createdTime).toLocaleDateString() : 'Unknown date';
+            result += `\n${index + 1}. ${replyAuthor} (${replyDate})\n   ${reply.content}`;
+          });
+        }
+
+        return {
+          content: [{ type: "text", text: result }],
+          isError: false
+        };
+      }
+
+      case "addComment": {
+        const validation = AddCommentSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        if (args.endIndex <= args.startIndex) {
+          return errorResponse("endIndex must be greater than startIndex");
+        }
+
+        // Get the document to extract quoted text
+        const docs = google.docs({ version: 'v1', auth: authClient });
+        const doc = await docs.documents.get({ documentId: args.documentId });
+
+        // Extract quoted text from the range
+        let quotedText = '';
+        const content = doc.data.body?.content || [];
+        for (const element of content) {
+          if (element.paragraph?.elements) {
+            for (const textElement of element.paragraph.elements) {
+              if (textElement.textRun) {
+                const elementStart = textElement.startIndex || 0;
+                const elementEnd = textElement.endIndex || 0;
+
+                if (elementEnd > args.startIndex && elementStart < args.endIndex) {
+                  const text = textElement.textRun.content || '';
+                  const startOffset = Math.max(0, args.startIndex - elementStart);
+                  const endOffset = Math.min(text.length, args.endIndex - elementStart);
+                  quotedText += text.substring(startOffset, endOffset);
+                }
+              }
+            }
+          }
+        }
+
+        const response = await drive.comments.create({
+          fileId: args.documentId,
+          fields: 'id,content,quotedFileContent,author,createdTime',
+          requestBody: {
+            content: args.commentText,
+            quotedFileContent: {
+              value: quotedText,
+              mimeType: 'text/html'
+            },
+            anchor: JSON.stringify({
+              r: args.documentId,
+              a: [{
+                txt: {
+                  o: args.startIndex - 1,  // Drive API uses 0-based indexing
+                  l: args.endIndex - args.startIndex,
+                  ml: args.endIndex - args.startIndex
+                }
+              }]
+            })
+          }
+        });
+
+        return {
+          content: [{ type: "text", text: `Comment added successfully. Comment ID: ${response.data.id}` }],
+          isError: false
+        };
+      }
+
+      case "replyToComment": {
+        const validation = ReplyToCommentSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const response = await drive.replies.create({
+          fileId: args.documentId,
+          commentId: args.commentId,
+          fields: 'id,content,author,createdTime',
+          requestBody: {
+            content: args.replyText
+          }
+        });
+
+        return {
+          content: [{ type: "text", text: `Reply added successfully. Reply ID: ${response.data.id}` }],
+          isError: false
+        };
+      }
+
+      case "deleteComment": {
+        const validation = DeleteCommentSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        await drive.comments.delete({
+          fileId: args.documentId,
+          commentId: args.commentId
+        });
+
+        return {
+          content: [{ type: "text", text: `Comment ${args.commentId} has been deleted.` }],
+          isError: false
+        };
+      }
+
+      // =========================================================================
+      // CALENDAR HANDLERS
+      // =========================================================================
+      case "listCalendars": {
+        const validation = ListCalendarsSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const response = await calendar.calendarList.list({
+          showHidden: args.showHidden,
+          maxResults: 250
+        });
+
+        const calendars = response.data.items || [];
+        if (calendars.length === 0) {
+          return { content: [{ type: "text", text: "No calendars found." }], isError: false };
+        }
+
+        const lines = calendars.map((cal: any) => {
+          const primary = cal.primary ? ' (PRIMARY)' : '';
+          const role = cal.accessRole ? ` [${cal.accessRole}]` : '';
+          return `- ${cal.summary}${primary}${role}\n  ID: ${cal.id}`;
+        });
+
+        return {
+          content: [{ type: "text", text: `Found ${calendars.length} calendar(s):\n\n${lines.join('\n\n')}` }],
+          isError: false
+        };
+      }
+
+      case "getCalendarEvents": {
+        const validation = GetCalendarEventsSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const params: any = {
+          calendarId: args.calendarId || 'primary',
+          maxResults: args.maxResults || 50,
+          singleEvents: args.singleEvents !== false,
+          orderBy: args.orderBy || 'startTime'
+        };
+
+        if (args.timeMin) params.timeMin = args.timeMin;
+        if (args.timeMax) params.timeMax = args.timeMax;
+        if (args.query) params.q = args.query;
+
+        const response = await calendar.events.list(params);
+
+        const events = response.data.items || [];
+        if (events.length === 0) {
+          return { content: [{ type: "text", text: "No events found." }], isError: false };
+        }
+
+        const formattedEvents = events.map((e: any) => formatEventForDisplay(formatCalendarEvent(e)));
+
+        return {
+          content: [{ type: "text", text: `Found ${events.length} event(s):\n\n${formattedEvents.join('\n\n---\n\n')}` }],
+          isError: false
+        };
+      }
+
+      case "getCalendarEvent": {
+        const validation = GetCalendarEventSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const response = await calendar.events.get({
+          calendarId: args.calendarId || 'primary',
+          eventId: args.eventId
+        });
+
+        const formatted = formatEventForDisplay(formatCalendarEvent(response.data));
+        return {
+          content: [{ type: "text", text: formatted }],
+          isError: false
+        };
+      }
+
+      case "createCalendarEvent": {
+        const validation = CreateCalendarEventSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const eventResource: any = {
+          summary: args.summary,
+          description: args.description,
+          location: args.location,
+          start: args.start,
+          end: args.end,
+          visibility: args.visibility
+        };
+
+        if (args.attendees && args.attendees.length > 0) {
+          eventResource.attendees = args.attendees.map((email: string) => ({ email }));
+        }
+
+        if (args.recurrence) {
+          eventResource.recurrence = args.recurrence;
+        }
+
+        let conferenceDataVersion = 0;
+        if (args.conferenceType === 'hangoutsMeet') {
+          eventResource.conferenceData = {
+            createRequest: {
+              requestId: `meet-${Date.now()}`,
+              conferenceSolutionKey: { type: 'hangoutsMeet' }
+            }
+          };
+          conferenceDataVersion = 1;
+        }
+
+        const params: any = {
+          calendarId: args.calendarId || 'primary',
+          requestBody: eventResource,
+          sendUpdates: args.sendUpdates || 'none'
+        };
+
+        if (conferenceDataVersion > 0) {
+          params.conferenceDataVersion = conferenceDataVersion;
+        }
+
+        const response = await calendar.events.insert(params);
+        const created = formatCalendarEvent(response.data);
+
+        return {
+          content: [{ type: "text", text: `Event created successfully!\n\n${formatEventForDisplay(created)}` }],
+          isError: false
+        };
+      }
+
+      case "updateCalendarEvent": {
+        const validation = UpdateCalendarEventSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        // First get the existing event
+        const existingResponse = await calendar.events.get({
+          calendarId: args.calendarId || 'primary',
+          eventId: args.eventId
+        });
+
+        const eventResource: any = { ...existingResponse.data };
+
+        if (args.summary !== undefined) eventResource.summary = args.summary;
+        if (args.description !== undefined) eventResource.description = args.description;
+        if (args.location !== undefined) eventResource.location = args.location;
+        if (args.start) eventResource.start = args.start;
+        if (args.end) eventResource.end = args.end;
+
+        if (args.attendees !== undefined) {
+          eventResource.attendees = args.attendees.map((email: string) => ({ email }));
+        }
+
+        const response = await calendar.events.update({
+          calendarId: args.calendarId || 'primary',
+          eventId: args.eventId,
+          requestBody: eventResource,
+          sendUpdates: args.sendUpdates || 'none'
+        });
+
+        const updated = formatCalendarEvent(response.data);
+
+        return {
+          content: [{ type: "text", text: `Event updated successfully!\n\n${formatEventForDisplay(updated)}` }],
+          isError: false
+        };
+      }
+
+      case "deleteCalendarEvent": {
+        const validation = DeleteCalendarEventSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        await calendar.events.delete({
+          calendarId: args.calendarId || 'primary',
+          eventId: args.eventId,
+          sendUpdates: args.sendUpdates || 'none'
+        });
+
+        return {
+          content: [{ type: "text", text: `Event ${args.eventId} has been deleted.` }],
+          isError: false
+        };
+      }
+
+      // =========================================================================
+      // TABLE & MEDIA HANDLERS
+      // =========================================================================
+      case "insertTable": {
+        const validation = InsertTableSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const request_body = {
+          insertTable: {
+            location: { index: args.index },
+            rows: args.rows,
+            columns: args.columns
+          }
+        };
+
+        await executeBatchUpdate(args.documentId, [request_body]);
+
+        return {
+          content: [{ type: "text", text: `Successfully inserted ${args.rows}x${args.columns} table at index ${args.index}` }],
+          isError: false
+        };
+      }
+
+      case "editTableCell": {
+        const validation = EditTableCellSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        // Get the document to find the table structure
+        await ensureAuthenticated();
+        const docs = google.docs({ version: 'v1', auth: authClient });
+
+        const docRes = await docs.documents.get({
+          documentId: args.documentId,
+          fields: 'body(content)'
+        });
+
+        // Find the table at the specified start index
+        let table: any = null;
+        const findTable = (content: any[]) => {
+          for (const elem of content) {
+            if (elem.table && elem.startIndex === args.tableStartIndex) {
+              table = elem.table;
+              return;
+            }
+          }
+        };
+
+        if (docRes.data.body?.content) {
+          findTable(docRes.data.body.content);
+        }
+
+        if (!table) {
+          return errorResponse(`No table found at index ${args.tableStartIndex}`);
+        }
+
+        // Get the cell
+        const row = table.tableRows?.[args.rowIndex];
+        if (!row) {
+          return errorResponse(`Row ${args.rowIndex} not found in table`);
+        }
+
+        const cell = row.tableCells?.[args.columnIndex];
+        if (!cell) {
+          return errorResponse(`Column ${args.columnIndex} not found in row ${args.rowIndex}`);
+        }
+
+        // Get cell content range
+        const cellStartIndex = cell.startIndex;
+        const cellEndIndex = cell.endIndex;
+
+        const requests: any[] = [];
+
+        // If textContent is provided, delete existing content and insert new
+        if (args.textContent !== undefined) {
+          // Delete existing content (keeping the paragraph structure)
+          // The cell always has at least one paragraph ending with newline
+          const cellContentStart = cellStartIndex + 1; // Skip the cell start marker
+          const cellContentEnd = cellEndIndex - 1; // Before cell end marker
+
+          if (cellContentEnd > cellContentStart) {
+            requests.push({
+              deleteContentRange: {
+                range: { startIndex: cellContentStart, endIndex: cellContentEnd }
+              }
+            });
+          }
+
+          // Insert new text
+          if (args.textContent.length > 0) {
+            requests.push({
+              insertText: {
+                location: { index: cellContentStart },
+                text: args.textContent
+              }
+            });
+          }
+        }
+
+        // Apply text styling if any style options provided
+        if (args.bold !== undefined || args.italic !== undefined || args.fontSize !== undefined) {
+          const textStyle: any = {};
+          const fields: string[] = [];
+
+          if (args.bold !== undefined) { textStyle.bold = args.bold; fields.push('bold'); }
+          if (args.italic !== undefined) { textStyle.italic = args.italic; fields.push('italic'); }
+          if (args.fontSize !== undefined) { textStyle.fontSize = { magnitude: args.fontSize, unit: 'PT' }; fields.push('fontSize'); }
+
+          if (fields.length > 0) {
+            // Apply to the cell content range
+            const styleStart = cellStartIndex + 1;
+            const styleEnd = args.textContent !== undefined
+              ? styleStart + args.textContent.length
+              : cellEndIndex - 1;
+
+            requests.push({
+              updateTextStyle: {
+                range: { startIndex: styleStart, endIndex: styleEnd },
+                textStyle,
+                fields: fields.join(',')
+              }
+            });
+          }
+        }
+
+        // Apply paragraph alignment if provided
+        if (args.alignment !== undefined) {
+          requests.push({
+            updateParagraphStyle: {
+              range: { startIndex: cellStartIndex + 1, endIndex: cellEndIndex - 1 },
+              paragraphStyle: { alignment: args.alignment },
+              fields: 'alignment'
+            }
+          });
+        }
+
+        if (requests.length === 0) {
+          return errorResponse("No changes specified for the table cell");
+        }
+
+        await executeBatchUpdate(args.documentId, requests);
+
+        return {
+          content: [{ type: "text", text: `Successfully edited cell at row ${args.rowIndex}, column ${args.columnIndex}` }],
+          isError: false
+        };
+      }
+
+      case "insertImageFromUrl": {
+        const validation = InsertImageFromUrlSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        await insertInlineImageHelper(args.documentId, args.imageUrl, args.index, args.width, args.height);
+
+        return {
+          content: [{ type: "text", text: `Successfully inserted image from URL at index ${args.index}` }],
+          isError: false
+        };
+      }
+
+      case "insertLocalImage": {
+        const validation = InsertLocalImageSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        // Get the document's parent folder if uploadToSameFolder is true
+        let parentFolderId: string | undefined;
+        if (args.uploadToSameFolder !== false) {
+          const fileInfo = await drive.files.get({
+            fileId: args.documentId,
+            fields: 'parents'
+          });
+          parentFolderId = fileInfo.data.parents?.[0];
+        }
+
+        // Upload the image to Drive
+        const imageUrl = await uploadImageToDriveHelper(args.localImagePath, parentFolderId);
+
+        // Insert the image into the document
+        await insertInlineImageHelper(args.documentId, imageUrl, args.index, args.width, args.height);
+
+        return {
+          content: [{ type: "text", text: `Successfully uploaded and inserted local image at index ${args.index}\nImage URL: ${imageUrl}` }],
+          isError: false
+        };
+      }
+
+      // =========================================================================
+      // GOOGLE DOCS DISCOVERY & MANAGEMENT TOOLS
+      // =========================================================================
+
+      case "listGoogleDocs": {
+        const validation = ListGoogleDocsSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        // Build the query string for Google Drive API
+        let queryString = "mimeType='application/vnd.google-apps.document' and trashed=false";
+        if (args.query) {
+          queryString += ` and (name contains '${args.query}' or fullText contains '${args.query}')`;
+        }
+
+        const response = await drive.files.list({
+          q: queryString,
+          pageSize: args.maxResults,
+          orderBy: args.orderBy === 'name' ? 'name' : args.orderBy,
+          fields: 'files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress))',
+        });
+
+        const files = response.data.files || [];
+
+        if (files.length === 0) {
+          return { content: [{ type: "text", text: "No Google Docs found matching your criteria." }], isError: false };
+        }
+
+        let result = `Found ${files.length} Google Document(s):\n\n`;
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          const modifiedDate = file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Unknown';
+          const owner = file.owners?.[0]?.displayName || 'Unknown';
+          result += `${i + 1}. **${file.name}**\n`;
+          result += `   ID: ${file.id}\n`;
+          result += `   Modified: ${modifiedDate}\n`;
+          result += `   Owner: ${owner}\n`;
+          result += `   Link: ${file.webViewLink}\n\n`;
+        }
+
+        return { content: [{ type: "text", text: result }], isError: false };
+      }
+
+      case "getDocumentInfo": {
+        const validation = GetDocumentInfoSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const response = await drive.files.get({
+          fileId: args.documentId,
+          fields: 'id,name,description,mimeType,size,createdTime,modifiedTime,webViewLink,owners(displayName,emailAddress),lastModifyingUser(displayName,emailAddress),shared,parents,version',
+        });
+
+        const file = response.data;
+
+        if (!file) {
+          return errorResponse(`Document with ID ${args.documentId} not found.`);
+        }
+
+        const createdDate = file.createdTime ? new Date(file.createdTime).toLocaleString() : 'Unknown';
+        const modifiedDate = file.modifiedTime ? new Date(file.modifiedTime).toLocaleString() : 'Unknown';
+        const owner = file.owners?.[0];
+        const lastModifier = (file as any).lastModifyingUser;
+
+        let result = `**Document Information:**\n\n`;
+        result += `**Name:** ${file.name}\n`;
+        result += `**ID:** ${file.id}\n`;
+        result += `**Type:** Google Document\n`;
+        result += `**Created:** ${createdDate}\n`;
+        result += `**Last Modified:** ${modifiedDate}\n`;
+
+        if (owner) {
+          result += `**Owner:** ${owner.displayName} (${owner.emailAddress})\n`;
+        }
+
+        if (lastModifier) {
+          result += `**Last Modified By:** ${lastModifier.displayName} (${lastModifier.emailAddress})\n`;
+        }
+
+        if (file.description) {
+          result += `**Description:** ${file.description}\n`;
+        }
+
+        result += `**Shared:** ${file.shared ? 'Yes' : 'No'}\n`;
+        result += `**Version:** ${file.version || 'Unknown'}\n`;
+        result += `**View Link:** ${file.webViewLink}\n`;
+
+        return { content: [{ type: "text", text: result }], isError: false };
       }
 
       default:

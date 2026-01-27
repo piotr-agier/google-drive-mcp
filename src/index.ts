@@ -319,6 +319,11 @@ const CreateGoogleSheetSchema = z.object({
   parentFolderId: z.string().optional()
 });
 
+const AddGoogleSheetTabSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  title: z.string().min(1, "Title is required")
+});
+
 const UpdateGoogleSheetSchema = z.object({
   spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
   range: z.string().min(1, "Range is required"),
@@ -859,6 +864,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             parentFolderId: { type: "string", description: "Parent folder ID (defaults to root)", optional: true }
           },
           required: ["name", "data"]
+        }
+      },
+      {
+        name: "addGoogleSheetTab",
+        description: "Add a new tab to a Google Sheet",
+        inputSchema: {
+          type: "object",
+          properties: {
+            spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+            title: { type: "string", description: "Tab title" }
+          },
+          required: ["spreadsheetId", "title"]
         }
       },
       {
@@ -1912,6 +1929,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         return {
           content: [{ type: "text", text: `Created Google Sheet: ${args.name}\nID: ${spreadsheet.data.spreadsheetId}` }],
+          isError: false
+        };
+      }
+
+      case "addGoogleSheetTab": {
+        const validation = AddGoogleSheetTabSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const sheets = google.sheets({ version: 'v4', auth: authClient });
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: args.spreadsheetId,
+          requestBody: {
+            requests: [{
+              addSheet: {
+                properties: {
+                  title: args.title
+                }
+              }
+            }]
+          }
+        });
+
+        return {
+          content: [{ type: "text", text: `Added tab "${args.title}" to spreadsheet ${args.spreadsheetId}` }],
           isError: false
         };
       }

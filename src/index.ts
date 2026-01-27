@@ -552,6 +552,13 @@ const CreateGoogleSlidesShapeSchema = z.object({
   }).optional()
 });
 
+const GetFileCommentsSchema = z.object({
+  fileId: z.string().min(1, "File ID is required"),
+  includeDeleted: z.boolean().optional(),
+  pageSize: z.number().int().min(1).max(100).optional(),
+  pageToken: z.string().optional()
+});
+
 // -----------------------------------------------------------------------------
 // SERVER SETUP
 // -----------------------------------------------------------------------------
@@ -1380,6 +1387,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             }
           },
           required: ["presentationId", "pageObjectId", "shapeType", "x", "y", "width", "height"]
+        }
+      },
+      {
+        name: "getFileComments",
+        description: "Get comments from a Google Drive file (including Google Docs, Sheets, Slides, and uploaded files)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            fileId: { type: "string", description: "The ID of the file to get comments from" },
+            includeDeleted: { type: "boolean", description: "Whether to include deleted comments", optional: true },
+            pageSize: { type: "number", description: "Maximum number of comments to return (default 100, max 100)", optional: true },
+            pageToken: { type: "string", description: "Token for pagination to get next page of results", optional: true }
+          },
+          required: ["fileId"]
         }
       }
     ]
@@ -3326,6 +3347,66 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         return {
           content: [{ type: "text", text: `Created ${args.shapeType} shape with ID: ${elementId}` }],
+          isError: false
+        };
+      }
+
+      case "getFileComments": {
+        const validation = GetFileCommentsSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        const commentsResponse = await drive.comments.list({
+          fileId: args.fileId,
+          fields: 'comments(id,content,author,createdTime,modifiedTime,resolved,replies,quotedFileContent,anchor),nextPageToken',
+          pageSize: args.pageSize || 100,
+          pageToken: args.pageToken,
+          includeDeleted: args.includeDeleted || false
+        });
+
+        const comments = commentsResponse.data.comments || [];
+        
+        if (comments.length === 0) {
+          return {
+            content: [{ type: "text", text: "No comments found on this file." }],
+            isError: false
+          };
+        }
+
+        // Format comments for output
+        const formattedComments = comments.map((comment: any, index: number) => {
+          const authorName = comment.author?.displayName || 'Unknown';
+          const createdTime = comment.createdTime ? new Date(comment.createdTime).toLocaleString() : 'Unknown';
+          const resolved = comment.resolved ? ' [RESOLVED]' : '';
+          const quotedContent = comment.quotedFileContent?.value ? `\n   Quoted text: "${comment.quotedFileContent.value}"` : '';
+          
+          let commentText = `${index + 1}. ${authorName} (${createdTime})${resolved}:${quotedContent}\n   ${comment.content}`;
+          
+          // Include replies if any
+          if (comment.replies && comment.replies.length > 0) {
+            const repliesText = comment.replies.map((reply: any) => {
+              const replyAuthor = reply.author?.displayName || 'Unknown';
+              const replyTime = reply.createdTime ? new Date(reply.createdTime).toLocaleString() : 'Unknown';
+              return `      ↳ ${replyAuthor} (${replyTime}): ${reply.content}`;
+            }).join('\n');
+            commentText += `\n${repliesText}`;
+          }
+          
+          return commentText;
+        }).join('\n\n');
+
+        let response = `Found ${comments.length} comment(s):\n\n${formattedComments}`;
+        
+        if (commentsResponse.data.nextPageToken) {
+          response += `\n\nMore comments available. Use pageToken: ${commentsResponse.data.nextPageToken}`;
+        }
+
+        log('Retrieved comments', { fileId: args.fileId, count: comments.length });
+
+        return {
+          content: [{ type: "text", text: response }],
           isError: false
         };
       }

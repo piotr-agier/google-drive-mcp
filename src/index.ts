@@ -2785,20 +2785,83 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         
         let content = '';
         let currentIndex = 1;
-        const segments: Array<{text: string, startIndex: number, endIndex: number}> = [];
         
-        // Extract text content with indices
+        // Track text spans with their formatting information
+        interface TextSpan {
+          text: string;
+          startIndex: number;
+          endIndex: number;
+          fontFamily: string;
+          fontSize: number | null;
+          bold: boolean;
+          italic: boolean;
+          underline: boolean;
+          strikethrough: boolean;
+          foregroundColor: string | null;
+          backgroundColor: string | null;
+        }
+        const spans: TextSpan[] = [];
+        
+        // Track fonts used in the document for summary
+        const fontsUsed = new Map<string, { sizes: Set<number>, styles: Set<string>, charCount: number }>();
+        
+        // Helper to convert Google Docs color to hex
+        const colorToHex = (color: any): string | null => {
+          if (!color?.color?.rgbColor) return null;
+          const rgb = color.color.rgbColor;
+          const r = Math.round((rgb.red || 0) * 255);
+          const g = Math.round((rgb.green || 0) * 255);
+          const b = Math.round((rgb.blue || 0) * 255);
+          return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+        };
+        
+        // Extract text content with indices and font information
         if (document.data.body?.content) {
           for (const element of document.data.body.content) {
             if (element.paragraph?.elements) {
               for (const textElement of element.paragraph.elements) {
                 if (textElement.textRun?.content) {
                   const text = textElement.textRun.content;
-                  segments.push({
+                  const textStyle = textElement.textRun.textStyle || {};
+                  
+                  const fontFamily = textStyle.weightedFontFamily?.fontFamily || 'Default';
+                  const fontSize = textStyle.fontSize?.magnitude || null;
+                  const bold = textStyle.bold || false;
+                  const italic = textStyle.italic || false;
+                  const underline = textStyle.underline || false;
+                  const strikethrough = textStyle.strikethrough || false;
+                  const foregroundColor = colorToHex(textStyle.foregroundColor);
+                  const backgroundColor = colorToHex(textStyle.backgroundColor);
+                  
+                  // Track for summary
+                  const styles: string[] = [];
+                  if (bold) styles.push('bold');
+                  if (italic) styles.push('italic');
+                  if (underline) styles.push('underline');
+                  if (strikethrough) styles.push('strikethrough');
+                  
+                  if (!fontsUsed.has(fontFamily)) {
+                    fontsUsed.set(fontFamily, { sizes: new Set(), styles: new Set(), charCount: 0 });
+                  }
+                  const fontInfo = fontsUsed.get(fontFamily)!;
+                  if (fontSize) fontInfo.sizes.add(fontSize);
+                  styles.forEach(s => fontInfo.styles.add(s));
+                  fontInfo.charCount += text.length;
+                  
+                  spans.push({
                     text,
                     startIndex: currentIndex,
-                    endIndex: currentIndex + text.length
+                    endIndex: currentIndex + text.length,
+                    fontFamily,
+                    fontSize,
+                    bold,
+                    italic,
+                    underline,
+                    strikethrough,
+                    foregroundColor,
+                    backgroundColor
                   });
+                  
                   content += text;
                   currentIndex += text.length;
                 }
@@ -2807,24 +2870,46 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         }
         
-        // Format the response to show text with indices
-        let formattedContent = 'Document content with indices:\n\n';
-        let lineStart = 1;
-        const lines = content.split('\n');
+        // Format the response to show text spans with formatting
+        let formattedContent = 'Document text spans with formatting:\n\n';
         
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
-          const lineEnd = lineStart + line.length;
-          if (line.trim()) {
-            formattedContent += `[${lineStart}-${lineEnd}] ${line}\n`;
-          }
-          lineStart = lineEnd + 1; // +1 for the newline character
+        for (const span of spans) {
+          // Skip whitespace-only spans for cleaner output
+          if (!span.text.trim()) continue;
+          
+          const styles: string[] = [];
+          if (span.bold) styles.push('bold');
+          if (span.italic) styles.push('italic');
+          if (span.underline) styles.push('underline');
+          if (span.strikethrough) styles.push('strikethrough');
+          
+          const styleStr = styles.length > 0 ? styles.join(', ') : 'normal';
+          const sizeStr = span.fontSize ? `${span.fontSize}pt` : 'default';
+          const colorStr = span.foregroundColor ? `, color: ${span.foregroundColor}` : '';
+          const bgStr = span.backgroundColor ? `, bg: ${span.backgroundColor}` : '';
+          
+          // Escape text for display (show newlines as \n)
+          const displayText = span.text.replace(/\n/g, '\\n').substring(0, 100);
+          const truncated = span.text.length > 100 ? '...' : '';
+          
+          formattedContent += `[${span.startIndex}-${span.endIndex}] font="${span.fontFamily}", size=${sizeStr}, style=${styleStr}${colorStr}${bgStr}\n`;
+          formattedContent += `    "${displayText}${truncated}"\n\n`;
+        }
+        
+        // Add fonts summary
+        let fontsSummary = '\nFonts summary:\n';
+        fontsSummary += '==============\n';
+        const sortedFonts = Array.from(fontsUsed.entries()).sort((a, b) => b[1].charCount - a[1].charCount);
+        for (const [fontName, info] of sortedFonts) {
+          const sizesStr = info.sizes.size > 0 ? Array.from(info.sizes).sort((a, b) => a - b).join(', ') + ' pt' : 'default size';
+          const stylesStr = info.styles.size > 0 ? Array.from(info.styles).join(', ') : 'normal';
+          fontsSummary += `- ${fontName}: sizes [${sizesStr}], styles [${stylesStr}], ~${info.charCount} chars\n`;
         }
         
         return {
           content: [{
             type: "text",
-            text: formattedContent + `\nTotal length: ${content.length} characters`
+            text: formattedContent + `\nTotal length: ${content.length} characters` + fontsSummary
           }],
           isError: false
         };

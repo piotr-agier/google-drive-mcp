@@ -14,8 +14,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { authenticate, runAuthCommand, AuthServer, initializeOAuth2Client } from './auth.js';
 import { z } from 'zod';
 import { fileURLToPath } from 'url';
-import { readFileSync } from 'fs';
-import { join, dirname } from 'path';
+import { readFileSync, createReadStream, existsSync, statSync } from 'fs';
+import { join, dirname, basename, resolve } from 'path';
 
 // Drive service - will be created with auth when needed
 let drive: any = null;
@@ -106,6 +106,30 @@ function getMimeTypeFromFilename(filename: string): string {
   return TEXT_MIME_TYPES[ext as keyof typeof TEXT_MIME_TYPES] || 'text/plain';
 }
 
+function getMimeType(filename: string): string {
+  const ext = getExtensionFromFilename(filename);
+  const map: Record<string, string> = {
+    'txt': 'text/plain',
+    'md': 'text/markdown',
+    'pdf': 'application/pdf',
+    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'doc': 'application/msword',
+    'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'xls': 'application/vnd.ms-excel',
+    'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'ppt': 'application/vnd.ms-powerpoint',
+    'png': 'image/png',
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'gif': 'image/gif',
+    'zip': 'application/zip',
+    'json': 'application/json',
+    'csv': 'text/csv',
+    'html': 'text/html',
+    'xml': 'application/xml',
+  };
+  return map[ext] || 'application/octet-stream';
+}
 
 
 /**
@@ -263,6 +287,13 @@ const SearchSchema = z.object({
   query: z.string().min(1, "Search query is required"),
   pageSize: z.number().int().min(1).max(100).optional(),
   pageToken: z.string().optional()
+});
+
+const UploadFileSchema = z.object({
+  path: z.string().min(1, "File path is required"),
+  name: z.string().optional(),
+  parentFolderId: z.string().optional(),
+  mimeType: z.string().optional()
 });
 
 const CreateTextFileSchema = z.object({
@@ -733,6 +764,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ["query"],
         },
+      },
+      {
+        name: "uploadFile",
+        description: "Upload a file from the local filesystem to Google Drive",
+        inputSchema: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Absolute path to the local file" },
+            name: { type: "string", description: "Optional name for the file in Drive (defaults to filename)", optional: true },
+            parentFolderId: { type: "string", description: "Optional parent folder ID", optional: true },
+            mimeType: { type: "string", description: "Optional MIME type (defaults to auto-detect or octet-stream)", optional: true }
+          },
+          required: ["path"]
+        }
       },
       {
         name: "createTextFile",
@@ -1434,6 +1479,53 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [{ type: "text", text: response }],
           isError: false,
+        };
+      }
+
+      case "uploadFile": {
+        const validation = UploadFileSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+        
+        if (!existsSync(args.path)) {
+          return errorResponse(`File not found at path: ${args.path}`);
+        }
+
+        const fileName = args.name || basename(args.path);
+        const mimeType = args.mimeType || getMimeType(fileName);
+        const parentFolderId = await resolveFolderId(args.parentFolderId);
+
+        const fileMetadata = {
+          name: fileName,
+          parents: [parentFolderId],
+        };
+        
+        const media = {
+          mimeType: mimeType,
+          body: createReadStream(args.path),
+        };
+
+        log('About to upload file', { 
+          path: args.path,
+          name: fileName,
+          mimeType,
+          parentFolderId 
+        });
+
+        const file = await drive.files.create({
+          requestBody: fileMetadata,
+          media: media,
+          fields: 'id, name, webViewLink',
+          supportsAllDrives: true,
+        });
+
+        return {
+          content: [{
+            type: "text",
+            text: `Uploaded file: ${file.data.name}\nID: ${file.data.id}\nLink: ${file.data.webViewLink}`
+          }]
         };
       }
 

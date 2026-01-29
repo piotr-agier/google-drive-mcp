@@ -1423,7 +1423,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           supportsAllDrives: true
         });
 
-        const fileList = res.data.files?.map((f: drive_v3.Schema$File) => `${f.name} (${f.mimeType})`).join("\n") || '';
+        const fileList = res.data.files?.map((f: drive_v3.Schema$File) => `${f.name} (ID: ${f.id}, ${f.mimeType})`).join("\n") || '';
         log('Search results', { query: userQuery, resultCount: res.data.files?.length });
 
         let response = `Found ${res.data.files?.length ?? 0} files:\n${fileList}`;

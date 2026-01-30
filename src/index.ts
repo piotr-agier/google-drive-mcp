@@ -14,7 +14,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { authenticate, runAuthCommand, AuthServer, initializeOAuth2Client } from './auth.js';
 import { z } from 'zod';
 import { fileURLToPath } from 'url';
-import { readFileSync } from 'fs';
+import { readFileSync, createReadStream, existsSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 
 // Drive service - will be created with auth when needed
@@ -72,6 +72,23 @@ const TEXT_MIME_TYPES = {
   txt: 'text/plain',
   md: 'text/markdown'
 };
+
+// MIME types for binary file uploads (extension → MIME)
+const BINARY_MIME_TYPES: Record<string, string> = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif',
+  webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon',
+  mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4',
+  aac: 'audio/aac', flac: 'audio/flac', opus: 'audio/opus',
+  mp4: 'video/mp4', webm: 'video/webm', avi: 'video/x-msvideo', mov: 'video/quicktime',
+  mkv: 'video/x-matroska', '3gp': 'video/3gpp',
+  pdf: 'application/pdf', zip: 'application/zip', gz: 'application/gzip',
+  tar: 'application/x-tar', json: 'application/json', xml: 'application/xml',
+  csv: 'text/csv', html: 'text/html', css: 'text/css', js: 'application/javascript',
+  doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+};
+
 // Global auth client - will be initialized on first use
 let authClient: any = null;
 let authenticationPromise: Promise<any> | null = null;
@@ -563,6 +580,13 @@ const UpdateGoogleSlidesSpeakerNotesSchema = z.object({
   presentationId: z.string().min(1, "Presentation ID is required"),
   slideIndex: z.number().min(0, "Slide index must be non-negative"),
   notes: z.string()
+});
+
+const UploadFileSchema = z.object({
+  localPath: z.string().min(1, "Local file path is required"),
+  name: z.string().optional(),
+  parentFolderId: z.string().optional(),
+  mimeType: z.string().optional()
 });
 
 // -----------------------------------------------------------------------------
@@ -1429,6 +1453,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             notes: { type: "string", description: "Speaker notes content" }
           },
           required: ["presentationId", "slideIndex", "notes"]
+        }
+      },
+      {
+        name: "uploadFile",
+        description: "Upload a local file (any type: image, audio, video, PDF, etc.) to Google Drive",
+        inputSchema: {
+          type: "object",
+          properties: {
+            localPath: { type: "string", description: "Absolute path to the local file to upload" },
+            name: { type: "string", description: "File name in Drive (defaults to local filename)", optional: true },
+            parentFolderId: { type: "string", description: "Parent folder ID or path (e.g., '/Work/Projects'). Creates folders if needed. Defaults to root.", optional: true },
+            mimeType: { type: "string", description: "MIME type (auto-detected from extension if omitted)", optional: true }
+          },
+          required: ["localPath"]
         }
       }
     ]
@@ -3508,6 +3546,55 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         return {
           content: [{ type: "text", text: `Successfully updated speaker notes for slide ${args.slideIndex}` }],
+          isError: false
+        };
+      }
+
+      case "uploadFile": {
+        const validation = UploadFileSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        // Validate local file exists
+        if (!existsSync(args.localPath)) {
+          return errorResponse(`File not found: ${args.localPath}`);
+        }
+
+        const stats = statSync(args.localPath);
+        const fileName = args.name || args.localPath.split(/[\\/]/).pop() || 'upload';
+        const ext = fileName.split('.').pop()?.toLowerCase() || '';
+        const detectedMime = args.mimeType || BINARY_MIME_TYPES[ext] || 'application/octet-stream';
+        const parentId = await resolveFolderId(args.parentFolderId);
+
+        log('Uploading file', { localPath: args.localPath, name: fileName, mimeType: detectedMime, size: stats.size });
+
+        const file = await drive.files.create({
+          requestBody: {
+            name: fileName,
+            parents: [parentId]
+          },
+          media: {
+            mimeType: detectedMime,
+            body: createReadStream(args.localPath)
+          },
+          fields: 'id, name, size, mimeType, webViewLink',
+          supportsAllDrives: true
+        });
+
+        log('File uploaded successfully', { fileId: file.data?.id });
+        return {
+          content: [{
+            type: "text",
+            text: [
+              `Uploaded: ${file.data?.name || fileName}`,
+              `ID: ${file.data?.id || 'unknown'}`,
+              `Size: ${file.data?.size || stats.size} bytes`,
+              `Type: ${file.data?.mimeType || detectedMime}`,
+              file.data?.webViewLink ? `Link: ${file.data.webViewLink}` : ''
+            ].filter(Boolean).join('\n')
+          }],
           isError: false
         };
       }

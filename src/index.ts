@@ -2781,14 +2781,45 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const args = validation.data;
 
         const docs = google.docs({ version: 'v1', auth: authClient });
-        const document = await docs.documents.get({ documentId: args.documentId });
-        
+        const document = await docs.documents.get({
+          documentId: args.documentId,
+          includeTabsContent: true,
+        });
+
         let content = '';
         let currentIndex = 1;
         const segments: Array<{text: string, startIndex: number, endIndex: number}> = [];
-        
-        // Extract text content with indices
-        if (document.data.body?.content) {
+
+        // Extract text content with indices from all tabs
+        const tabs = (document.data as any).tabs || [];
+        if (tabs.length > 0) {
+          for (const tab of tabs) {
+            const tabTitle = tab.tabProperties?.title || 'Untitled Tab';
+            // Add tab header when document has multiple tabs
+            if (tabs.length > 1) {
+              content += `\n=== Tab: ${tabTitle} ===\n\n`;
+              currentIndex = content.length + 1;
+            }
+            const bodyContent = tab.documentTab?.body?.content || [];
+            for (const element of bodyContent) {
+              if (element.paragraph?.elements) {
+                for (const textElement of element.paragraph.elements) {
+                  if (textElement.textRun?.content) {
+                    const text = textElement.textRun.content;
+                    segments.push({
+                      text,
+                      startIndex: currentIndex,
+                      endIndex: currentIndex + text.length,
+                    });
+                    content += text;
+                    currentIndex += text.length;
+                  }
+                }
+              }
+            }
+          }
+        } else if (document.data.body?.content) {
+          // Fallback for documents without tabs (backward compatibility)
           for (const element of document.data.body.content) {
             if (element.paragraph?.elements) {
               for (const textElement of element.paragraph.elements) {
@@ -2797,7 +2828,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   segments.push({
                     text,
                     startIndex: currentIndex,
-                    endIndex: currentIndex + text.length
+                    endIndex: currentIndex + text.length,
                   });
                   content += text;
                   currentIndex += text.length;

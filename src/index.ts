@@ -3345,7 +3345,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
 
         if (!presentation.data.slides || args.slideIndex >= presentation.data.slides.length) {
-          return errorResponse(`Slide index ${args.slideIndex} not found in presentation`);
+          return errorResponse(`Slide index ${args.slideIndex} not found in presentation (has ${presentation.data.slides?.length ?? 0} slides)`);
         }
 
         const slide = presentation.data.slides[args.slideIndex];
@@ -3369,13 +3369,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        // Get the presentation again with the notes page included
-        const fullPresentation = await slidesService.presentations.get({
-          presentationId: args.presentationId
-        });
-
         // Find the notes page for this slide
-        const notesPage = fullPresentation.data.slides?.[args.slideIndex]?.slideProperties?.notesPage;
+        const notesPage = presentation.data.slides?.[args.slideIndex]?.slideProperties?.notesPage;
 
         if (!notesPage || !notesPage.pageElements) {
           return {
@@ -3426,7 +3421,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
 
         if (!presentation.data.slides || args.slideIndex >= presentation.data.slides.length) {
-          return errorResponse(`Slide index ${args.slideIndex} not found in presentation`);
+          return errorResponse(`Slide index ${args.slideIndex} not found in presentation (has ${presentation.data.slides?.length ?? 0} slides)`);
         }
 
         const slide = presentation.data.slides[args.slideIndex];

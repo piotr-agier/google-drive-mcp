@@ -497,6 +497,18 @@ Add the server to your Claude Desktop configuration:
   - `x`, `y`, `width`, `height`: Position/size in EMU
   - `backgroundColor`: Fill color (RGBA 0-1) (optional)
 
+### Speaker Notes
+
+- **getGoogleSlidesSpeakerNotes** - Get speaker notes from a slide
+  - `presentationId`: Presentation ID
+  - `slideIndex`: Slide index (0-based)
+  - Returns the speaker notes text or a message if no notes exist
+
+- **updateGoogleSlidesSpeakerNotes** - Update or set speaker notes for a slide
+  - `presentationId`: Presentation ID
+  - `slideIndex`: Slide index (0-based)
+  - `notes`: The speaker notes content to set
+
 ## Authentication Flow
 
 The server uses OAuth 2.0 for secure authentication:

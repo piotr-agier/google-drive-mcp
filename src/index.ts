@@ -278,6 +278,7 @@ async function checkFileExists(name: string, parentFolderId: string = 'root'): P
 // -----------------------------------------------------------------------------
 const SearchSchema = z.object({
   query: z.string().min(1, "Search query is required"),
+  rawQuery: z.boolean().optional(),
   pageSize: z.number().int().min(1).max(100).optional(),
   pageToken: z.string().optional()
 });
@@ -760,11 +761,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: "search",
-        description: "Search for files in Google Drive",
+        description: "Search for files in Google Drive. Set rawQuery=true to pass a raw Google Drive API query supporting operators like modifiedTime, createdTime, mimeType, name contains, etc.",
         inputSchema: {
           type: "object",
           properties: {
-            query: { type: "string", description: "Search query" },
+            query: { type: "string", description: "Search query. If rawQuery is true, this is passed directly to the Google Drive API q parameter." },
+            rawQuery: { type: "boolean", description: "If true, pass query directly to Google Drive API without wrapping in fullText contains. Enables date filters (modifiedTime, createdTime), mimeType filters, etc." },
             pageSize: { type: "number", description: "Results per page (default 50, max 100)" },
             pageToken: { type: "string", description: "Token for next page of results" }
           },
@@ -1496,21 +1498,34 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!validation.success) {
           return errorResponse(validation.error.errors[0].message);
         }
-        const { query: userQuery, pageSize, pageToken } = validation.data;
+        const { query: userQuery, rawQuery, pageSize, pageToken } = validation.data;
 
-        const escapedQuery = userQuery.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-        const formattedQuery = `fullText contains '${escapedQuery}' and trashed = false`;
+        let formattedQuery: string;
+        if (rawQuery) {
+          formattedQuery = /trashed\s*=/.test(userQuery) ? userQuery : `(${userQuery}) and trashed = false`;
+        } else {
+          const escapedQuery = userQuery.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+          formattedQuery = `fullText contains '${escapedQuery}' and trashed = false`;
+        }
 
         const res = await drive.files.list({
           q: formattedQuery,
           pageSize: Math.min(pageSize || 50, 100),
           pageToken: pageToken,
-          fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size)",
+          fields: "nextPageToken, files(id, name, mimeType, createdTime, modifiedTime, size)",
           includeItemsFromAllDrives: true,
           supportsAllDrives: true
         });
 
-        const fileList = res.data.files?.map((f: drive_v3.Schema$File) => `${f.name} (ID: ${f.id}, ${f.mimeType})`).join("\n") || '';
+        const fileList = res.data.files?.map((f: drive_v3.Schema$File) => {
+          let entry = `${f.name} (ID: ${f.id}, ${f.mimeType})`;
+          if (rawQuery) {
+            const created = f.createdTime ? f.createdTime.split("T")[0] : "unknown";
+            const modified = f.modifiedTime ? f.modifiedTime.split("T")[0] : "unknown";
+            entry += ` [created: ${created}, modified: ${modified}]`;
+          }
+          return entry;
+        }).join("\n") || '';
         log('Search results', { query: userQuery, resultCount: res.data.files?.length });
 
         let response = `Found ${res.data.files?.length ?? 0} files:\n${fileList}`;

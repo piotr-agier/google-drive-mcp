@@ -14,8 +14,9 @@ import { v4 as uuidv4 } from 'uuid';
 import { authenticate, runAuthCommand, AuthServer, initializeOAuth2Client } from './auth.js';
 import { z } from 'zod';
 import { fileURLToPath } from 'url';
-import { readFileSync, createReadStream, existsSync, statSync } from 'fs';
-import { join, dirname } from 'path';
+import { readFileSync, createReadStream, createWriteStream, existsSync, statSync } from 'fs';
+import { join, dirname, extname } from 'path';
+import { pipeline } from 'stream/promises';
 
 // Drive service - will be created with auth when needed
 let drive: any = null;
@@ -87,6 +88,49 @@ const BINARY_MIME_TYPES: Record<string, string> = {
   doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+};
+
+// Google Workspace MIME types to their supported export formats
+// Each maps a Workspace type to { file extension -> export MIME type }
+const GOOGLE_WORKSPACE_EXPORT_FORMATS: Record<string, Record<string, string>> = {
+  'application/vnd.google-apps.document': {
+    pdf: 'application/pdf',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    md: 'text/markdown',
+    txt: 'text/plain',
+    html: 'text/html',
+    rtf: 'application/rtf',
+    odt: 'application/vnd.oasis.opendocument.text',
+    epub: 'application/epub+zip',
+  },
+  'application/vnd.google-apps.spreadsheet': {
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    csv: 'text/csv',
+    pdf: 'application/pdf',
+    ods: 'application/vnd.oasis.opendocument.spreadsheet',
+    tsv: 'text/tab-separated-values',
+    html: 'text/html',
+  },
+  'application/vnd.google-apps.presentation': {
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    pdf: 'application/pdf',
+    txt: 'text/plain',
+    odp: 'application/vnd.oasis.opendocument.presentation',
+  },
+  'application/vnd.google-apps.drawing': {
+    png: 'image/png',
+    svg: 'image/svg+xml',
+    pdf: 'application/pdf',
+    jpg: 'image/jpeg',
+  },
+};
+
+// Default export formats when no format is specified and no file extension is provided
+const GOOGLE_WORKSPACE_DEFAULT_EXPORT: Record<string, { mimeType: string; ext: string }> = {
+  'application/vnd.google-apps.document': { mimeType: 'application/pdf', ext: '.pdf' },
+  'application/vnd.google-apps.spreadsheet': { mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ext: '.xlsx' },
+  'application/vnd.google-apps.presentation': { mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', ext: '.pptx' },
+  'application/vnd.google-apps.drawing': { mimeType: 'image/png', ext: '.png' },
 };
 
 // Global auth client - will be initialized on first use
@@ -587,6 +631,13 @@ const UploadFileSchema = z.object({
   name: z.string().optional(),
   parentFolderId: z.string().optional(),
   mimeType: z.string().optional()
+});
+
+const DownloadFileSchema = z.object({
+  fileId: z.string().min(1, "File ID is required"),
+  localPath: z.string().min(1, "Local file path is required"),
+  exportMimeType: z.string().optional(),
+  overwrite: z.boolean().optional().default(false),
 });
 
 // -----------------------------------------------------------------------------
@@ -1467,6 +1518,28 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             mimeType: { type: "string", description: "MIME type (auto-detected from extension if omitted)", optional: true }
           },
           required: ["localPath"]
+        }
+      },
+      {
+        name: "downloadFile",
+        description: "Download a Google Drive file to a local path. For Google Workspace files (Docs, Sheets, Slides, Drawings), exports to the specified format. For regular files, downloads as-is. Streams directly to disk.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            fileId: { type: "string", description: "Google Drive file ID" },
+            localPath: { type: "string", description: "Absolute local path to save the file. Can be a directory (filename auto-resolved from Drive) or a full file path." },
+            exportMimeType: {
+              type: "string",
+              description: "For Google Workspace files: MIME type to export as (e.g., 'application/pdf', 'text/csv'). Auto-detected from file extension if omitted. Ignored for non-Workspace files.",
+              optional: true
+            },
+            overwrite: {
+              type: "boolean",
+              description: "Whether to overwrite if file already exists at localPath. Defaults to false.",
+              optional: true
+            }
+          },
+          required: ["fileId", "localPath"]
         }
       }
     ]
@@ -3596,6 +3669,148 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ].filter(Boolean).join('\n')
           }],
           isError: false
+        };
+      }
+
+      case "downloadFile": {
+        const validation = DownloadFileSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const args = validation.data;
+
+        // 1. Fetch file metadata from Drive
+        const fileMeta = await drive.files.get({
+          fileId: args.fileId,
+          fields: 'id, name, mimeType, size',
+          supportsAllDrives: true,
+        });
+
+        const driveMimeType = fileMeta.data.mimeType;
+        const driveName = fileMeta.data.name || 'download';
+
+        if (!driveMimeType) {
+          return errorResponse('File has no MIME type');
+        }
+
+        // 2. Determine if this is a Google Workspace file
+        const isWorkspaceFile = driveMimeType.startsWith('application/vnd.google-apps');
+
+        // 3. Resolve local path
+        let resolvedPath = args.localPath;
+        let isDirectory = false;
+
+        if (existsSync(resolvedPath)) {
+          isDirectory = statSync(resolvedPath).isDirectory();
+        } else {
+          const parentDir = dirname(resolvedPath);
+          if (!existsSync(parentDir)) {
+            return errorResponse(`Parent directory does not exist: ${parentDir}`);
+          }
+        }
+
+        // 4. Determine export MIME type for Workspace files
+        let exportMime: string | undefined;
+        let fileExtForName = '';
+
+        if (isWorkspaceFile) {
+          const formatMap = GOOGLE_WORKSPACE_EXPORT_FORMATS[driveMimeType];
+          if (!formatMap) {
+            return errorResponse(
+              `Unsupported Google Workspace type for export: ${driveMimeType}. ` +
+              `Supported types: Document, Spreadsheet, Presentation, Drawing.`
+            );
+          }
+
+          if (args.exportMimeType) {
+            const validMimes = Object.values(formatMap);
+            if (!validMimes.includes(args.exportMimeType)) {
+              return errorResponse(
+                `Unsupported export format '${args.exportMimeType}' for ${driveMimeType}. ` +
+                `Supported: ${Object.entries(formatMap).map(([ext, mime]) => `${mime} (.${ext})`).join(', ')}`
+              );
+            }
+            exportMime = args.exportMimeType;
+            fileExtForName = '.' + (Object.entries(formatMap).find(([, m]) => m === exportMime)?.[0] || 'bin');
+          } else if (!isDirectory && extname(resolvedPath)) {
+            const ext = extname(resolvedPath).slice(1).toLowerCase();
+            if (formatMap[ext]) {
+              exportMime = formatMap[ext];
+              fileExtForName = '.' + ext;
+            } else {
+              const defaultExport = GOOGLE_WORKSPACE_DEFAULT_EXPORT[driveMimeType];
+              exportMime = defaultExport.mimeType;
+              fileExtForName = defaultExport.ext;
+            }
+          } else {
+            const defaultExport = GOOGLE_WORKSPACE_DEFAULT_EXPORT[driveMimeType];
+            exportMime = defaultExport.mimeType;
+            fileExtForName = defaultExport.ext;
+          }
+        }
+
+        // 5. Resolve final file path
+        if (isDirectory) {
+          let fileName = driveName;
+          if (isWorkspaceFile) {
+            const nameWithoutExt = driveName.replace(/\.[^.]+$/, '');
+            fileName = nameWithoutExt + fileExtForName;
+          }
+          resolvedPath = join(resolvedPath, fileName);
+        }
+
+        // 6. Check overwrite
+        if (existsSync(resolvedPath) && !args.overwrite) {
+          return errorResponse(
+            `File already exists at ${resolvedPath}. Set overwrite: true to replace it.`
+          );
+        }
+
+        log('Downloading file', {
+          fileId: args.fileId,
+          driveName,
+          driveMimeType,
+          isWorkspaceFile,
+          exportMime,
+          localPath: resolvedPath,
+        });
+
+        // 7. Stream file to disk
+        let response: any;
+        if (isWorkspaceFile) {
+          response = await drive.files.export(
+            { fileId: args.fileId, mimeType: exportMime },
+            { responseType: 'stream' }
+          );
+        } else {
+          response = await drive.files.get(
+            { fileId: args.fileId, alt: 'media', supportsAllDrives: true },
+            { responseType: 'stream' }
+          );
+        }
+
+        const dest = createWriteStream(resolvedPath);
+        await pipeline(response.data, dest);
+
+        const finalStats = statSync(resolvedPath);
+
+        log('File downloaded successfully', {
+          fileId: args.fileId,
+          localPath: resolvedPath,
+          size: finalStats.size,
+        });
+
+        return {
+          content: [{
+            type: 'text',
+            text: [
+              `Downloaded: ${driveName}`,
+              `Saved to: ${resolvedPath}`,
+              `Size: ${finalStats.size} bytes`,
+              isWorkspaceFile ? `Export format: ${exportMime}` : `Type: ${driveMimeType}`,
+            ].join('\n'),
+          }],
+          isError: false,
         };
       }
 

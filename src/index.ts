@@ -1527,7 +1527,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: "object",
           properties: {
             fileId: { type: "string", description: "Google Drive file ID" },
-            localPath: { type: "string", description: "Absolute local path to save the file. Can be a directory (filename auto-resolved from Drive) or a full file path." },
+            localPath: { type: "string", description: "Absolute local path to save the file (must start with /). Can be a directory (filename auto-resolved from Drive metadata) or a full file path. Path is normalized before use." },
             exportMimeType: {
               type: "string",
               description: "For Google Workspace files: MIME type to export as (e.g., 'application/pdf', 'text/csv'). Auto-detected from file extension if omitted. Ignored for non-Workspace files.",
@@ -1535,7 +1535,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             overwrite: {
               type: "boolean",
-              description: "Whether to overwrite if file already exists at localPath. Defaults to false.",
+              description: "Whether to overwrite if file already exists at localPath. When false (default), returns an error instead of replacing the file.",
               optional: true
             }
           },
@@ -3679,10 +3679,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         const args = validation.data;
 
-        // 0. Validate absolute path
+        // 0. Validate and normalize path
         if (!isAbsolute(args.localPath)) {
           return errorResponse('localPath must be an absolute path');
         }
+        args.localPath = resolve(args.localPath);
 
         // 1. Fetch file metadata from Drive
         const fileMeta = await drive.files.get({

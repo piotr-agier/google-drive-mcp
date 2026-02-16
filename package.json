@@ -42,7 +42,9 @@
         "auth": "node dist/index.js auth",
         "watch": "node scripts/build.js --watch",
         "prepare": "npm run build",
-        "test": "echo \"No tests yet\" && exit 0",
+        "test": "npm run test:unit",
+        "test:build": "shx rm -rf .tmp-test && tsc -p tsconfig.test.json",
+        "test:unit": "npm run test:build && node --test .tmp-test/test/**/*.test.js",
         "lint": "tsc --noEmit"
     },
     "dependencies": {

@@ -14,8 +14,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { authenticate, runAuthCommand, AuthServer, initializeOAuth2Client } from './auth.js';
 import { z } from 'zod';
 import { fileURLToPath } from 'url';
-import { readFileSync, createReadStream, createWriteStream, existsSync, statSync } from 'fs';
-import { join, dirname, extname } from 'path';
+import { readFileSync, createReadStream, createWriteStream, existsSync, statSync, unlinkSync } from 'fs';
+import { join, dirname, extname, resolve, basename, isAbsolute } from 'path';
 import { pipeline } from 'stream/promises';
 
 // Drive service - will be created with auth when needed
@@ -3679,6 +3679,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         const args = validation.data;
 
+        // 0. Validate absolute path
+        if (!isAbsolute(args.localPath)) {
+          return errorResponse('localPath must be an absolute path');
+        }
+
         // 1. Fetch file metadata from Drive
         const fileMeta = await drive.files.get({
           fileId: args.fileId,
@@ -3751,12 +3756,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // 5. Resolve final file path
         if (isDirectory) {
-          let fileName = driveName;
+          // Sanitize the Drive filename: strip path components and leading dots
+          const safeName = basename(driveName).replace(/^\.+/, '') || 'download';
+          let fileName = safeName;
           if (isWorkspaceFile) {
-            const nameWithoutExt = driveName.replace(/\.[^.]+$/, '');
+            const nameWithoutExt = safeName.replace(/\.[^.]+$/, '');
             fileName = nameWithoutExt + fileExtForName;
           }
           resolvedPath = join(resolvedPath, fileName);
+
+          // Verify the resolved path stays within the target directory
+          const realTarget = resolve(resolvedPath);
+          const realDir = resolve(args.localPath);
+          if (!realTarget.startsWith(realDir + '/') && realTarget !== realDir) {
+            return errorResponse('Resolved file path escapes the target directory');
+          }
         }
 
         // 6. Check overwrite
@@ -3790,7 +3804,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const dest = createWriteStream(resolvedPath);
-        await pipeline(response.data, dest);
+        try {
+          await pipeline(response.data, dest);
+        } catch (downloadErr) {
+          // Clean up partial file on failure
+          try { unlinkSync(resolvedPath); } catch {}
+          throw downloadErr;
+        }
 
         const finalStats = statSync(resolvedPath);
 

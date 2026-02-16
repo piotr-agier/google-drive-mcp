@@ -14,9 +14,9 @@ import { v4 as uuidv4 } from 'uuid';
 import { authenticate, runAuthCommand, AuthServer, initializeOAuth2Client } from './auth.js';
 import { z } from 'zod';
 import { fileURLToPath } from 'url';
-import { readFileSync, createReadStream, createWriteStream, existsSync, statSync, unlinkSync } from 'fs';
-import { join, dirname, extname, resolve, basename, isAbsolute } from 'path';
-import { pipeline } from 'stream/promises';
+import { readFileSync, createReadStream, existsSync, statSync } from 'fs';
+import { join, dirname } from 'path';
+import { downloadDriveFile } from './download-file.js';
 
 // Drive service - will be created with auth when needed
 let drive: any = null;
@@ -88,49 +88,6 @@ const BINARY_MIME_TYPES: Record<string, string> = {
   doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-};
-
-// Google Workspace MIME types to their supported export formats
-// Each maps a Workspace type to { file extension -> export MIME type }
-const GOOGLE_WORKSPACE_EXPORT_FORMATS: Record<string, Record<string, string>> = {
-  'application/vnd.google-apps.document': {
-    pdf: 'application/pdf',
-    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    md: 'text/markdown',
-    txt: 'text/plain',
-    html: 'text/html',
-    rtf: 'application/rtf',
-    odt: 'application/vnd.oasis.opendocument.text',
-    epub: 'application/epub+zip',
-  },
-  'application/vnd.google-apps.spreadsheet': {
-    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    csv: 'text/csv',
-    pdf: 'application/pdf',
-    ods: 'application/vnd.oasis.opendocument.spreadsheet',
-    tsv: 'text/tab-separated-values',
-    html: 'text/html',
-  },
-  'application/vnd.google-apps.presentation': {
-    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    pdf: 'application/pdf',
-    txt: 'text/plain',
-    odp: 'application/vnd.oasis.opendocument.presentation',
-  },
-  'application/vnd.google-apps.drawing': {
-    png: 'image/png',
-    svg: 'image/svg+xml',
-    pdf: 'application/pdf',
-    jpg: 'image/jpeg',
-  },
-};
-
-// Default export formats when no format is specified and no file extension is provided
-const GOOGLE_WORKSPACE_DEFAULT_EXPORT: Record<string, { mimeType: string; ext: string }> = {
-  'application/vnd.google-apps.document': { mimeType: 'application/pdf', ext: '.pdf' },
-  'application/vnd.google-apps.spreadsheet': { mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ext: '.xlsx' },
-  'application/vnd.google-apps.presentation': { mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', ext: '.pptx' },
-  'application/vnd.google-apps.drawing': { mimeType: 'image/png', ext: '.png' },
 };
 
 // Global auth client - will be initialized on first use
@@ -3678,157 +3635,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorResponse(validation.error.errors[0].message);
         }
         const args = validation.data;
-
-        // 0. Validate and normalize path
-        if (!isAbsolute(args.localPath)) {
-          return errorResponse('localPath must be an absolute path');
-        }
-        args.localPath = resolve(args.localPath);
-
-        // 1. Fetch file metadata from Drive
-        const fileMeta = await drive.files.get({
-          fileId: args.fileId,
-          fields: 'id, name, mimeType, size',
-          supportsAllDrives: true,
-        });
-
-        const driveMimeType = fileMeta.data.mimeType;
-        const driveName = fileMeta.data.name || 'download';
-
-        if (!driveMimeType) {
-          return errorResponse('File has no MIME type');
-        }
-
-        // 2. Determine if this is a Google Workspace file
-        const isWorkspaceFile = driveMimeType.startsWith('application/vnd.google-apps');
-
-        // 3. Resolve local path
-        let resolvedPath = args.localPath;
-        let isDirectory = false;
-
-        if (existsSync(resolvedPath)) {
-          isDirectory = statSync(resolvedPath).isDirectory();
-        } else {
-          const parentDir = dirname(resolvedPath);
-          if (!existsSync(parentDir)) {
-            return errorResponse(`Parent directory does not exist: ${parentDir}`);
-          }
-        }
-
-        // 4. Determine export MIME type for Workspace files
-        let exportMime: string | undefined;
-        let fileExtForName = '';
-
-        if (isWorkspaceFile) {
-          const formatMap = GOOGLE_WORKSPACE_EXPORT_FORMATS[driveMimeType];
-          if (!formatMap) {
-            return errorResponse(
-              `Unsupported Google Workspace type for export: ${driveMimeType}. ` +
-              `Supported types: Document, Spreadsheet, Presentation, Drawing.`
-            );
-          }
-
-          if (args.exportMimeType) {
-            const validMimes = Object.values(formatMap);
-            if (!validMimes.includes(args.exportMimeType)) {
-              return errorResponse(
-                `Unsupported export format '${args.exportMimeType}' for ${driveMimeType}. ` +
-                `Supported: ${Object.entries(formatMap).map(([ext, mime]) => `${mime} (.${ext})`).join(', ')}`
-              );
-            }
-            exportMime = args.exportMimeType;
-            fileExtForName = '.' + (Object.entries(formatMap).find(([, m]) => m === exportMime)?.[0] || 'bin');
-          } else if (!isDirectory && extname(resolvedPath)) {
-            const ext = extname(resolvedPath).slice(1).toLowerCase();
-            if (formatMap[ext]) {
-              exportMime = formatMap[ext];
-              fileExtForName = '.' + ext;
-            } else {
-              const defaultExport = GOOGLE_WORKSPACE_DEFAULT_EXPORT[driveMimeType];
-              exportMime = defaultExport.mimeType;
-              fileExtForName = defaultExport.ext;
-            }
-          } else {
-            const defaultExport = GOOGLE_WORKSPACE_DEFAULT_EXPORT[driveMimeType];
-            exportMime = defaultExport.mimeType;
-            fileExtForName = defaultExport.ext;
-          }
-        }
-
-        // 5. Resolve final file path
-        if (isDirectory) {
-          // Sanitize the Drive filename: strip path components and leading dots
-          const safeName = basename(driveName).replace(/^\.+/, '') || 'download';
-          let fileName = safeName;
-          if (isWorkspaceFile) {
-            const nameWithoutExt = safeName.replace(/\.[^.]+$/, '');
-            fileName = nameWithoutExt + fileExtForName;
-          }
-          resolvedPath = join(resolvedPath, fileName);
-
-          // Verify the resolved path stays within the target directory
-          const realTarget = resolve(resolvedPath);
-          const realDir = resolve(args.localPath);
-          if (!realTarget.startsWith(realDir + '/') && realTarget !== realDir) {
-            return errorResponse('Resolved file path escapes the target directory');
-          }
-        }
-
-        // 6. Check overwrite
-        if (existsSync(resolvedPath) && !args.overwrite) {
-          return errorResponse(
-            `File already exists at ${resolvedPath}. Set overwrite: true to replace it.`
-          );
-        }
-
-        log('Downloading file', {
-          fileId: args.fileId,
-          driveName,
-          driveMimeType,
-          isWorkspaceFile,
-          exportMime,
-          localPath: resolvedPath,
-        });
-
-        // 7. Stream file to disk
-        let response: any;
-        if (isWorkspaceFile) {
-          response = await drive.files.export(
-            { fileId: args.fileId, mimeType: exportMime },
-            { responseType: 'stream' }
-          );
-        } else {
-          response = await drive.files.get(
-            { fileId: args.fileId, alt: 'media', supportsAllDrives: true },
-            { responseType: 'stream' }
-          );
-        }
-
-        const dest = createWriteStream(resolvedPath);
-        try {
-          await pipeline(response.data, dest);
-        } catch (downloadErr) {
-          // Clean up partial file on failure
-          try { unlinkSync(resolvedPath); } catch {}
-          throw downloadErr;
-        }
-
-        const finalStats = statSync(resolvedPath);
-
-        log('File downloaded successfully', {
-          fileId: args.fileId,
-          localPath: resolvedPath,
-          size: finalStats.size,
-        });
+        const downloadResult = await downloadDriveFile(drive, args, log);
 
         return {
           content: [{
             type: 'text',
             text: [
-              `Downloaded: ${driveName}`,
-              `Saved to: ${resolvedPath}`,
-              `Size: ${finalStats.size} bytes`,
-              isWorkspaceFile ? `Export format: ${exportMime}` : `Type: ${driveMimeType}`,
+              `Downloaded: ${downloadResult.driveName}`,
+              `Saved to: ${downloadResult.resolvedPath}`,
+              `Size: ${downloadResult.size} bytes`,
+              downloadResult.isWorkspaceFile
+                ? `Export format: ${downloadResult.exportMime}`
+                : `Type: ${downloadResult.driveMimeType}`,
             ].join('\n'),
           }],
           isError: false,

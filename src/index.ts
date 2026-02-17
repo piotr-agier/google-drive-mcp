@@ -1535,12 +1535,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           q: formattedQuery,
           pageSize: Math.min(pageSize || 50, 100),
           pageToken: pageToken,
-          fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size)",
+          fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size, parents)",
           includeItemsFromAllDrives: true,
           supportsAllDrives: true
         });
 
-        const fileList = res.data.files?.map((f: drive_v3.Schema$File) => `${f.name} (ID: ${f.id}, ${f.mimeType})`).join("\n") || '';
+        // Resolve parent folder IDs to human-readable paths
+        const pathCache: Record<string, string> = {};
+        async function resolveParentPath(folderId: string): Promise<string> {
+          if (pathCache[folderId]) return pathCache[folderId];
+          try {
+            const f = await drive.files.get({ fileId: folderId, fields: "name, parents", supportsAllDrives: true });
+            const parentPath = f.data.parents?.[0] ? await resolveParentPath(f.data.parents[0]) : "";
+            pathCache[folderId] = parentPath ? `${parentPath}/${f.data.name}` : f.data.name!;
+          } catch {
+            pathCache[folderId] = folderId;
+          }
+          return pathCache[folderId];
+        }
+
+        const fileListEntries = await Promise.all(
+          res.data.files?.map(async (f: drive_v3.Schema$File) => {
+            const folderPath = f.parents?.[0] ? await resolveParentPath(f.parents[0]) : "My Drive";
+            return `${f.name} (${f.mimeType}) [id: ${f.id}, path: ${folderPath}]`;
+          }) || []
+        );
+        const fileList = fileListEntries.join("\n");
         log('Search results', { query: userQuery, resultCount: res.data.files?.length });
 
         let response = `Found ${res.data.files?.length ?? 0} files:\n${fileList}`;

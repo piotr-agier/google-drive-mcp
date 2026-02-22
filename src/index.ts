@@ -29,43 +29,8 @@ function ensureDriveService() {
   if (!authClient) {
     throw new Error('Authentication required');
   }
-  
-  // Log detailed auth client info
-  log('About to create drive service', {
-    authClientType: authClient?.constructor?.name,
-    hasCredentials: !!authClient.credentials,
-    credentialsKeys: authClient.credentials ? Object.keys(authClient.credentials) : [],
-    accessTokenLength: authClient.credentials?.access_token?.length,
-    accessTokenPrefix: authClient.credentials?.access_token?.substring(0, 20),
-    expiryDate: authClient.credentials?.expiry_date,
-    isExpired: authClient.credentials?.expiry_date ? Date.now() > authClient.credentials.expiry_date : 'no expiry'
-  });
-  
-  // Create drive service with auth parameter directly
   drive = google.drive({ version: 'v3', auth: authClient });
-  
-  log('Drive service created/updated', {
-    hasAuth: !!authClient,
-    hasCredentials: !!authClient.credentials,
-    hasAccessToken: !!authClient.credentials?.access_token
-  });
-  
-  // Test the auth by making a simple API call
-  drive.about.get({ fields: 'user' })
-    .then((response: any) => {
-      log('Auth test successful, user:', response.data.user?.emailAddress);
-    })
-    .catch((error: any) => {
-      log('Auth test failed:', error.message || error);
-      if (error.response) {
-        log('Auth test error details:', {
-          status: error.response.status,
-          statusText: error.response.statusText,
-          headers: error.response.headers,
-          data: error.response.data
-        });
-      }
-    });
+  log('Drive service created/updated');
 }
 
 // Helper to ensure calendar service has current auth
@@ -73,8 +38,10 @@ function ensureCalendarService() {
   if (!authClient) {
     throw new Error('Authentication required');
   }
-  calendar = google.calendar({ version: 'v3', auth: authClient });
-  log('Calendar service created/updated');
+  if (!calendar) {
+    calendar = google.calendar({ version: 'v3', auth: authClient });
+    log('Calendar service created');
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -1013,33 +980,6 @@ const UpdateGoogleSlidesSchema = z.object({
   })).min(1, "At least one slide is required")
 });
 
-const FormatGoogleDocTextSchema = z.object({
-  documentId: z.string().min(1, "Document ID is required"),
-  startIndex: z.number().min(1, "Start index must be at least 1"),
-  endIndex: z.number().min(1, "End index must be at least 1"),
-  bold: z.boolean().optional(),
-  italic: z.boolean().optional(),
-  underline: z.boolean().optional(),
-  strikethrough: z.boolean().optional(),
-  fontSize: z.number().optional(),
-  foregroundColor: z.object({
-    red: z.number().min(0).max(1).optional(),
-    green: z.number().min(0).max(1).optional(),
-    blue: z.number().min(0).max(1).optional()
-  }).optional()
-});
-
-const FormatGoogleDocParagraphSchema = z.object({
-  documentId: z.string().min(1, "Document ID is required"),
-  startIndex: z.number().min(1, "Start index must be at least 1"),
-  endIndex: z.number().min(1, "End index must be at least 1"),
-  namedStyleType: z.enum(['NORMAL_TEXT', 'TITLE', 'SUBTITLE', 'HEADING_1', 'HEADING_2', 'HEADING_3', 'HEADING_4', 'HEADING_5', 'HEADING_6']).optional(),
-  alignment: z.enum(['START', 'CENTER', 'END', 'JUSTIFIED']).optional(),
-  lineSpacing: z.number().optional(),
-  spaceAbove: z.number().optional(),
-  spaceBelow: z.number().optional()
-});
-
 const GetGoogleDocContentSchema = z.object({
   documentId: z.string().min(1, "Document ID is required")
 });
@@ -1288,7 +1228,7 @@ const CreateCalendarEventSchema = z.object({
     timeZone: z.string().optional().describe("Time zone (e.g., 'America/Los_Angeles')")
   }).describe("End time"),
   attendees: z.array(z.string()).optional().describe("Email addresses of attendees"),
-  sendUpdates: z.enum(["all", "externalOnly", "none"]).optional().default("all").describe("Send notifications to attendees"),
+  sendUpdates: z.enum(["all", "externalOnly", "none"]).optional().default("none").describe("Send notifications to attendees (default: none)"),
   conferenceType: z.enum(["hangoutsMeet"]).optional().describe("Add Google Meet link"),
   recurrence: z.array(z.string()).optional().describe("RRULE strings for recurring events"),
   visibility: z.enum(["default", "public", "private", "confidential"]).optional().describe("Event visibility")
@@ -1311,13 +1251,13 @@ const UpdateCalendarEventSchema = z.object({
     timeZone: z.string().optional()
   }).optional().describe("New end time"),
   attendees: z.array(z.string()).optional().describe("Updated attendee emails (replaces existing)"),
-  sendUpdates: z.enum(["all", "externalOnly", "none"]).optional().default("all").describe("Send notifications about the update")
+  sendUpdates: z.enum(["all", "externalOnly", "none"]).optional().default("none").describe("Send notifications about the update (default: none)")
 });
 
 const DeleteCalendarEventSchema = z.object({
   eventId: z.string().min(1, "Event ID is required"),
   calendarId: z.string().optional().default("primary").describe("Calendar ID (default: primary)"),
-  sendUpdates: z.enum(["all", "externalOnly", "none"]).optional().default("all").describe("Send cancellation notifications to attendees")
+  sendUpdates: z.enum(["all", "externalOnly", "none"]).optional().default("none").describe("Send cancellation notifications to attendees (default: none)")
 });
 
 // --- Table & Media Schemas ---
@@ -1407,18 +1347,16 @@ async function ensureAuthenticated() {
         hasCredentials: !!authClient?.credentials,
         hasAccessToken: !!authClient?.credentials?.access_token
       });
-      // Ensure drive and calendar services are created with auth
+      // Ensure drive service is created with auth
       ensureDriveService();
-      ensureCalendarService();
     } finally {
       // Clear the promise after completion (success or failure)
       authenticationPromise = null;
     }
   }
 
-  // If we already have authClient, ensure services are up to date
+  // If we already have authClient, ensure drive service is up to date
   ensureDriveService();
-  ensureCalendarService();
 }
 
 // -----------------------------------------------------------------------------
@@ -2003,7 +1941,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "insertLocalImage",
-        description: "Upload a local image file to Google Drive and insert it into a Google Document",
+        description: "Upload a local image file to Google Drive and insert it into a Google Document. NOTE: The uploaded image will be made publicly accessible (anyone with the link can view) because the Docs API requires a public URL to render inline images.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2404,62 +2342,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         }
       },
       {
-        name: "formatGoogleDocText",
-        description: "Apply text formatting to a range in a Google Doc",
-        inputSchema: {
-          type: "object",
-          properties: {
-            documentId: { type: "string", description: "Document ID" },
-            startIndex: { type: "number", description: "Start index (1-based)" },
-            endIndex: { type: "number", description: "End index (1-based)" },
-            bold: { type: "boolean", description: "Make text bold", optional: true },
-            italic: { type: "boolean", description: "Make text italic", optional: true },
-            underline: { type: "boolean", description: "Underline text", optional: true },
-            strikethrough: { type: "boolean", description: "Strikethrough text", optional: true },
-            fontSize: { type: "number", description: "Font size in points", optional: true },
-            foregroundColor: {
-              type: "object",
-              description: "Text color (RGB values 0-1)",
-              properties: {
-                red: { type: "number", optional: true },
-                green: { type: "number", optional: true },
-                blue: { type: "number", optional: true }
-              },
-              optional: true
-            }
-          },
-          required: ["documentId", "startIndex", "endIndex"]
-        }
-      },
-      {
-        name: "formatGoogleDocParagraph",
-        description: "Apply paragraph formatting to a range in a Google Doc",
-        inputSchema: {
-          type: "object",
-          properties: {
-            documentId: { type: "string", description: "Document ID" },
-            startIndex: { type: "number", description: "Start index (1-based)" },
-            endIndex: { type: "number", description: "End index (1-based)" },
-            namedStyleType: {
-              type: "string",
-              description: "Paragraph style",
-              enum: ["NORMAL_TEXT", "TITLE", "SUBTITLE", "HEADING_1", "HEADING_2", "HEADING_3", "HEADING_4", "HEADING_5", "HEADING_6"],
-              optional: true
-            },
-            alignment: {
-              type: "string",
-              description: "Text alignment",
-              enum: ["START", "CENTER", "END", "JUSTIFIED"],
-              optional: true
-            },
-            lineSpacing: { type: "number", description: "Line spacing multiplier", optional: true },
-            spaceAbove: { type: "number", description: "Space above paragraph in points", optional: true },
-            spaceBelow: { type: "number", description: "Space below paragraph in points", optional: true }
-          },
-          required: ["documentId", "startIndex", "endIndex"]
-        }
-      },
-      {
         name: "getGoogleDocContent",
         description: "Get content of a Google Doc with text indices for formatting",
         inputSchema: {
@@ -2725,9 +2607,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 // -----------------------------------------------------------------------------
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  console.error(`[DEBUG] CallTool handler called for tool: ${request.params.name}`);
   await ensureAuthenticated();
-  console.error(`[DEBUG] After ensureAuthenticated - authClient exists: ${!!authClient}, drive exists: ${!!drive}`);
   log('Handling tool request', { tool: request.params.name });
 
   // Helper for error responses
@@ -3317,17 +3197,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           fields: 'sheets(properties(sheetId,title))'
         });
 
-        console.error(`[DEBUG] formatGoogleSheetCells - range: ${args.range}`);
-        console.error(`[DEBUG] rangeData.data:`, JSON.stringify(rangeData.data, null, 2));
-        
         const sheetName = args.range.includes('!') ? args.range.split('!')[0] : 'Sheet1';
-        console.error(`[DEBUG] Calculated sheetName: "${sheetName}"`);
-        
+
         const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
-        console.error(`[DEBUG] Found sheet:`, sheet ? JSON.stringify(sheet, null, 2) : 'null');
-        
+
         if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
-          console.error(`[DEBUG] Available sheets:`, rangeData.data.sheets?.map(s => s.properties?.title).join(', '));
           return errorResponse(`Sheet "${sheetName}" not found`);
         }
 
@@ -3811,7 +3685,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         let queryString = "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false";
         if (args.query) {
-          queryString += ` and (name contains '${args.query}' or fullText contains '${args.query}')`;
+          const escapedQuery = args.query.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+          queryString += ` and (name contains '${escapedQuery}' or fullText contains '${escapedQuery}')`;
         }
 
         const response = await drive.files.list({
@@ -4138,156 +4013,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      case "formatGoogleDocText": {
-        const validation = FormatGoogleDocTextSchema.safeParse(request.params.arguments);
-        if (!validation.success) {
-          return errorResponse(validation.error.errors[0].message);
-        }
-        const args = validation.data;
-
-        const docs = google.docs({ version: 'v1', auth: authClient });
-        
-        // Build text style object
-        const textStyle: any = {};
-        const fields: string[] = [];
-        
-        if (args.bold !== undefined) {
-          textStyle.bold = args.bold;
-          fields.push('bold');
-        }
-        
-        if (args.italic !== undefined) {
-          textStyle.italic = args.italic;
-          fields.push('italic');
-        }
-        
-        if (args.underline !== undefined) {
-          textStyle.underline = args.underline;
-          fields.push('underline');
-        }
-        
-        if (args.strikethrough !== undefined) {
-          textStyle.strikethrough = args.strikethrough;
-          fields.push('strikethrough');
-        }
-        
-        if (args.fontSize !== undefined) {
-          textStyle.fontSize = {
-            magnitude: args.fontSize,
-            unit: 'PT'
-          };
-          fields.push('fontSize');
-        }
-        
-        if (args.foregroundColor) {
-          textStyle.foregroundColor = {
-            color: {
-              rgbColor: {
-                red: args.foregroundColor.red || 0,
-                green: args.foregroundColor.green || 0,
-                blue: args.foregroundColor.blue || 0
-              }
-            }
-          };
-          fields.push('foregroundColor');
-        }
-        
-        if (fields.length === 0) {
-          return errorResponse("No formatting options specified");
-        }
-        
-        await docs.documents.batchUpdate({
-          documentId: args.documentId,
-          requestBody: {
-            requests: [{
-              updateTextStyle: {
-                range: {
-                  startIndex: args.startIndex,
-                  endIndex: args.endIndex
-                },
-                textStyle,
-                fields: fields.join(',')
-              }
-            }]
-          }
-        });
-        
-        return {
-          content: [{ type: "text", text: `Applied text formatting to range ${args.startIndex}-${args.endIndex}` }],
-          isError: false
-        };
-      }
-
-      case "formatGoogleDocParagraph": {
-        const validation = FormatGoogleDocParagraphSchema.safeParse(request.params.arguments);
-        if (!validation.success) {
-          return errorResponse(validation.error.errors[0].message);
-        }
-        const args = validation.data;
-
-        const docs = google.docs({ version: 'v1', auth: authClient });
-        
-        // Build paragraph style object
-        const paragraphStyle: any = {};
-        const fields: string[] = [];
-        
-        if (args.namedStyleType !== undefined) {
-          paragraphStyle.namedStyleType = args.namedStyleType;
-          fields.push('namedStyleType');
-        }
-        
-        if (args.alignment !== undefined) {
-          paragraphStyle.alignment = args.alignment;
-          fields.push('alignment');
-        }
-        
-        if (args.lineSpacing !== undefined) {
-          paragraphStyle.lineSpacing = args.lineSpacing;
-          fields.push('lineSpacing');
-        }
-        
-        if (args.spaceAbove !== undefined) {
-          paragraphStyle.spaceAbove = {
-            magnitude: args.spaceAbove,
-            unit: 'PT'
-          };
-          fields.push('spaceAbove');
-        }
-        
-        if (args.spaceBelow !== undefined) {
-          paragraphStyle.spaceBelow = {
-            magnitude: args.spaceBelow,
-            unit: 'PT'
-          };
-          fields.push('spaceBelow');
-        }
-        
-        if (fields.length === 0) {
-          return errorResponse("No formatting options specified");
-        }
-        
-        await docs.documents.batchUpdate({
-          documentId: args.documentId,
-          requestBody: {
-            requests: [{
-              updateParagraphStyle: {
-                range: {
-                  startIndex: args.startIndex,
-                  endIndex: args.endIndex
-                },
-                paragraphStyle,
-                fields: fields.join(',')
-              }
-            }]
-          }
-        });
-        
-        return {
-          content: [{ type: "text", text: `Applied paragraph formatting to range ${args.startIndex}-${args.endIndex}` }],
-          isError: false
-        };
-      }
-
       case "getGoogleDocContent": {
         const validation = GetGoogleDocContentSchema.safeParse(request.params.arguments);
         if (!validation.success) {
@@ -4297,49 +4022,44 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const docs = google.docs({ version: 'v1', auth: authClient });
         const document = await docs.documents.get({ documentId: args.documentId });
-        
-        let content = '';
-        let currentIndex = 1;
+
         const segments: Array<{text: string, startIndex: number, endIndex: number}> = [];
-        
-        // Extract text content with indices
+
+        // Extract text content with indices from the API
         if (document.data.body?.content) {
           for (const element of document.data.body.content) {
             if (element.paragraph?.elements) {
               for (const textElement of element.paragraph.elements) {
-                if (textElement.textRun?.content) {
-                  const text = textElement.textRun.content;
+                if (textElement.textRun?.content && textElement.startIndex != null && textElement.endIndex != null) {
                   segments.push({
-                    text,
-                    startIndex: currentIndex,
-                    endIndex: currentIndex + text.length
+                    text: textElement.textRun.content,
+                    startIndex: textElement.startIndex,
+                    endIndex: textElement.endIndex
                   });
-                  content += text;
-                  currentIndex += text.length;
                 }
               }
             }
           }
         }
-        
+
         // Format the response to show text with indices
         let formattedContent = 'Document content with indices:\n\n';
-        let lineStart = 1;
-        const lines = content.split('\n');
-        
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
-          const lineEnd = lineStart + line.length;
-          if (line.trim()) {
-            formattedContent += `[${lineStart}-${lineEnd}] ${line}\n`;
+        for (const segment of segments) {
+          const lines = segment.text.split('\n');
+          let offset = segment.startIndex;
+          for (const line of lines) {
+            if (line.trim()) {
+              formattedContent += `[${offset}-${offset + line.length}] ${line}\n`;
+            }
+            offset += line.length + 1; // +1 for the newline
           }
-          lineStart = lineEnd + 1; // +1 for the newline character
         }
-        
+
+        const totalLength = segments.length > 0 ? segments[segments.length - 1].endIndex : 0;
         return {
           content: [{
             type: "text",
-            text: formattedContent + `\nTotal length: ${content.length} characters`
+            text: formattedContent + `\nTotal length: ${totalLength} characters`
           }],
           isError: false
         };
@@ -5604,6 +5324,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorResponse(validation.error.errors[0].message);
         }
         const args = validation.data;
+        ensureCalendarService();
 
         const response = await calendar.calendarList.list({
           showHidden: args.showHidden,
@@ -5633,6 +5354,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorResponse(validation.error.errors[0].message);
         }
         const args = validation.data;
+        ensureCalendarService();
 
         const params: any = {
           calendarId: args.calendarId || 'primary',
@@ -5666,6 +5388,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorResponse(validation.error.errors[0].message);
         }
         const args = validation.data;
+        ensureCalendarService();
 
         const response = await calendar.events.get({
           calendarId: args.calendarId || 'primary',
@@ -5685,6 +5408,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorResponse(validation.error.errors[0].message);
         }
         const args = validation.data;
+        ensureCalendarService();
 
         const eventResource: any = {
           summary: args.summary,
@@ -5717,7 +5441,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const params: any = {
           calendarId: args.calendarId || 'primary',
           requestBody: eventResource,
-          sendUpdates: args.sendUpdates || 'none'
+          sendUpdates: args.sendUpdates
         };
 
         if (conferenceDataVersion > 0) {
@@ -5739,6 +5463,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorResponse(validation.error.errors[0].message);
         }
         const args = validation.data;
+        ensureCalendarService();
 
         // First get the existing event
         const existingResponse = await calendar.events.get({
@@ -5762,7 +5487,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           calendarId: args.calendarId || 'primary',
           eventId: args.eventId,
           requestBody: eventResource,
-          sendUpdates: args.sendUpdates || 'none'
+          sendUpdates: args.sendUpdates
         });
 
         const updated = formatCalendarEvent(response.data);
@@ -5779,11 +5504,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorResponse(validation.error.errors[0].message);
         }
         const args = validation.data;
+        ensureCalendarService();
 
         await calendar.events.delete({
           calendarId: args.calendarId || 'primary',
           eventId: args.eventId,
-          sendUpdates: args.sendUpdates || 'none'
+          sendUpdates: args.sendUpdates
         });
 
         return {
@@ -6003,7 +5729,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Build the query string for Google Drive API
         let queryString = "mimeType='application/vnd.google-apps.document' and trashed=false";
         if (args.query) {
-          queryString += ` and (name contains '${args.query}' or fullText contains '${args.query}')`;
+          const escapedQuery = args.query.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+          queryString += ` and (name contains '${escapedQuery}' or fullText contains '${escapedQuery}')`;
         }
 
         const response = await drive.files.list({
@@ -6011,6 +5738,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           pageSize: args.maxResults,
           orderBy: args.orderBy === 'name' ? 'name' : args.orderBy,
           fields: 'files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress))',
+          supportsAllDrives: true,
+          includeItemsFromAllDrives: true
         });
 
         const files = response.data.files || [];

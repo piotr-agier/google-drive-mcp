@@ -118,8 +118,9 @@ async function resolvePath(pathStr: string): Promise<string> {
 
   for (const part of parts) {
     if (!part) continue;
+    const escapedPart = part.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
     let response = await drive.files.list({
-      q: `'${currentFolderId}' in parents and name = '${part}' and mimeType = '${FOLDER_MIME_TYPE}' and trashed = false`,
+      q: `'${currentFolderId}' in parents and name = '${escapedPart}' and mimeType = '${FOLDER_MIME_TYPE}' and trashed = false`,
       fields: 'files(id)',
       spaces: 'drive',
       includeItemsFromAllDrives: true,
@@ -631,7 +632,8 @@ async function uploadImageToDriveHelper(
   const uploadResponse = await drive.files.create({
     requestBody: fileMetadata,
     media: media,
-    fields: 'id,webViewLink,webContentLink'
+    fields: 'id,webViewLink,webContentLink',
+    supportsAllDrives: true
   });
 
   const fileId = uploadResponse.data.id;
@@ -651,7 +653,8 @@ async function uploadImageToDriveHelper(
   // Get the webContentLink
   const fileInfo = await drive.files.get({
     fileId: fileId,
-    fields: 'webContentLink'
+    fields: 'webContentLink',
+    supportsAllDrives: true
   });
 
   const webContentLink = fileInfo.data.webContentLink;
@@ -5698,7 +5701,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (args.uploadToSameFolder !== false) {
           const fileInfo = await drive.files.get({
             fileId: args.documentId,
-            fields: 'parents'
+            fields: 'parents',
+            supportsAllDrives: true
           });
           parentFolderId = fileInfo.data.parents?.[0];
         }

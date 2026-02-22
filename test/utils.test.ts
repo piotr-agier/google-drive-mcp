@@ -8,6 +8,7 @@ import {
   parseA1Range,
   colToIndex,
   convertA1ToGridRange,
+  buildCalendarEventUpdate,
 } from '../src/utils.js';
 
 // ---------------------------------------------------------------------------
@@ -161,4 +162,107 @@ test('convertA1ToGridRange parses full-row range 1:3', () => {
 
 test('convertA1ToGridRange throws on invalid notation', () => {
   assert.throws(() => convertA1ToGridRange('invalid!', 0), /Invalid A1 notation/);
+});
+
+// ---------------------------------------------------------------------------
+// buildCalendarEventUpdate
+// ---------------------------------------------------------------------------
+const EXISTING_EVENT = {
+  id: 'event-1',
+  kind: 'calendar#event',
+  etag: '"abc"',
+  htmlLink: 'https://calendar.google.com/event',
+  iCalUID: 'uid@google.com',
+  creator: { email: 'creator@test.com' },
+  organizer: { email: 'organizer@test.com' },
+  sequence: 3,
+  summary: 'Original Title',
+  description: 'Original Description',
+  location: 'Room A',
+  start: { dateTime: '2025-01-01T10:00:00Z' },
+  end: { dateTime: '2025-01-01T11:00:00Z' },
+  attendees: [{ email: 'alice@test.com' }, { email: 'bob@test.com' }],
+  recurrence: ['RRULE:FREQ=WEEKLY'],
+  visibility: 'default',
+  reminders: { useDefault: true },
+};
+
+test('buildCalendarEventUpdate preserves existing values when no overrides', () => {
+  const result = buildCalendarEventUpdate(EXISTING_EVENT, {});
+  assert.equal(result.summary, 'Original Title');
+  assert.equal(result.description, 'Original Description');
+  assert.equal(result.location, 'Room A');
+  assert.deepEqual(result.start, EXISTING_EVENT.start);
+  assert.deepEqual(result.end, EXISTING_EVENT.end);
+  assert.deepEqual(result.attendees, EXISTING_EVENT.attendees);
+  assert.deepEqual(result.recurrence, EXISTING_EVENT.recurrence);
+  assert.equal(result.visibility, 'default');
+  assert.deepEqual(result.reminders, { useDefault: true });
+});
+
+test('buildCalendarEventUpdate user overrides win', () => {
+  const result = buildCalendarEventUpdate(EXISTING_EVENT, {
+    summary: 'New Title',
+    description: 'New Description',
+    location: 'Room B',
+  });
+  assert.equal(result.summary, 'New Title');
+  assert.equal(result.description, 'New Description');
+  assert.equal(result.location, 'Room B');
+  // Unchanged fields preserved
+  assert.deepEqual(result.start, EXISTING_EVENT.start);
+  assert.deepEqual(result.attendees, EXISTING_EVENT.attendees);
+});
+
+test('buildCalendarEventUpdate allows empty string overrides', () => {
+  const result = buildCalendarEventUpdate(EXISTING_EVENT, {
+    summary: '',
+    description: '',
+    location: '',
+  });
+  assert.equal(result.summary, '');
+  assert.equal(result.description, '');
+  assert.equal(result.location, '');
+});
+
+test('buildCalendarEventUpdate maps attendees from string[] to {email}[]', () => {
+  const result = buildCalendarEventUpdate(EXISTING_EVENT, {
+    attendees: ['charlie@test.com', 'diana@test.com'],
+  });
+  assert.deepEqual(result.attendees, [
+    { email: 'charlie@test.com' },
+    { email: 'diana@test.com' },
+  ]);
+});
+
+test('buildCalendarEventUpdate allows empty attendees array', () => {
+  const result = buildCalendarEventUpdate(EXISTING_EVENT, {
+    attendees: [],
+  });
+  assert.deepEqual(result.attendees, []);
+});
+
+test('buildCalendarEventUpdate excludes read-only fields', () => {
+  const result = buildCalendarEventUpdate(EXISTING_EVENT, { summary: 'X' });
+  assert.equal(result.id, undefined);
+  assert.equal(result.kind, undefined);
+  assert.equal(result.etag, undefined);
+  assert.equal(result.htmlLink, undefined);
+  assert.equal(result.iCalUID, undefined);
+  assert.equal(result.creator, undefined);
+  assert.equal(result.organizer, undefined);
+  assert.equal(result.sequence, undefined);
+});
+
+test('buildCalendarEventUpdate overrides start/end', () => {
+  const newStart = { dateTime: '2025-06-01T09:00:00Z' };
+  const newEnd = { dateTime: '2025-06-01T10:00:00Z' };
+  const result = buildCalendarEventUpdate(EXISTING_EVENT, { start: newStart, end: newEnd });
+  assert.deepEqual(result.start, newStart);
+  assert.deepEqual(result.end, newEnd);
+});
+
+test('buildCalendarEventUpdate preserves recurrence from existing', () => {
+  const result = buildCalendarEventUpdate(EXISTING_EVENT, { summary: 'Changed' });
+  assert.deepEqual(result.recurrence, ['RRULE:FREQ=WEEKLY']);
 });

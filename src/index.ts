@@ -23,6 +23,7 @@ import {
   escapeDriveQuery,
   parseA1Range,
   convertA1ToGridRange,
+  buildCalendarEventUpdate,
   TEXT_MIME_TYPES,
 } from './utils.js';
 
@@ -5379,19 +5380,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
 
         const existing = existingResponse.data;
-        const eventResource: any = {
-          summary: args.summary !== undefined ? args.summary : existing.summary,
-          description: args.description !== undefined ? args.description : existing.description,
-          location: args.location !== undefined ? args.location : existing.location,
-          start: args.start || existing.start,
-          end: args.end || existing.end,
-          attendees: args.attendees !== undefined
-            ? args.attendees.map((email: string) => ({ email }))
-            : existing.attendees,
-          recurrence: existing.recurrence,
-          visibility: existing.visibility,
-          reminders: existing.reminders,
-        };
+        const eventResource = buildCalendarEventUpdate(existing, args);
 
         const response = await getCalendar().events.update({
           calendarId: args.calendarId || 'primary',
@@ -5884,8 +5873,18 @@ async function main() {
 // Export server and main for testing or potential programmatic use
 export { main, server };
 
-// Run the CLI
-main().catch((error) => {
-  console.error("Fatal error:", error);
-  process.exit(1);
-});
+/** Inject a fake auth client for testing — bypasses authenticate(). */
+export function _setAuthClientForTesting(client: any) {
+  authClient = client;
+  _drive = null;
+  _calendar = null;
+  _lastAuthClient = null;
+}
+
+// Run the CLI (skip when imported by tests)
+if (!process.env.MCP_TESTING) {
+  main().catch((error) => {
+    console.error("Fatal error:", error);
+    process.exit(1);
+  });
+}

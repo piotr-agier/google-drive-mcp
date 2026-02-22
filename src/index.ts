@@ -533,7 +533,8 @@ async function insertInlineImageHelper(
 // Upload a local image to Drive and return its URL
 async function uploadImageToDriveHelper(
   localFilePath: string,
-  parentFolderId?: string
+  parentFolderId?: string,
+  makePublic: boolean = false
 ): Promise<string> {
   const fs = await import('fs');
   const path = await import('path');
@@ -585,14 +586,16 @@ async function uploadImageToDriveHelper(
     throw new Error('Failed to upload image to Drive - no file ID returned');
   }
 
-  // Make the file publicly readable
-  await getDrive().permissions.create({
-    fileId: fileId,
-    requestBody: {
-      role: 'reader',
-      type: 'anyone'
-    }
-  });
+  if (makePublic) {
+    // Make the file publicly readable so the Docs API can fetch it
+    await getDrive().permissions.create({
+      fileId: fileId,
+      requestBody: {
+        role: 'reader',
+        type: 'anyone'
+      }
+    });
+  }
 
   // Get the webContentLink
   const fileInfo = await getDrive().files.get({
@@ -603,7 +606,7 @@ async function uploadImageToDriveHelper(
 
   const webContentLink = fileInfo.data.webContentLink;
   if (!webContentLink) {
-    throw new Error('Failed to get public URL for uploaded image');
+    throw new Error('Failed to get web content link for uploaded image');
   }
 
   return webContentLink;
@@ -1241,7 +1244,8 @@ const InsertLocalImageSchema = z.object({
   index: z.number().int().min(1, "Index must be at least 1 (1-based)"),
   width: z.number().optional().describe("Width in points"),
   height: z.number().optional().describe("Height in points"),
-  uploadToSameFolder: z.boolean().optional().default(true).describe("Upload to same folder as document")
+  uploadToSameFolder: z.boolean().optional().default(true).describe("Upload to same folder as document"),
+  makePublic: z.boolean().optional().default(false).describe("Make uploaded image publicly accessible. Required if the document is not shared with the service account.")
 });
 
 // Google Docs Discovery & Management Schemas
@@ -1875,7 +1879,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "insertLocalImage",
-        description: "Upload a local image file to Google Drive and insert it into a Google Document. NOTE: The uploaded image will be made publicly accessible (anyone with the link can view) because the Docs API requires a public URL to render inline images.",
+        description: "Upload a local image file to Google Drive and insert it into a Google Document",
         inputSchema: {
           type: "object",
           properties: {
@@ -1884,7 +1888,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             index: { type: "number", description: "The index (1-based) where the image should be inserted" },
             width: { type: "number", description: "Width of the image in points" },
             height: { type: "number", description: "Height of the image in points" },
-            uploadToSameFolder: { type: "boolean", description: "Upload to same folder as document (default: true)" }
+            uploadToSameFolder: { type: "boolean", description: "Upload to same folder as document (default: true)" },
+            makePublic: { type: "boolean", description: "Make uploaded image publicly accessible (anyone with the link can view). Set to true if the Docs API cannot access the image through the authenticated user's permissions. Default: false" }
           },
           required: ["documentId", "localImagePath", "index"]
         }
@@ -5597,7 +5602,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         // Upload the image to Drive
-        const imageUrl = await uploadImageToDriveHelper(args.localImagePath, parentFolderId);
+        const imageUrl = await uploadImageToDriveHelper(args.localImagePath, parentFolderId, args.makePublic);
 
         // Insert the image into the document
         await insertInlineImageHelper(args.documentId, imageUrl, args.index, args.width, args.height);

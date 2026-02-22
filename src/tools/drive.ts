@@ -1,0 +1,673 @@
+import { z } from 'zod';
+import type { drive_v3 } from 'googleapis';
+import { existsSync, statSync, createReadStream } from 'fs';
+import type { ToolDefinition, ToolContext, ToolResult } from '../types.js';
+import { errorResponse } from '../types.js';
+import { escapeDriveQuery, getMimeTypeFromFilename, TEXT_MIME_TYPES } from '../utils.js';
+import { downloadDriveFile } from '../download-file.js';
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
+
+// MIME types for binary file uploads (extension → MIME)
+const BINARY_MIME_TYPES: Record<string, string> = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif',
+  webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon',
+  mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4',
+  aac: 'audio/aac', flac: 'audio/flac', opus: 'audio/opus',
+  mp4: 'video/mp4', webm: 'video/webm', avi: 'video/x-msvideo', mov: 'video/quicktime',
+  mkv: 'video/x-matroska', '3gp': 'video/3gpp',
+  pdf: 'application/pdf', zip: 'application/zip', gz: 'application/gzip',
+  tar: 'application/x-tar', json: 'application/json', xml: 'application/xml',
+  csv: 'text/csv', html: 'text/html', css: 'text/css', js: 'application/javascript',
+  doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+};
+
+// ---------------------------------------------------------------------------
+// Zod schemas
+// ---------------------------------------------------------------------------
+
+const SearchSchema = z.object({
+  query: z.string().min(1, "Search query is required"),
+  pageSize: z.number().int().min(1).max(100).optional(),
+  pageToken: z.string().optional()
+});
+
+const CreateTextFileSchema = z.object({
+  name: z.string().min(1, "File name is required"),
+  content: z.string(),
+  parentFolderId: z.string().optional()
+});
+
+const UpdateTextFileSchema = z.object({
+  fileId: z.string().min(1, "File ID is required"),
+  content: z.string(),
+  name: z.string().optional()
+});
+
+const CreateFolderSchema = z.object({
+  name: z.string().min(1, "Folder name is required"),
+  parent: z.string().optional()
+});
+
+const ListFolderSchema = z.object({
+  folderId: z.string().optional(),
+  pageSize: z.number().int().min(1).max(100).optional(),
+  pageToken: z.string().optional()
+});
+
+const DeleteItemSchema = z.object({
+  itemId: z.string().min(1, "Item ID is required")
+});
+
+const RenameItemSchema = z.object({
+  itemId: z.string().min(1, "Item ID is required"),
+  newName: z.string().min(1, "New name is required")
+});
+
+const MoveItemSchema = z.object({
+  itemId: z.string().min(1, "Item ID is required"),
+  destinationFolderId: z.string().optional()
+});
+
+const CopyFileSchema = z.object({
+  fileId: z.string().min(1, "File ID is required"),
+  newName: z.string().optional(),
+  parentFolderId: z.string().optional()
+});
+
+const UploadFileSchema = z.object({
+  localPath: z.string().min(1, "Local file path is required"),
+  name: z.string().optional(),
+  parentFolderId: z.string().optional(),
+  mimeType: z.string().optional()
+});
+
+const DownloadFileSchema = z.object({
+  fileId: z.string().min(1, "File ID is required"),
+  localPath: z.string().min(1, "Local file path is required"),
+  exportMimeType: z.string().optional(),
+  overwrite: z.boolean().optional().default(false),
+});
+
+// ---------------------------------------------------------------------------
+// Tool definitions
+// ---------------------------------------------------------------------------
+
+export const toolDefinitions: ToolDefinition[] = [
+  {
+    name: "search",
+    description: "Search for files in Google Drive",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search query" },
+        pageSize: { type: "number", description: "Results per page (default 50, max 100)" },
+        pageToken: { type: "string", description: "Token for next page of results" }
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "createTextFile",
+    description: "Create a new text or markdown file",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "File name (.txt or .md)" },
+        content: { type: "string", description: "File content" },
+        parentFolderId: { type: "string", description: "Optional parent folder ID", optional: true }
+      },
+      required: ["name", "content"]
+    }
+  },
+  {
+    name: "updateTextFile",
+    description: "Update an existing text or markdown file",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "ID of the file to update" },
+        content: { type: "string", description: "New file content" },
+        name: { type: "string", description: "Optional new name (.txt or .md)", optional: true }
+      },
+      required: ["fileId", "content"]
+    }
+  },
+  {
+    name: "createFolder",
+    description: "Create a new folder in Google Drive",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Folder name" },
+        parent: { type: "string", description: "Optional parent folder ID or path", optional: true }
+      },
+      required: ["name"]
+    }
+  },
+  {
+    name: "listFolder",
+    description: "List contents of a folder (defaults to root)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        folderId: { type: "string", description: "Folder ID", optional: true },
+        pageSize: { type: "number", description: "Items to return (default 50, max 100)", optional: true },
+        pageToken: { type: "string", description: "Token for next page", optional: true }
+      }
+    }
+  },
+  {
+    name: "deleteItem",
+    description: "Move a file or folder to trash (can be restored from Google Drive trash)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        itemId: { type: "string", description: "ID of the item to delete" }
+      },
+      required: ["itemId"]
+    }
+  },
+  {
+    name: "renameItem",
+    description: "Rename a file or folder",
+    inputSchema: {
+      type: "object",
+      properties: {
+        itemId: { type: "string", description: "ID of the item to rename" },
+        newName: { type: "string", description: "New name" }
+      },
+      required: ["itemId", "newName"]
+    }
+  },
+  {
+    name: "moveItem",
+    description: "Move a file or folder",
+    inputSchema: {
+      type: "object",
+      properties: {
+        itemId: { type: "string", description: "ID of the item to move" },
+        destinationFolderId: { type: "string", description: "Destination folder ID", optional: true }
+      },
+      required: ["itemId"]
+    }
+  },
+  {
+    name: "copyFile",
+    description: "Creates a copy of a Google Drive file or document",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "ID of the file to copy" },
+        newName: { type: "string", description: "Name for the copied file. If not provided, will use 'Copy of [original name]'" },
+        parentFolderId: { type: "string", description: "ID of folder where copy should be placed. If not provided, places in same location as original." }
+      },
+      required: ["fileId"]
+    }
+  },
+  {
+    name: "uploadFile",
+    description: "Upload a local file (any type: image, audio, video, PDF, etc.) to Google Drive",
+    inputSchema: {
+      type: "object",
+      properties: {
+        localPath: { type: "string", description: "Absolute path to the local file to upload" },
+        name: { type: "string", description: "File name in Drive (defaults to local filename)", optional: true },
+        parentFolderId: { type: "string", description: "Parent folder ID or path (e.g., '/Work/Projects'). Creates folders if needed. Defaults to root.", optional: true },
+        mimeType: { type: "string", description: "MIME type (auto-detected from extension if omitted)", optional: true }
+      },
+      required: ["localPath"]
+    }
+  },
+  {
+    name: "downloadFile",
+    description: "Download a Google Drive file to a local path. For Google Workspace files (Docs, Sheets, Slides, Drawings), exports to the specified format. For regular files, downloads as-is. Streams directly to disk.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "Google Drive file ID" },
+        localPath: { type: "string", description: "Absolute local path to save the file (must start with /). Can be a directory (filename auto-resolved from Drive metadata) or a full file path. Path is normalized before use." },
+        exportMimeType: {
+          type: "string",
+          description: "For Google Workspace files: MIME type to export as (e.g., 'application/pdf', 'text/csv'). Auto-detected from file extension if omitted. Ignored for non-Workspace files.",
+          optional: true
+        },
+        overwrite: {
+          type: "boolean",
+          description: "Whether to overwrite if file already exists at localPath. When false (default), returns an error instead of replacing the file.",
+          optional: true
+        }
+      },
+      required: ["fileId", "localPath"]
+    }
+  },
+];
+
+// ---------------------------------------------------------------------------
+// Handler
+// ---------------------------------------------------------------------------
+
+export async function handleTool(
+  toolName: string,
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<ToolResult | null> {
+  switch (toolName) {
+
+    case "search": {
+      const validation = SearchSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const { query: userQuery, pageSize, pageToken } = validation.data;
+
+      const escapedQuery = escapeDriveQuery(userQuery);
+      const formattedQuery = `fullText contains '${escapedQuery}' and trashed = false`;
+
+      const res = await ctx.getDrive().files.list({
+        q: formattedQuery,
+        pageSize: Math.min(pageSize || 50, 100),
+        pageToken: pageToken,
+        fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size)",
+        includeItemsFromAllDrives: true,
+        supportsAllDrives: true
+      });
+
+      const fileList = res.data.files?.map((f: drive_v3.Schema$File) => `${f.name} (ID: ${f.id}, ${f.mimeType})`).join("\n") || '';
+      ctx.log('Search results', { query: userQuery, resultCount: res.data.files?.length });
+
+      let response = `Found ${res.data.files?.length ?? 0} files:\n${fileList}`;
+      if (res.data.nextPageToken) {
+        response += `\n\nMore results available. Use pageToken: ${res.data.nextPageToken}`;
+      }
+
+      return {
+        content: [{ type: "text", text: response }],
+        isError: false,
+      };
+    }
+
+    case "createTextFile": {
+      const validation = CreateTextFileSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const data = validation.data;
+
+      ctx.validateTextFileExtension(data.name);
+      const parentFolderId = await ctx.resolveFolderId(data.parentFolderId);
+
+      // Check if file already exists
+      const existingFileId = await ctx.checkFileExists(data.name, parentFolderId);
+      if (existingFileId) {
+        return errorResponse(
+          `A file named "${data.name}" already exists in this location. ` +
+          `To update it, use updateTextFile with fileId: ${existingFileId}`
+        );
+      }
+
+      const fileMetadata = {
+        name: data.name,
+        mimeType: getMimeTypeFromFilename(data.name),
+        parents: [parentFolderId]
+      };
+
+      const file = await ctx.getDrive().files.create({
+        requestBody: fileMetadata,
+        media: {
+          mimeType: fileMetadata.mimeType,
+          body: data.content,
+        },
+        supportsAllDrives: true
+      });
+
+      ctx.log('File created successfully', { fileId: file.data?.id });
+      return {
+        content: [{
+          type: "text",
+          text: `Created file: ${file.data?.name || data.name}\nID: ${file.data?.id || 'unknown'}`
+        }],
+        isError: false
+      };
+    }
+
+    case "updateTextFile": {
+      const validation = UpdateTextFileSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const data = validation.data;
+
+      // Check file MIME type
+      const existingFile = await ctx.getDrive().files.get({
+        fileId: data.fileId,
+        fields: 'mimeType, name, parents',
+        supportsAllDrives: true
+      });
+
+      const currentMimeType = existingFile.data.mimeType || 'text/plain';
+      if (!Object.values(TEXT_MIME_TYPES).includes(currentMimeType)) {
+        return errorResponse("File is not a text or markdown file.");
+      }
+
+      const updateMetadata: { name?: string; mimeType?: string } = {};
+      if (data.name) {
+        ctx.validateTextFileExtension(data.name);
+        updateMetadata.name = data.name;
+        updateMetadata.mimeType = getMimeTypeFromFilename(data.name);
+      }
+
+      const updatedFile = await ctx.getDrive().files.update({
+        fileId: data.fileId,
+        requestBody: updateMetadata,
+        media: {
+          mimeType: updateMetadata.mimeType || currentMimeType,
+          body: data.content
+        },
+        fields: 'id, name, modifiedTime, webViewLink',
+        supportsAllDrives: true
+      });
+
+      return {
+        content: [{
+          type: "text",
+          text: `Updated file: ${updatedFile.data.name}\nModified: ${updatedFile.data.modifiedTime}`
+        }],
+        isError: false
+      };
+    }
+
+    case "createFolder": {
+      const validation = CreateFolderSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const data = validation.data;
+
+      const parentFolderId = await ctx.resolveFolderId(data.parent);
+
+      // Check if folder already exists
+      const existingFolderId = await ctx.checkFileExists(data.name, parentFolderId);
+      if (existingFolderId) {
+        return errorResponse(
+          `A folder named "${data.name}" already exists in this location. ` +
+          `Folder ID: ${existingFolderId}`
+        );
+      }
+      const folderMetadata = {
+        name: data.name,
+        mimeType: FOLDER_MIME_TYPE,
+        parents: [parentFolderId]
+      };
+
+      const folder = await ctx.getDrive().files.create({
+        requestBody: folderMetadata,
+        fields: 'id, name, webViewLink',
+        supportsAllDrives: true
+      });
+
+      ctx.log('Folder created successfully', { folderId: folder.data.id, name: folder.data.name });
+
+      return {
+        content: [{
+          type: "text",
+          text: `Created folder: ${folder.data.name}\nID: ${folder.data.id}`
+        }],
+        isError: false
+      };
+    }
+
+    case "listFolder": {
+      const validation = ListFolderSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const data = validation.data;
+
+      // Default to root if no folder specified
+      const targetFolderId = data.folderId || 'root';
+
+      const res = await ctx.getDrive().files.list({
+        q: `'${targetFolderId}' in parents and trashed = false`,
+        pageSize: Math.min(data.pageSize || 50, 100),
+        pageToken: data.pageToken,
+        fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size)",
+        orderBy: "name",
+        includeItemsFromAllDrives: true,
+        supportsAllDrives: true
+      });
+
+      const files = res.data.files || [];
+      const formattedFiles = files.map((file: drive_v3.Schema$File) => {
+        const isFolder = file.mimeType === FOLDER_MIME_TYPE;
+        return `${isFolder ? '📁' : '📄'} ${file.name} (ID: ${file.id})`;
+      }).join('\n');
+
+      let response = `Contents of folder:\n\n${formattedFiles}`;
+      if (res.data.nextPageToken) {
+        response += `\n\nMore items available. Use pageToken: ${res.data.nextPageToken}`;
+      }
+
+      return {
+        content: [{ type: "text", text: response }],
+        isError: false
+      };
+    }
+
+    case "deleteItem": {
+      const validation = DeleteItemSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const data = validation.data;
+
+      const item = await ctx.getDrive().files.get({ fileId: data.itemId, fields: 'name', supportsAllDrives: true });
+
+      // Move to trash instead of permanent deletion
+      await ctx.getDrive().files.update({
+        fileId: data.itemId,
+        requestBody: {
+          trashed: true
+        },
+        supportsAllDrives: true
+      });
+
+      ctx.log('Item moved to trash successfully', { itemId: data.itemId, name: item.data.name });
+      return {
+        content: [{ type: "text", text: `Successfully moved to trash: ${item.data.name}` }],
+        isError: false
+      };
+    }
+
+    case "renameItem": {
+      const validation = RenameItemSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const data = validation.data;
+
+      // If it's a text file, check extension
+      const item = await ctx.getDrive().files.get({ fileId: data.itemId, fields: 'name, mimeType', supportsAllDrives: true });
+      if (Object.values(TEXT_MIME_TYPES).includes(item.data.mimeType || '')) {
+        ctx.validateTextFileExtension(data.newName);
+      }
+
+      const updatedItem = await ctx.getDrive().files.update({
+        fileId: data.itemId,
+        requestBody: { name: data.newName },
+        fields: 'id, name, modifiedTime',
+        supportsAllDrives: true
+      });
+
+      return {
+        content: [{
+          type: "text",
+          text: `Successfully renamed "${item.data.name}" to "${updatedItem.data.name}"`
+        }],
+        isError: false
+      };
+    }
+
+    case "moveItem": {
+      const validation = MoveItemSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const data = validation.data;
+
+      const destinationFolderId = data.destinationFolderId ?
+        await ctx.resolveFolderId(data.destinationFolderId) :
+        'root';
+
+      // Check we aren't moving a folder into itself or its descendant
+      if (data.destinationFolderId === data.itemId) {
+        return errorResponse("Cannot move a folder into itself.");
+      }
+
+      const item = await ctx.getDrive().files.get({ fileId: data.itemId, fields: 'name, parents', supportsAllDrives: true });
+
+      // Perform move
+      await ctx.getDrive().files.update({
+        fileId: data.itemId,
+        addParents: destinationFolderId,
+        removeParents: item.data.parents?.join(',') || '',
+        fields: 'id, name, parents',
+        supportsAllDrives: true
+      });
+
+      // Get the destination folder name for a nice response
+      const destinationFolder = await ctx.getDrive().files.get({
+        fileId: destinationFolderId,
+        fields: 'name',
+        supportsAllDrives: true
+      });
+
+      return {
+        content: [{
+          type: "text",
+          text: `Successfully moved "${item.data.name}" to "${destinationFolder.data.name}"`
+        }],
+        isError: false
+      };
+    }
+
+    case "copyFile": {
+      const validation = CopyFileSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const data = validation.data;
+
+      // Get original file info
+      const originalFile = await ctx.getDrive().files.get({
+        fileId: data.fileId,
+        fields: 'name,parents',
+        supportsAllDrives: true
+      });
+
+      const copyMetadata: any = {
+        name: data.newName || `Copy of ${originalFile.data.name}`
+      };
+
+      if (data.parentFolderId) {
+        copyMetadata.parents = [data.parentFolderId];
+      } else if (originalFile.data.parents) {
+        copyMetadata.parents = originalFile.data.parents;
+      }
+
+      const response = await ctx.getDrive().files.copy({
+        fileId: data.fileId,
+        requestBody: copyMetadata,
+        fields: 'id,name,webViewLink,parents',
+        supportsAllDrives: true
+      });
+
+      return {
+        content: [{ type: "text", text: `Successfully copied file as "${response.data.name}"\nNew file ID: ${response.data.id}\nLink: ${response.data.webViewLink}` }],
+        isError: false
+      };
+    }
+
+    case "uploadFile": {
+      const validation = UploadFileSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const data = validation.data;
+
+      // Validate local file exists
+      if (!existsSync(data.localPath)) {
+        return errorResponse(`File not found: ${data.localPath}`);
+      }
+
+      const stats = statSync(data.localPath);
+      const fileName = data.name || data.localPath.split(/[\\/]/).pop() || 'upload';
+      const ext = fileName.split('.').pop()?.toLowerCase() || '';
+      const detectedMime = data.mimeType || BINARY_MIME_TYPES[ext] || 'application/octet-stream';
+      const parentId = await ctx.resolveFolderId(data.parentFolderId);
+
+      ctx.log('Uploading file', { localPath: data.localPath, name: fileName, mimeType: detectedMime, size: stats.size });
+
+      const file = await ctx.getDrive().files.create({
+        requestBody: {
+          name: fileName,
+          parents: [parentId]
+        },
+        media: {
+          mimeType: detectedMime,
+          body: createReadStream(data.localPath)
+        },
+        fields: 'id, name, size, mimeType, webViewLink',
+        supportsAllDrives: true
+      });
+
+      ctx.log('File uploaded successfully', { fileId: file.data?.id });
+      return {
+        content: [{
+          type: "text",
+          text: [
+            `Uploaded: ${file.data?.name || fileName}`,
+            `ID: ${file.data?.id || 'unknown'}`,
+            `Size: ${file.data?.size || stats.size} bytes`,
+            `Type: ${file.data?.mimeType || detectedMime}`,
+            file.data?.webViewLink ? `Link: ${file.data.webViewLink}` : ''
+          ].filter(Boolean).join('\n')
+        }],
+        isError: false
+      };
+    }
+
+    case "downloadFile": {
+      const validation = DownloadFileSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const data = validation.data;
+      const downloadResult = await downloadDriveFile(ctx.getDrive(), data, ctx.log);
+
+      return {
+        content: [{
+          type: 'text',
+          text: [
+            `Downloaded: ${downloadResult.driveName}`,
+            `Saved to: ${downloadResult.resolvedPath}`,
+            `Size: ${downloadResult.size} bytes`,
+            downloadResult.isWorkspaceFile
+              ? `Export format: ${downloadResult.exportMime}`
+              : `Type: ${downloadResult.driveMimeType}`,
+          ].join('\n'),
+        }],
+        isError: false,
+      };
+    }
+
+    default:
+      return null;
+  }
+}

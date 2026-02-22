@@ -152,7 +152,7 @@ export class TokenManager {
           try { 
               await fs.unlink(this.tokenPath); 
               console.error("Removed potentially corrupted token file") 
-            } catch (unlinkErr) { /* ignore */ } 
+            } catch (_unlinkErr) { /* ignore */ }
       }
       return false;
     }

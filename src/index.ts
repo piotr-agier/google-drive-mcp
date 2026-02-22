@@ -9,7 +9,7 @@ import {
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { google } from "googleapis";
-import type { drive_v3 } from "googleapis";
+import type { drive_v3, calendar_v3 } from "googleapis";
 import { v4 as uuidv4 } from 'uuid';
 import { authenticate, runAuthCommand, AuthServer, initializeOAuth2Client } from './auth.js';
 import { z } from 'zod';
@@ -17,41 +17,41 @@ import { fileURLToPath } from 'url';
 import { readFileSync, createReadStream, existsSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 import { downloadDriveFile } from './download-file.js';
+import {
+  getExtensionFromFilename,
+  getMimeTypeFromFilename,
+  escapeDriveQuery,
+  parseA1Range,
+  convertA1ToGridRange,
+  TEXT_MIME_TYPES,
+} from './utils.js';
 
-// Drive service - will be created with auth when needed
-let drive: any = null;
+// Cached service instances — only recreated when authClient changes
+let _drive: drive_v3.Drive | null = null;
+let _calendar: calendar_v3.Calendar | null = null;
+let _lastAuthClient: any = null;
 
-// Calendar service - will be created with auth when needed
-let calendar: any = null;
-
-// Helper to ensure drive service has current auth
-function ensureDriveService() {
-  if (!authClient) {
-    throw new Error('Authentication required');
-  }
-  drive = google.drive({ version: 'v3', auth: authClient });
-  log('Drive service created/updated');
+function getDrive(): drive_v3.Drive {
+  if (!authClient) throw new Error('Authentication required');
+  if (_drive && _lastAuthClient === authClient) return _drive;
+  _drive = google.drive({ version: 'v3', auth: authClient });
+  _lastAuthClient = authClient;
+  log('Drive service created');
+  return _drive;
 }
 
-// Helper to ensure calendar service has current auth
-function ensureCalendarService() {
-  if (!authClient) {
-    throw new Error('Authentication required');
-  }
-  if (!calendar) {
-    calendar = google.calendar({ version: 'v3', auth: authClient });
-    log('Calendar service created');
-  }
+function getCalendar(): calendar_v3.Calendar {
+  if (!authClient) throw new Error('Authentication required');
+  if (_calendar && _lastAuthClient === authClient) return _calendar;
+  _calendar = google.calendar({ version: 'v3', auth: authClient });
+  log('Calendar service created');
+  return _calendar;
 }
 
 // -----------------------------------------------------------------------------
 // CONSTANTS & CONFIG
 // -----------------------------------------------------------------------------
 const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
-const TEXT_MIME_TYPES = {
-  txt: 'text/plain',
-  md: 'text/markdown'
-};
 
 // MIME types for binary file uploads (extension → MIME)
 const BINARY_MIME_TYPES: Record<string, string> = {
@@ -94,16 +94,6 @@ function log(message: string, data?: any) {
 // -----------------------------------------------------------------------------
 // HELPER FUNCTIONS
 // -----------------------------------------------------------------------------
-function getExtensionFromFilename(filename: string): string {
-  return filename.split('.').pop()?.toLowerCase() || '';
-}
-
-function getMimeTypeFromFilename(filename: string): string {
-  const ext = getExtensionFromFilename(filename);
-  return TEXT_MIME_TYPES[ext as keyof typeof TEXT_MIME_TYPES] || 'text/plain';
-}
-
-
 
 /**
  * Resolve a slash-delimited path (e.g. "/some/folder") within Google Drive
@@ -118,8 +108,8 @@ async function resolvePath(pathStr: string): Promise<string> {
 
   for (const part of parts) {
     if (!part) continue;
-    const escapedPart = part.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-    let response = await drive.files.list({
+    const escapedPart = escapeDriveQuery(part);
+    let response = await getDrive().files.list({
       q: `'${currentFolderId}' in parents and name = '${escapedPart}' and mimeType = '${FOLDER_MIME_TYPE}' and trashed = false`,
       fields: 'files(id)',
       spaces: 'drive',
@@ -134,7 +124,7 @@ async function resolvePath(pathStr: string): Promise<string> {
         mimeType: FOLDER_MIME_TYPE,
         parents: [currentFolderId]
       };
-      const folder = await drive.files.create({
+      const folder = await getDrive().files.create({
         requestBody: folderMetadata,
         fields: 'id',
         supportsAllDrives: true
@@ -185,58 +175,16 @@ function validateTextFileExtension(name: string) {
 /**
  * Convert A1 notation to GridRange for Google Sheets API
  */
-function convertA1ToGridRange(a1Notation: string, sheetId: number): any {
-  // Regular expression to match A1 notation like "A1", "B2:D5", "A:A", "1:1"
-  const rangeRegex = /^([A-Z]*)([0-9]*)(:([A-Z]*)([0-9]*))?$/;
-  const match = a1Notation.match(rangeRegex);
-  
-  if (!match) {
-    throw new Error(`Invalid A1 notation: ${a1Notation}`);
-  }
-  
-  const [, startCol, startRow, , endCol, endRow] = match;
-  
-  const gridRange: any = { sheetId };
-  
-  // Convert column letters to numbers (A=0, B=1, etc.)
-  const colToNum = (col: string): number => {
-    let num = 0;
-    for (let i = 0; i < col.length; i++) {
-      num = num * 26 + (col.charCodeAt(i) - 'A'.charCodeAt(0) + 1);
-    }
-    return num - 1;
-  };
-  
-  // Set start indices
-  if (startCol) gridRange.startColumnIndex = colToNum(startCol);
-  if (startRow) gridRange.startRowIndex = parseInt(startRow) - 1;
-  
-  // Set end indices (exclusive)
-  if (endCol) {
-    gridRange.endColumnIndex = colToNum(endCol) + 1;
-  } else if (startCol && !endCol) {
-    gridRange.endColumnIndex = gridRange.startColumnIndex + 1;
-  }
-  
-  if (endRow) {
-    gridRange.endRowIndex = parseInt(endRow);
-  } else if (startRow && !endRow) {
-    gridRange.endRowIndex = gridRange.startRowIndex + 1;
-  }
-  
-  return gridRange;
-}
-
 /**
  * Check if a file with the given name already exists in the specified folder.
  * Returns the file ID if it exists, null otherwise.
  */
 async function checkFileExists(name: string, parentFolderId: string = 'root'): Promise<string | null> {
   try {
-    const escapedName = name.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    const escapedName = escapeDriveQuery(name);
     const query = `name = '${escapedName}' and '${parentFolderId}' in parents and trashed = false`;
     
-    const res = await drive.files.list({
+    const res = await getDrive().files.list({
       q: query,
       fields: 'files(id, name, mimeType)',
       pageSize: 1,
@@ -629,7 +577,7 @@ async function uploadImageToDriveHelper(
     body: fs.createReadStream(localFilePath)
   };
 
-  const uploadResponse = await drive.files.create({
+  const uploadResponse = await getDrive().files.create({
     requestBody: fileMetadata,
     media: media,
     fields: 'id,webViewLink,webContentLink',
@@ -642,7 +590,7 @@ async function uploadImageToDriveHelper(
   }
 
   // Make the file publicly readable
-  await drive.permissions.create({
+  await getDrive().permissions.create({
     fileId: fileId,
     requestBody: {
       role: 'reader',
@@ -651,7 +599,7 @@ async function uploadImageToDriveHelper(
   });
 
   // Get the webContentLink
-  const fileInfo = await drive.files.get({
+  const fileInfo = await getDrive().files.get({
     fileId: fileId,
     fields: 'webContentLink',
     supportsAllDrives: true
@@ -1331,35 +1279,22 @@ const server = new Server(
 // AUTHENTICATION HELPER
 // -----------------------------------------------------------------------------
 async function ensureAuthenticated() {
-  if (!authClient) {
-    // If authentication is already in progress, wait for it
-    if (authenticationPromise) {
-      log('Authentication already in progress, waiting...');
-      authClient = await authenticationPromise;
-      return;
-    }
-    
-    log('Initializing authentication');
-    // Store the promise to prevent concurrent authentication attempts
-    authenticationPromise = authenticate();
-    
-    try {
-      authClient = await authenticationPromise;
-      log('Authentication complete', {
-        authClientType: authClient?.constructor?.name,
-        hasCredentials: !!authClient?.credentials,
-        hasAccessToken: !!authClient?.credentials?.access_token
-      });
-      // Ensure drive service is created with auth
-      ensureDriveService();
-    } finally {
-      // Clear the promise after completion (success or failure)
-      authenticationPromise = null;
-    }
+  if (authClient) return;
+
+  if (authenticationPromise) {
+    log('Authentication already in progress, waiting...');
+    authClient = await authenticationPromise;
+    return;
   }
 
-  // If we already have authClient, ensure drive service is up to date
-  ensureDriveService();
+  log('Initializing authentication');
+  authenticationPromise = authenticate();
+  try {
+    authClient = await authenticationPromise;
+    log('Authentication complete');
+  } finally {
+    authenticationPromise = null;
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -1389,7 +1324,7 @@ server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
     params.pageToken = request.params.cursor;
   }
 
-  const res = await drive.files.list(params);
+  const res = await getDrive().files.list(params);
   log('Listed files', { count: res.data.files?.length });
   const files = res.data.files || [];
 
@@ -1408,7 +1343,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   log('Handling ReadResource request', { uri: request.params.uri });
   const fileId = request.params.uri.replace("gdrive:///", "");
 
-  const file = await drive.files.get({
+  const file = await getDrive().files.get({
     fileId,
     fields: "mimeType",
     supportsAllDrives: true
@@ -1430,8 +1365,8 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
       default: exportMimeType = "text/plain"; break;
     }
 
-    const res = await drive.files.export(
-      { fileId, mimeType: exportMimeType, supportsAllDrives: true },
+    const res = await getDrive().files.export(
+      { fileId, mimeType: exportMimeType },
       { responseType: "text" },
     );
 
@@ -1447,7 +1382,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     };
   } else {
     // Regular file download
-    const res = await drive.files.get(
+    const res = await getDrive().files.get(
       { fileId, alt: "media", supportsAllDrives: true },
       { responseType: "arraybuffer" },
     );
@@ -2628,10 +2563,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         const { query: userQuery, pageSize, pageToken } = validation.data;
 
-        const escapedQuery = userQuery.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+        const escapedQuery = escapeDriveQuery(userQuery);
         const formattedQuery = `fullText contains '${escapedQuery}' and trashed = false`;
 
-        const res = await drive.files.list({
+        const res = await getDrive().files.list({
           q: formattedQuery,
           pageSize: Math.min(pageSize || 50, 100),
           pageToken: pageToken,
@@ -2679,14 +2614,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           parents: [parentFolderId]
         };
 
-        log('About to create file', {
-          driveExists: !!drive,
-          authClientExists: !!authClient,
-          hasAccessToken: !!authClient?.credentials?.access_token,
-          tokenLength: authClient?.credentials?.access_token?.length
-        });
-
-        const file = await drive.files.create({
+        const file = await getDrive().files.create({
           requestBody: fileMetadata,
           media: {
             mimeType: fileMetadata.mimeType,
@@ -2713,7 +2641,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const args = validation.data;
 
         // Check file MIME type
-        const existingFile = await drive.files.get({
+        const existingFile = await getDrive().files.get({
           fileId: args.fileId,
           fields: 'mimeType, name, parents',
           supportsAllDrives: true
@@ -2731,7 +2659,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           updateMetadata.mimeType = getMimeTypeFromFilename(args.name);
         }
 
-        const updatedFile = await drive.files.update({
+        const updatedFile = await getDrive().files.update({
           fileId: args.fileId,
           requestBody: updateMetadata,
           media: {
@@ -2774,7 +2702,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           parents: [parentFolderId]
         };
 
-        const folder = await drive.files.create({
+        const folder = await getDrive().files.create({
           requestBody: folderMetadata,
           fields: 'id, name, webViewLink',
           supportsAllDrives: true
@@ -2801,7 +2729,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Default to root if no folder specified
         const targetFolderId = args.folderId || 'root';
 
-        const res = await drive.files.list({
+        const res = await getDrive().files.list({
           q: `'${targetFolderId}' in parents and trashed = false`,
           pageSize: Math.min(args.pageSize || 50, 100),
           pageToken: args.pageToken,
@@ -2835,10 +2763,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         const args = validation.data;
 
-        const item = await drive.files.get({ fileId: args.itemId, fields: 'name', supportsAllDrives: true });
+        const item = await getDrive().files.get({ fileId: args.itemId, fields: 'name', supportsAllDrives: true });
         
         // Move to trash instead of permanent deletion
-        await drive.files.update({
+        await getDrive().files.update({
           fileId: args.itemId,
           requestBody: {
             trashed: true
@@ -2861,12 +2789,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const args = validation.data;
 
         // If it's a text file, check extension
-        const item = await drive.files.get({ fileId: args.itemId, fields: 'name, mimeType', supportsAllDrives: true });
+        const item = await getDrive().files.get({ fileId: args.itemId, fields: 'name, mimeType', supportsAllDrives: true });
         if (Object.values(TEXT_MIME_TYPES).includes(item.data.mimeType || '')) {
           validateTextFileExtension(args.newName);
         }
 
-        const updatedItem = await drive.files.update({
+        const updatedItem = await getDrive().files.update({
           fileId: args.itemId,
           requestBody: { name: args.newName },
           fields: 'id, name, modifiedTime',
@@ -2898,10 +2826,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorResponse("Cannot move a folder into itself.");
         }
 
-        const item = await drive.files.get({ fileId: args.itemId, fields: 'name, parents', supportsAllDrives: true });
+        const item = await getDrive().files.get({ fileId: args.itemId, fields: 'name, parents', supportsAllDrives: true });
 
         // Perform move
-        await drive.files.update({
+        await getDrive().files.update({
           fileId: args.itemId,
           addParents: destinationFolderId,
           removeParents: item.data.parents?.join(',') || '',
@@ -2910,7 +2838,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
 
         // Get the destination folder name for a nice response
-        const destinationFolder = await drive.files.get({
+        const destinationFolder = await getDrive().files.get({
           fileId: destinationFolderId,
           fields: 'name',
           supportsAllDrives: true
@@ -2943,26 +2871,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           );
         }
 
-        log('Creating Google Doc', { 
-          authClientExists: !!authClient, 
-          parentFolderId,
-          authClientType: authClient?.constructor?.name,
-          accessToken: authClient?.credentials?.access_token ? 'present' : 'missing',
-          tokenLength: authClient?.credentials?.access_token?.length
-        });
-
-        // Debug: Try to get current user to verify auth
-        try {
-          const aboutResponse = await drive.about.get({ fields: 'user' });
-          log('Auth verification - current user:', aboutResponse.data.user?.emailAddress);
-        } catch (authError) {
-          log('Auth verification failed:', authError instanceof Error ? authError.message : String(authError));
-        }
-
         // Create empty doc
         let docResponse;
         try {
-          docResponse = await drive.files.create({
+          docResponse = await getDrive().files.create({
             requestBody: {
               name: args.name,
               mimeType: 'application/vnd.google-apps.document',
@@ -3111,7 +3023,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         });
 
-        await drive.files.update({
+        await getDrive().files.update({
           fileId: spreadsheet.data.spreadsheetId || '',
           addParents: parentFolderId,
           removeParents: 'root',
@@ -3200,7 +3112,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           fields: 'sheets(properties(sheetId,title))'
         });
 
-        const sheetName = args.range.includes('!') ? args.range.split('!')[0] : 'Sheet1';
+        const { sheetName, cellRange: a1Range } = parseA1Range(args.range);
 
         const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
 
@@ -3209,7 +3121,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         // Parse A1 notation to grid range
-        const a1Range = args.range.includes('!') ? args.range.split('!')[1] : args.range;
         const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
 
         const requests: any[] = [{
@@ -3265,13 +3176,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           fields: 'sheets(properties(sheetId,title))'
         });
 
-        const sheetName = args.range.includes('!') ? args.range.split('!')[0] : 'Sheet1';
+        const { sheetName, cellRange: a1Range } = parseA1Range(args.range);
         const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
         if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
           return errorResponse(`Sheet "${sheetName}" not found`);
         }
 
-        const a1Range = args.range.includes('!') ? args.range.split('!')[1] : args.range;
         const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
 
         const textFormat: any = {};
@@ -3346,13 +3256,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           fields: 'sheets(properties(sheetId,title))'
         });
 
-        const sheetName = args.range.includes('!') ? args.range.split('!')[0] : 'Sheet1';
+        const { sheetName, cellRange: a1Range } = parseA1Range(args.range);
         const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
         if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
           return errorResponse(`Sheet "${sheetName}" not found`);
         }
 
-        const a1Range = args.range.includes('!') ? args.range.split('!')[1] : args.range;
         const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
 
         const numberFormat: any = {
@@ -3398,13 +3307,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           fields: 'sheets(properties(sheetId,title))'
         });
 
-        const sheetName = args.range.includes('!') ? args.range.split('!')[0] : 'Sheet1';
+        const { sheetName, cellRange: a1Range } = parseA1Range(args.range);
         const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
         if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
           return errorResponse(`Sheet "${sheetName}" not found`);
         }
 
-        const a1Range = args.range.includes('!') ? args.range.split('!')[1] : args.range;
         const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
 
         const border = {
@@ -3456,13 +3364,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           fields: 'sheets(properties(sheetId,title))'
         });
 
-        const sheetName = args.range.includes('!') ? args.range.split('!')[0] : 'Sheet1';
+        const { sheetName, cellRange: a1Range } = parseA1Range(args.range);
         const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
         if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
           return errorResponse(`Sheet "${sheetName}" not found`);
         }
 
-        const a1Range = args.range.includes('!') ? args.range.split('!')[1] : args.range;
         const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
 
         const requests = [{
@@ -3498,13 +3405,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           fields: 'sheets(properties(sheetId,title))'
         });
 
-        const sheetName = args.range.includes('!') ? args.range.split('!')[0] : 'Sheet1';
+        const { sheetName, cellRange: a1Range } = parseA1Range(args.range);
         const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
         if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
           return errorResponse(`Sheet "${sheetName}" not found`);
         }
 
-        const a1Range = args.range.includes('!') ? args.range.split('!')[1] : args.range;
         const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
 
         // Build condition based on type
@@ -3688,11 +3594,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         let queryString = "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false";
         if (args.query) {
-          const escapedQuery = args.query.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+          const escapedQuery = escapeDriveQuery(args.query);
           queryString += ` and (name contains '${escapedQuery}' or fullText contains '${escapedQuery}')`;
         }
 
-        const response = await drive.files.list({
+        const response = await getDrive().files.list({
           q: queryString,
           pageSize: args.maxResults || 20,
           orderBy: args.orderBy === 'name' ? 'name' : args.orderBy,
@@ -3735,7 +3641,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const args = validation.data;
 
         // Get original file info
-        const originalFile = await drive.files.get({
+        const originalFile = await getDrive().files.get({
           fileId: args.fileId,
           fields: 'name,parents',
           supportsAllDrives: true
@@ -3751,7 +3657,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           copyMetadata.parents = originalFile.data.parents;
         }
 
-        const response = await drive.files.copy({
+        const response = await getDrive().files.copy({
           fileId: args.fileId,
           requestBody: copyMetadata,
           fields: 'id,name,webViewLink,parents',
@@ -3787,7 +3693,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           requestBody: { title: args.name },
         });
 
-        await drive.files.update({
+        await getDrive().files.update({
           fileId: presentation.data.presentationId!,
           addParents: parentFolderId,
           removeParents: 'root',
@@ -4721,7 +4627,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         log('Uploading file', { localPath: args.localPath, name: fileName, mimeType: detectedMime, size: stats.size });
 
-        const file = await drive.files.create({
+        const file = await getDrive().files.create({
           requestBody: {
             name: fileName,
             parents: [parentId]
@@ -4756,7 +4662,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorResponse(validation.error.errors[0].message);
         }
         const args = validation.data;
-        const downloadResult = await downloadDriveFile(drive, args, log);
+        const downloadResult = await downloadDriveFile(getDrive(), args, log);
 
         return {
           content: [{
@@ -5137,7 +5043,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const args = validation.data;
 
         // Use Drive API v3 for comments
-        const response = await drive.comments.list({
+        const response = await getDrive().comments.list({
           fileId: args.documentId,
           fields: 'comments(id,content,quotedFileContent,author,createdTime,resolved,replies)',
           pageSize: 100
@@ -5184,7 +5090,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         const args = validation.data;
 
-        const response = await drive.comments.get({
+        const response = await getDrive().comments.get({
           fileId: args.documentId,
           commentId: args.commentId,
           fields: 'id,content,quotedFileContent,author,createdTime,resolved,replies(id,content,author,createdTime)'
@@ -5250,7 +5156,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         }
 
-        const response = await drive.comments.create({
+        const response = await getDrive().comments.create({
           fileId: args.documentId,
           fields: 'id,content,quotedFileContent,author,createdTime',
           requestBody: {
@@ -5259,6 +5165,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               value: quotedText,
               mimeType: 'text/html'
             },
+            // Reverse-engineered anchor format for positioning comments.
+            // Not part of the public Drive API — may break if Google changes internals.
+            // See: https://stackoverflow.com/questions/51789168
             anchor: JSON.stringify({
               r: args.documentId,
               a: [{
@@ -5285,7 +5194,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         const args = validation.data;
 
-        const response = await drive.replies.create({
+        const response = await getDrive().replies.create({
           fileId: args.documentId,
           commentId: args.commentId,
           fields: 'id,content,author,createdTime',
@@ -5307,7 +5216,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         const args = validation.data;
 
-        await drive.comments.delete({
+        await getDrive().comments.delete({
           fileId: args.documentId,
           commentId: args.commentId
         });
@@ -5327,9 +5236,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorResponse(validation.error.errors[0].message);
         }
         const args = validation.data;
-        ensureCalendarService();
 
-        const response = await calendar.calendarList.list({
+        const response = await getCalendar().calendarList.list({
           showHidden: args.showHidden,
           maxResults: 250
         });
@@ -5357,7 +5265,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorResponse(validation.error.errors[0].message);
         }
         const args = validation.data;
-        ensureCalendarService();
 
         const params: any = {
           calendarId: args.calendarId || 'primary',
@@ -5370,7 +5277,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (args.timeMax) params.timeMax = args.timeMax;
         if (args.query) params.q = args.query;
 
-        const response = await calendar.events.list(params);
+        const response = await getCalendar().events.list(params);
 
         const events = response.data.items || [];
         if (events.length === 0) {
@@ -5391,9 +5298,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorResponse(validation.error.errors[0].message);
         }
         const args = validation.data;
-        ensureCalendarService();
 
-        const response = await calendar.events.get({
+        const response = await getCalendar().events.get({
           calendarId: args.calendarId || 'primary',
           eventId: args.eventId
         });
@@ -5411,7 +5317,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorResponse(validation.error.errors[0].message);
         }
         const args = validation.data;
-        ensureCalendarService();
 
         const eventResource: any = {
           summary: args.summary,
@@ -5451,7 +5356,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           params.conferenceDataVersion = conferenceDataVersion;
         }
 
-        const response = await calendar.events.insert(params);
+        const response = await getCalendar().events.insert(params);
         const created = formatCalendarEvent(response.data);
 
         return {
@@ -5466,27 +5371,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorResponse(validation.error.errors[0].message);
         }
         const args = validation.data;
-        ensureCalendarService();
 
         // First get the existing event
-        const existingResponse = await calendar.events.get({
+        const existingResponse = await getCalendar().events.get({
           calendarId: args.calendarId || 'primary',
           eventId: args.eventId
         });
 
-        const eventResource: any = { ...existingResponse.data };
+        const existing = existingResponse.data;
+        const eventResource: any = {
+          summary: args.summary !== undefined ? args.summary : existing.summary,
+          description: args.description !== undefined ? args.description : existing.description,
+          location: args.location !== undefined ? args.location : existing.location,
+          start: args.start || existing.start,
+          end: args.end || existing.end,
+          attendees: args.attendees !== undefined
+            ? args.attendees.map((email: string) => ({ email }))
+            : existing.attendees,
+          recurrence: existing.recurrence,
+          visibility: existing.visibility,
+          reminders: existing.reminders,
+        };
 
-        if (args.summary !== undefined) eventResource.summary = args.summary;
-        if (args.description !== undefined) eventResource.description = args.description;
-        if (args.location !== undefined) eventResource.location = args.location;
-        if (args.start) eventResource.start = args.start;
-        if (args.end) eventResource.end = args.end;
-
-        if (args.attendees !== undefined) {
-          eventResource.attendees = args.attendees.map((email: string) => ({ email }));
-        }
-
-        const response = await calendar.events.update({
+        const response = await getCalendar().events.update({
           calendarId: args.calendarId || 'primary',
           eventId: args.eventId,
           requestBody: eventResource,
@@ -5507,9 +5414,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorResponse(validation.error.errors[0].message);
         }
         const args = validation.data;
-        ensureCalendarService();
 
-        await calendar.events.delete({
+        await getCalendar().events.delete({
           calendarId: args.calendarId || 'primary',
           eventId: args.eventId,
           sendUpdates: args.sendUpdates
@@ -5699,7 +5605,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Get the document's parent folder if uploadToSameFolder is true
         let parentFolderId: string | undefined;
         if (args.uploadToSameFolder !== false) {
-          const fileInfo = await drive.files.get({
+          const fileInfo = await getDrive().files.get({
             fileId: args.documentId,
             fields: 'parents',
             supportsAllDrives: true
@@ -5733,11 +5639,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Build the query string for Google Drive API
         let queryString = "mimeType='application/vnd.google-apps.document' and trashed=false";
         if (args.query) {
-          const escapedQuery = args.query.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+          const escapedQuery = escapeDriveQuery(args.query);
           queryString += ` and (name contains '${escapedQuery}' or fullText contains '${escapedQuery}')`;
         }
 
-        const response = await drive.files.list({
+        const response = await getDrive().files.list({
           q: queryString,
           pageSize: args.maxResults,
           orderBy: args.orderBy === 'name' ? 'name' : args.orderBy,
@@ -5774,7 +5680,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         const args = validation.data;
 
-        const response = await drive.files.get({
+        const response = await getDrive().files.get({
           fileId: args.documentId,
           fields: 'id,name,description,mimeType,size,createdTime,modifiedTime,webViewLink,owners(displayName,emailAddress),lastModifyingUser(displayName,emailAddress),shared,parents,version',
         });

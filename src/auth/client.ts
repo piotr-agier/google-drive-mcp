@@ -44,7 +44,7 @@ async function loadCredentialsWithFallback(): Promise<OAuthCredentials> {
       } else {
         throw new Error('Invalid legacy credentials format');
       }
-    } catch (legacyError) {
+    } catch (_legacyError) {
       // Generate helpful error message
       const errorMessage = generateCredentialsErrorMessage();
       throw new Error(`${errorMessage}\n\nOriginal error: ${fileError instanceof Error ? fileError.message : fileError}`);

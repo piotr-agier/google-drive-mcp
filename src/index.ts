@@ -11,7 +11,7 @@ import {
 import { google } from "googleapis";
 import type { drive_v3, calendar_v3 } from "googleapis";
 import { v4 as uuidv4 } from 'uuid';
-import { authenticate, runAuthCommand, AuthServer, initializeOAuth2Client } from './auth.js';
+import { authenticate, AuthServer, initializeOAuth2Client } from './auth.js';
 import { z } from 'zod';
 import { fileURLToPath } from 'url';
 import { readFileSync, createReadStream, existsSync, statSync } from 'fs';
@@ -207,12 +207,7 @@ async function checkFileExists(name: string, parentFolderId: string = 'root'): P
 // GOOGLE DOCS HELPER FUNCTIONS
 // -----------------------------------------------------------------------------
 
-// Helper function for hex color validation and conversion
-const hexColorRegex = /^#?([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/;
-function validateHexColor(color: string): boolean {
-  return hexColorRegex.test(color);
-}
-
+// Helper function for hex color conversion
 function hexToRgbColor(hex: string): { red: number; green: number; blue: number } | null {
   if (!hex) return null;
   let hexClean = hex.startsWith('#') ? hex.slice(1) : hex;
@@ -514,7 +509,7 @@ async function insertInlineImageHelper(
   // Validate URL format
   try {
     new URL(imageUrl);
-  } catch (e) {
+  } catch (_e) {
     throw new Error(`Invalid image URL format: ${imageUrl}`);
   }
 
@@ -3845,7 +3840,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // Add any additional slides from the request
         for (let i = 1; i < args.slides.length; i++) {
-          const slide = args.slides[i];
           const slideId = `slide_${Date.now()}_${i}`;
           
           requests.push({

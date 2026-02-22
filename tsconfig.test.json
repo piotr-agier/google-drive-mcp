@@ -6,8 +6,7 @@
     "rootDir": "."
   },
   "include": [
-    "src/download-file.ts",
-    "src/utils.ts",
+    "src/**/*.ts",
     "test/**/*.ts"
   ],
   "exclude": [

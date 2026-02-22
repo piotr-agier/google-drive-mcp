@@ -1,0 +1,241 @@
+import assert from 'node:assert/strict';
+import { describe, it, before, after, beforeEach } from 'node:test';
+import { setupTestServer, callTool, type TestContext } from '../helpers/setup-server.js';
+
+describe('Slides tools', () => {
+  let ctx: TestContext;
+
+  before(async () => { ctx = await setupTestServer(); });
+  after(async () => { await ctx.cleanup(); });
+  beforeEach(() => {
+    ctx.mocks.drive.tracker.reset();
+    ctx.mocks.slides.tracker.reset();
+    ctx.mocks.docs.tracker.reset();
+    // Reset to default impls
+    ctx.mocks.slides.service.presentations.get._resetImpl();
+    ctx.mocks.slides.service.presentations.batchUpdate._resetImpl();
+    ctx.mocks.slides.service.presentations.pages.get._resetImpl();
+    ctx.mocks.docs.service.documents.get._resetImpl();
+  });
+
+  // --- createGoogleSlides ---
+  describe('createGoogleSlides', () => {
+    it('happy path', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({ data: { files: [] } }));
+      ctx.mocks.slides.service.presentations.create._setImpl(async () => ({
+        data: { presentationId: 'pres-new' },
+      }));
+      const res = await callTool(ctx.client, 'createGoogleSlides', {
+        name: 'My Presentation',
+        slides: [{ title: 'Slide 1', content: 'Content 1' }],
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('My Presentation'));
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'createGoogleSlides', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- updateGoogleSlides ---
+  describe('updateGoogleSlides', () => {
+    it('happy path', async () => {
+      const res = await callTool(ctx.client, 'updateGoogleSlides', {
+        presentationId: 'pres-1',
+        slides: [{ title: 'Updated Title', content: 'Updated Content' }],
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Updated'));
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'updateGoogleSlides', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- getGoogleDocContent ---
+  describe('getGoogleDocContent', () => {
+    it('happy path', async () => {
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Document content'));
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'getGoogleDocContent', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- getGoogleSlidesContent ---
+  describe('getGoogleSlidesContent', () => {
+    it('happy path', async () => {
+      const res = await callTool(ctx.client, 'getGoogleSlidesContent', { presentationId: 'pres-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Presentation content'));
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'getGoogleSlidesContent', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- formatGoogleSlidesText ---
+  describe('formatGoogleSlidesText', () => {
+    it('happy path', async () => {
+      const res = await callTool(ctx.client, 'formatGoogleSlidesText', {
+        presentationId: 'pres-1', objectId: 'title-1', bold: true,
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('formatting'));
+    });
+
+    it('error when no formatting specified', async () => {
+      const res = await callTool(ctx.client, 'formatGoogleSlidesText', {
+        presentationId: 'pres-1', objectId: 'title-1',
+      });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.includes('No formatting'));
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'formatGoogleSlidesText', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- formatGoogleSlidesParagraph ---
+  describe('formatGoogleSlidesParagraph', () => {
+    it('happy path', async () => {
+      const res = await callTool(ctx.client, 'formatGoogleSlidesParagraph', {
+        presentationId: 'pres-1', objectId: 'title-1', alignment: 'CENTER',
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('paragraph formatting'));
+    });
+
+    it('error when no formatting specified', async () => {
+      const res = await callTool(ctx.client, 'formatGoogleSlidesParagraph', {
+        presentationId: 'pres-1', objectId: 'title-1',
+      });
+      assert.equal(res.isError, true);
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'formatGoogleSlidesParagraph', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- styleGoogleSlidesShape ---
+  describe('styleGoogleSlidesShape', () => {
+    it('happy path', async () => {
+      const res = await callTool(ctx.client, 'styleGoogleSlidesShape', {
+        presentationId: 'pres-1', objectId: 'shape-1',
+        backgroundColor: { red: 1, green: 0, blue: 0 },
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('styling'));
+    });
+
+    it('error when no styling specified', async () => {
+      const res = await callTool(ctx.client, 'styleGoogleSlidesShape', {
+        presentationId: 'pres-1', objectId: 'shape-1',
+      });
+      assert.equal(res.isError, true);
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'styleGoogleSlidesShape', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- setGoogleSlidesBackground ---
+  describe('setGoogleSlidesBackground', () => {
+    it('happy path', async () => {
+      const res = await callTool(ctx.client, 'setGoogleSlidesBackground', {
+        presentationId: 'pres-1',
+        pageObjectIds: ['slide-1'],
+        backgroundColor: { red: 0, green: 0, blue: 1 },
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('background'));
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'setGoogleSlidesBackground', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- createGoogleSlidesTextBox ---
+  describe('createGoogleSlidesTextBox', () => {
+    it('happy path', async () => {
+      const res = await callTool(ctx.client, 'createGoogleSlidesTextBox', {
+        presentationId: 'pres-1', pageObjectId: 'slide-1',
+        text: 'Hello', x: 100, y: 100, width: 300, height: 50,
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('text box'));
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'createGoogleSlidesTextBox', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- createGoogleSlidesShape ---
+  describe('createGoogleSlidesShape', () => {
+    it('happy path', async () => {
+      const res = await callTool(ctx.client, 'createGoogleSlidesShape', {
+        presentationId: 'pres-1', pageObjectId: 'slide-1',
+        shapeType: 'RECTANGLE', x: 100, y: 100, width: 200, height: 200,
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('RECTANGLE'));
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'createGoogleSlidesShape', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- getGoogleSlidesSpeakerNotes ---
+  describe('getGoogleSlidesSpeakerNotes', () => {
+    it('happy path', async () => {
+      const res = await callTool(ctx.client, 'getGoogleSlidesSpeakerNotes', {
+        presentationId: 'pres-1', slideIndex: 0,
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Speaker notes text'));
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'getGoogleSlidesSpeakerNotes', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- updateGoogleSlidesSpeakerNotes ---
+  describe('updateGoogleSlidesSpeakerNotes', () => {
+    it('happy path', async () => {
+      const res = await callTool(ctx.client, 'updateGoogleSlidesSpeakerNotes', {
+        presentationId: 'pres-1', slideIndex: 0, notes: 'New notes',
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('updated speaker notes'));
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'updateGoogleSlidesSpeakerNotes', {});
+      assert.equal(res.isError, true);
+    });
+  });
+});

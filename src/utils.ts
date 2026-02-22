@@ -2,6 +2,47 @@
 // Pure utility functions extracted from index.ts for testability
 // -----------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Calendar helpers
+// ---------------------------------------------------------------------------
+
+export interface CalendarEventOverrides {
+  summary?: string;
+  description?: string;
+  location?: string;
+  start?: any;
+  end?: any;
+  attendees?: string[];
+  [key: string]: any;
+}
+
+/**
+ * Build the event resource for an updateCalendarEvent call by merging user
+ * overrides onto the existing event while excluding read-only fields.
+ *
+ * Rules:
+ * - User overrides win when explicitly provided (even if empty string / empty array)
+ * - Existing values are preserved when the override is `undefined`
+ * - Attendees are mapped from `string[]` → `{email}[]`
+ * - Only mutable fields are included; read-only fields (id, kind, etag, htmlLink,
+ *   iCalUID, creator, organizer, sequence, …) are never forwarded
+ */
+export function buildCalendarEventUpdate(existing: any, overrides: CalendarEventOverrides): any {
+  return {
+    summary:     overrides.summary     !== undefined ? overrides.summary     : existing.summary,
+    description: overrides.description !== undefined ? overrides.description : existing.description,
+    location:    overrides.location    !== undefined ? overrides.location    : existing.location,
+    start:       overrides.start  || existing.start,
+    end:         overrides.end    || existing.end,
+    attendees:   overrides.attendees !== undefined
+      ? overrides.attendees.map((email: string) => ({ email }))
+      : existing.attendees,
+    recurrence:  existing.recurrence,
+    visibility:  existing.visibility,
+    reminders:   existing.reminders,
+  };
+}
+
 /**
  * Get file extension from a filename (lowercase).
  */

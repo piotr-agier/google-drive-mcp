@@ -42,9 +42,10 @@
         "auth": "node dist/index.js auth",
         "watch": "node scripts/build.js --watch",
         "prepare": "npm run build",
-        "test": "npm run test:unit",
-        "test:build": "shx rm -rf .tmp-test && tsc -p tsconfig.test.json",
-        "test:unit": "npm run test:build && node --test .tmp-test/test/**/*.test.js",
+        "test": "npm run test:build && MCP_TESTING=1 node --test .tmp-test/test/**/*.test.js",
+        "test:build": "shx rm -rf .tmp-test && tsc -p tsconfig.test.json && shx cp package.json .tmp-test/",
+        "test:unit": "npm run test:build && node --test .tmp-test/test/download-file.test.js .tmp-test/test/utils.test.js",
+        "test:integration": "npm run test:build && MCP_TESTING=1 node --test .tmp-test/test/integration/**/*.test.js .tmp-test/test/schema/**/*.test.js",
         "lint": "tsc --noEmit"
     },
     "dependencies": {

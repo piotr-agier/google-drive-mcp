@@ -346,7 +346,7 @@ describe('Docs tools', () => {
       assert.ok(text.includes('style=bold'), 'should include bold style');
       assert.ok(text.includes('color=#ff0000'), 'should include foreground color');
       assert.ok(text.includes('--- Fonts summary ---'), 'should include fonts summary');
-      assert.ok(text.includes('Roboto:'), 'fonts summary should list Roboto');
+      assert.ok(text.includes('Roboto: sizes [18 pt], styles [bold]'), 'fonts summary should list Roboto with sizes and styles');
     });
 
     it('excludes formatting by default', async () => {
@@ -444,7 +444,7 @@ describe('Docs tools', () => {
       assert.ok(text.includes('style=italic'), 'should show italic in Tab1');
       assert.ok(text.includes('style=bold'), 'should show bold in Tab2');
       assert.ok(text.includes('--- Fonts summary ---'), 'should include fonts summary');
-      assert.ok(text.includes('Georgia:'), 'fonts summary should aggregate Georgia');
+      assert.ok(text.includes('Georgia: sizes [10, 14 pt], styles [italic, bold]'), 'fonts summary should aggregate Georgia with sizes and styles');
     });
 
     it('includes tab headers only when multiple tabs', async () => {

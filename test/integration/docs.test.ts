@@ -305,6 +305,148 @@ describe('Docs tools', () => {
       assert.ok(!res.content[0].text.includes('=== Tab:'));
     });
 
+    it('includes formatting when includeFormatting is true', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Styled Doc',
+          tabs: [
+            {
+              tabProperties: { title: 'Main' },
+              documentTab: {
+                body: {
+                  content: [{
+                    paragraph: {
+                      elements: [{
+                        textRun: {
+                          content: 'Bold heading\n',
+                          textStyle: {
+                            bold: true,
+                            weightedFontFamily: { fontFamily: 'Roboto' },
+                            fontSize: { magnitude: 18 },
+                            foregroundColor: { color: { rgbColor: { red: 1, green: 0, blue: 0 } } },
+                          },
+                        },
+                        startIndex: 1,
+                        endIndex: 14,
+                      }],
+                    },
+                  }],
+                },
+              },
+            },
+          ],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1', includeFormatting: true });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text;
+      assert.ok(text.includes('font="Roboto"'), 'should include font name');
+      assert.ok(text.includes('size=18pt'), 'should include font size');
+      assert.ok(text.includes('style=bold'), 'should include bold style');
+      assert.ok(text.includes('color=#ff0000'), 'should include foreground color');
+      assert.ok(text.includes('--- Fonts summary ---'), 'should include fonts summary');
+      assert.ok(text.includes('Roboto:'), 'fonts summary should list Roboto');
+    });
+
+    it('excludes formatting by default', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Styled Doc',
+          tabs: [
+            {
+              tabProperties: { title: 'Main' },
+              documentTab: {
+                body: {
+                  content: [{
+                    paragraph: {
+                      elements: [{
+                        textRun: {
+                          content: 'Normal text\n',
+                          textStyle: {
+                            bold: true,
+                            weightedFontFamily: { fontFamily: 'Arial' },
+                            fontSize: { magnitude: 12 },
+                          },
+                        },
+                        startIndex: 1,
+                        endIndex: 13,
+                      }],
+                    },
+                  }],
+                },
+              },
+            },
+          ],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text;
+      assert.ok(!text.includes('font='), 'should not include font metadata');
+      assert.ok(!text.includes('--- Fonts summary ---'), 'should not include fonts summary');
+      assert.ok(text.includes('Normal text'), 'should still include text content');
+    });
+
+    it('includes formatting with multi-tab', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Multi-Tab Styled',
+          tabs: [
+            {
+              tabProperties: { title: 'Tab1' },
+              documentTab: {
+                body: {
+                  content: [{
+                    paragraph: {
+                      elements: [{
+                        textRun: {
+                          content: 'First\n',
+                          textStyle: { italic: true, weightedFontFamily: { fontFamily: 'Georgia' }, fontSize: { magnitude: 14 } },
+                        },
+                        startIndex: 1,
+                        endIndex: 7,
+                      }],
+                    },
+                  }],
+                },
+              },
+            },
+            {
+              tabProperties: { title: 'Tab2' },
+              documentTab: {
+                body: {
+                  content: [{
+                    paragraph: {
+                      elements: [{
+                        textRun: {
+                          content: 'Second\n',
+                          textStyle: { bold: true, weightedFontFamily: { fontFamily: 'Georgia' }, fontSize: { magnitude: 10 } },
+                        },
+                        startIndex: 1,
+                        endIndex: 8,
+                      }],
+                    },
+                  }],
+                },
+              },
+            },
+          ],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1', includeFormatting: true });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text;
+      assert.ok(text.includes('=== Tab: Tab1 ==='), 'should have tab headers');
+      assert.ok(text.includes('=== Tab: Tab2 ==='), 'should have tab headers');
+      assert.ok(text.includes('style=italic'), 'should show italic in Tab1');
+      assert.ok(text.includes('style=bold'), 'should show bold in Tab2');
+      assert.ok(text.includes('--- Fonts summary ---'), 'should include fonts summary');
+      assert.ok(text.includes('Georgia:'), 'fonts summary should aggregate Georgia');
+    });
+
     it('includes tab headers only when multiple tabs', async () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({
         data: {

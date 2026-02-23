@@ -28,6 +28,16 @@ function hexToRgbColor(hex: string): { red: number; green: number; blue: number 
   return { red: r, green: g, blue: b };
 }
 
+// Inverse of hexToRgbColor – converts Google Docs API color object to hex string
+function rgbColorToHex(color: any): string | null {
+  if (!color?.color?.rgbColor) return null;
+  const rgb = color.color.rgbColor;
+  const r = Math.round((rgb.red || 0) * 255);
+  const g = Math.round((rgb.green || 0) * 255);
+  const b = Math.round((rgb.blue || 0) * 255);
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+}
+
 // Execute batch update for Google Docs
 async function executeBatchUpdate(ctx: ToolContext, documentId: string, requests: any[]): Promise<any> {
   if (!requests || requests.length === 0) {
@@ -424,7 +434,8 @@ const UpdateGoogleDocSchema = z.object({
 });
 
 const GetGoogleDocContentSchema = z.object({
-  documentId: z.string().min(1, "Document ID is required")
+  documentId: z.string().min(1, "Document ID is required"),
+  includeFormatting: z.boolean().optional(),
 });
 
 const InsertTextSchema = z.object({
@@ -762,7 +773,8 @@ export const toolDefinitions: ToolDefinition[] = [
     inputSchema: {
       type: "object",
       properties: {
-        documentId: { type: "string", description: "Document ID" }
+        documentId: { type: "string", description: "Document ID" },
+        includeFormatting: { type: "boolean", description: "Include font, style, and color info for each text span (default: false)" },
       },
       required: ["documentId"]
     }
@@ -1008,6 +1020,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         return errorResponse(validation.error.errors[0].message);
       }
       const a = validation.data;
+      const withFormatting = a.includeFormatting === true;
 
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
       const document = await docs.documents.get({
@@ -1015,18 +1028,46 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         includeTabsContent: true,
       });
 
+      interface Segment {
+        text: string;
+        startIndex: number;
+        endIndex: number;
+        fontFamily?: string;
+        fontSize?: number;
+        bold?: boolean;
+        italic?: boolean;
+        underline?: boolean;
+        strikethrough?: boolean;
+        foregroundColor?: string | null;
+        backgroundColor?: string | null;
+      }
+
       // Helper to extract segments from body content
-      function extractSegments(bodyContent: any[]): Array<{text: string, startIndex: number, endIndex: number}> {
-        const segments: Array<{text: string, startIndex: number, endIndex: number}> = [];
+      function extractSegments(bodyContent: any[]): Segment[] {
+        const segments: Segment[] = [];
         for (const element of bodyContent) {
           if (element.paragraph?.elements) {
             for (const textElement of element.paragraph.elements) {
               if (textElement.textRun?.content && textElement.startIndex != null && textElement.endIndex != null) {
-                segments.push({
+                const seg: Segment = {
                   text: textElement.textRun.content,
                   startIndex: textElement.startIndex,
                   endIndex: textElement.endIndex,
-                });
+                };
+                if (withFormatting) {
+                  const ts = textElement.textRun.textStyle;
+                  if (ts) {
+                    if (ts.weightedFontFamily?.fontFamily) seg.fontFamily = ts.weightedFontFamily.fontFamily;
+                    if (ts.fontSize?.magnitude) seg.fontSize = ts.fontSize.magnitude;
+                    if (ts.bold) seg.bold = true;
+                    if (ts.italic) seg.italic = true;
+                    if (ts.underline) seg.underline = true;
+                    if (ts.strikethrough) seg.strikethrough = true;
+                    seg.foregroundColor = rgbColorToHex(ts.foregroundColor);
+                    seg.backgroundColor = rgbColorToHex(ts.backgroundColor);
+                  }
+                }
+                segments.push(seg);
               }
             }
           }
@@ -1035,19 +1076,62 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
 
       // Helper to format segments into indexed text
-      function formatSegments(segments: Array<{text: string, startIndex: number, endIndex: number}>): string {
+      function formatSegments(segments: Segment[]): string {
         let result = '';
         for (const segment of segments) {
-          const lines = segment.text.split('\n');
-          let offset = segment.startIndex;
-          for (const line of lines) {
-            if (line.trim()) {
-              result += `[${offset}-${offset + line.length}] ${line}\n`;
+          if (withFormatting && hasFormattingInfo(segment)) {
+            // Rich output: metadata line + indented text
+            const meta = buildMetaLine(segment);
+            const lines = segment.text.split('\n');
+            let offset = segment.startIndex;
+            for (const line of lines) {
+              if (line.trim()) {
+                result += `[${offset}-${offset + line.length}] ${meta}\n  ${line}\n`;
+              }
+              offset += line.length + 1;
             }
-            offset += line.length + 1; // +1 for the newline
+          } else {
+            const lines = segment.text.split('\n');
+            let offset = segment.startIndex;
+            for (const line of lines) {
+              if (line.trim()) {
+                result += `[${offset}-${offset + line.length}] ${line}\n`;
+              }
+              offset += line.length + 1;
+            }
           }
         }
         return result;
+      }
+
+      function hasFormattingInfo(seg: Segment): boolean {
+        return !!(seg.fontFamily || seg.fontSize || seg.bold || seg.italic || seg.underline || seg.strikethrough || seg.foregroundColor || seg.backgroundColor);
+      }
+
+      function buildMetaLine(seg: Segment): string {
+        const parts: string[] = [];
+        if (seg.fontFamily) parts.push(`font="${seg.fontFamily}"`);
+        if (seg.fontSize) parts.push(`size=${seg.fontSize}pt`);
+        const styles: string[] = [];
+        if (seg.bold) styles.push('bold');
+        if (seg.italic) styles.push('italic');
+        if (seg.underline) styles.push('underline');
+        if (seg.strikethrough) styles.push('strikethrough');
+        if (styles.length > 0) parts.push(`style=${styles.join(',')}`);
+        if (seg.foregroundColor) parts.push(`color=${seg.foregroundColor}`);
+        if (seg.backgroundColor) parts.push(`bg=${seg.backgroundColor}`);
+        return parts.join(', ');
+      }
+
+      // Accumulate font usage across all segments
+      const fontUsage: Map<string, number> = new Map();
+      function trackFonts(segments: Segment[]) {
+        if (!withFormatting) return;
+        for (const seg of segments) {
+          if (seg.fontFamily) {
+            fontUsage.set(seg.fontFamily, (fontUsage.get(seg.fontFamily) || 0) + (seg.endIndex - seg.startIndex));
+          }
+        }
       }
 
       const tabs = (document.data as any).tabs as any[] | undefined;
@@ -1062,6 +1146,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           formattedContent += `=== Tab: ${title} ===\n`;
           if (bodyContent) {
             const segments = extractSegments(bodyContent);
+            trackFonts(segments);
             formattedContent += formatSegments(segments);
             if (segments.length > 0) {
               totalLength += segments[segments.length - 1].endIndex;
@@ -1074,6 +1159,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         const bodyContent = tabs[0].documentTab?.body?.content;
         if (bodyContent) {
           const segments = extractSegments(bodyContent);
+          trackFonts(segments);
           formattedContent += formatSegments(segments);
           totalLength = segments.length > 0 ? segments[segments.length - 1].endIndex : 0;
         }
@@ -1082,8 +1168,17 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         const bodyContent = document.data.body?.content;
         if (bodyContent) {
           const segments = extractSegments(bodyContent);
+          trackFonts(segments);
           formattedContent += formatSegments(segments);
           totalLength = segments.length > 0 ? segments[segments.length - 1].endIndex : 0;
+        }
+      }
+
+      if (withFormatting && fontUsage.size > 0) {
+        formattedContent += '\n--- Fonts summary ---\n';
+        const sorted = [...fontUsage.entries()].sort((a, b) => b[1] - a[1]);
+        for (const [font, chars] of sorted) {
+          formattedContent += `${font}: ${chars} characters\n`;
         }
       }
 

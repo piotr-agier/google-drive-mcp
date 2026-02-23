@@ -1124,12 +1124,23 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
 
       // Accumulate font usage across all segments
-      const fontUsage: Map<string, number> = new Map();
+      interface FontInfo { sizes: Set<number>; styles: Set<string>; charCount: number }
+      const fontUsage: Map<string, FontInfo> = new Map();
       function trackFonts(segments: Segment[]) {
         if (!withFormatting) return;
         for (const seg of segments) {
           if (seg.fontFamily) {
-            fontUsage.set(seg.fontFamily, (fontUsage.get(seg.fontFamily) || 0) + (seg.endIndex - seg.startIndex));
+            let info = fontUsage.get(seg.fontFamily);
+            if (!info) {
+              info = { sizes: new Set(), styles: new Set(), charCount: 0 };
+              fontUsage.set(seg.fontFamily, info);
+            }
+            if (seg.fontSize) info.sizes.add(seg.fontSize);
+            if (seg.bold) info.styles.add('bold');
+            if (seg.italic) info.styles.add('italic');
+            if (seg.underline) info.styles.add('underline');
+            if (seg.strikethrough) info.styles.add('strikethrough');
+            info.charCount += seg.endIndex - seg.startIndex;
           }
         }
       }
@@ -1176,9 +1187,11 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
 
       if (withFormatting && fontUsage.size > 0) {
         formattedContent += '\n--- Fonts summary ---\n';
-        const sorted = [...fontUsage.entries()].sort((a, b) => b[1] - a[1]);
-        for (const [font, chars] of sorted) {
-          formattedContent += `${font}: ${chars} characters\n`;
+        const sorted = [...fontUsage.entries()].sort((a, b) => b[1].charCount - a[1].charCount);
+        for (const [font, info] of sorted) {
+          const sizesStr = info.sizes.size > 0 ? [...info.sizes].sort((a, b) => a - b).join(', ') + ' pt' : 'default size';
+          const stylesStr = info.styles.size > 0 ? [...info.styles].join(', ') : 'normal';
+          formattedContent += `${font}: sizes [${sizesStr}], styles [${stylesStr}], ~${info.charCount} chars\n`;
         }
       }
 

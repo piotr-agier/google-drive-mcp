@@ -167,6 +167,39 @@ describe('Docs tools', () => {
       const res = await callTool(ctx.client, 'listComments', {});
       assert.equal(res.isError, true);
     });
+
+    it('passes pagination params', async () => {
+      ctx.mocks.drive.service.comments.list._setImpl(async () => ({
+        data: { comments: [{ id: 'c1', content: 'Hi', author: { displayName: 'User' }, createdTime: '2025-01-01' }] },
+      }));
+      await callTool(ctx.client, 'listComments', { documentId: 'doc-1', pageSize: 10, pageToken: 'tok' });
+      const calls = ctx.mocks.drive.tracker.getCalls('comments.list');
+      const lastArgs = calls[calls.length - 1].args[0];
+      assert.equal(lastArgs.pageSize, 10);
+      assert.equal(lastArgs.pageToken, 'tok');
+    });
+
+    it('returns nextPageToken', async () => {
+      ctx.mocks.drive.service.comments.list._setImpl(async () => ({
+        data: {
+          comments: [{ id: 'c1', content: 'Hi', author: { displayName: 'User' }, createdTime: '2025-01-01' }],
+          nextPageToken: 'next-page',
+        },
+      }));
+      const res = await callTool(ctx.client, 'listComments', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('next-page'));
+    });
+
+    it('passes includeDeleted', async () => {
+      ctx.mocks.drive.service.comments.list._setImpl(async () => ({
+        data: { comments: [] },
+      }));
+      await callTool(ctx.client, 'listComments', { documentId: 'doc-1', includeDeleted: true });
+      const calls = ctx.mocks.drive.tracker.getCalls('comments.list');
+      const lastArgs = calls[calls.length - 1].args[0];
+      assert.equal(lastArgs.includeDeleted, true);
+    });
   });
 
   // --- getComment ---
@@ -228,6 +261,74 @@ describe('Docs tools', () => {
   });
 
   // --- deleteComment ---
+  // --- getGoogleDocContent ---
+  describe('getGoogleDocContent', () => {
+    it('reads multi-tab document', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Multi-Tab Doc',
+          tabs: [
+            {
+              tabProperties: { title: 'Tab1' },
+              documentTab: {
+                body: {
+                  content: [{ paragraph: { elements: [{ textRun: { content: 'First tab\n' }, startIndex: 1, endIndex: 11 }] } }],
+                },
+              },
+            },
+            {
+              tabProperties: { title: 'Tab2' },
+              documentTab: {
+                body: {
+                  content: [{ paragraph: { elements: [{ textRun: { content: 'Second tab\n' }, startIndex: 1, endIndex: 12 }] } }],
+                },
+              },
+            },
+          ],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('=== Tab: Tab1 ==='));
+      assert.ok(res.content[0].text.includes('=== Tab: Tab2 ==='));
+      assert.ok(res.content[0].text.includes('First tab'));
+      assert.ok(res.content[0].text.includes('Second tab'));
+    });
+
+    it('falls back to body for single-tab doc', async () => {
+      // Default mock has no tabs array, just body.content
+      ctx.mocks.docs.service.documents.get._resetImpl();
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Hello World'));
+      assert.ok(!res.content[0].text.includes('=== Tab:'));
+    });
+
+    it('includes tab headers only when multiple tabs', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Single-Tab Doc',
+          tabs: [
+            {
+              tabProperties: { title: 'Only Tab' },
+              documentTab: {
+                body: {
+                  content: [{ paragraph: { elements: [{ textRun: { content: 'Content here\n' }, startIndex: 1, endIndex: 14 }] } }],
+                },
+              },
+            },
+          ],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Content here'));
+      assert.ok(!res.content[0].text.includes('=== Tab:'));
+    });
+  });
+
   describe('deleteComment', () => {
     it('happy path', async () => {
       const res = await callTool(ctx.client, 'deleteComment', { documentId: 'doc-1', commentId: 'c1' });

@@ -487,7 +487,10 @@ const ApplyParagraphStyleSchema = z.object({
 });
 
 const ListCommentsSchema = z.object({
-  documentId: z.string().min(1, "Document ID is required")
+  documentId: z.string().min(1, "Document ID is required"),
+  includeDeleted: z.boolean().optional(),
+  pageSize: z.number().int().min(1).max(100).optional(),
+  pageToken: z.string().optional(),
 });
 
 const GetCommentSchema = z.object({
@@ -694,7 +697,10 @@ export const toolDefinitions: ToolDefinition[] = [
     inputSchema: {
       type: "object",
       properties: {
-        documentId: { type: "string", description: "The document ID" }
+        documentId: { type: "string", description: "The document ID" },
+        includeDeleted: { type: "boolean", description: "Whether to include deleted comments (default: false)" },
+        pageSize: { type: "number", description: "Max comments to return (1-100, default: 100)" },
+        pageToken: { type: "string", description: "Token for next page of results" },
       },
       required: ["documentId"]
     }
@@ -1004,41 +1010,83 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const a = validation.data;
 
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-      const document = await docs.documents.get({ documentId: a.documentId });
+      const document = await docs.documents.get({
+        documentId: a.documentId,
+        includeTabsContent: true,
+      });
 
-      const segments: Array<{text: string, startIndex: number, endIndex: number}> = [];
-
-      // Extract text content with indices from the API
-      if (document.data.body?.content) {
-        for (const element of document.data.body.content) {
+      // Helper to extract segments from body content
+      function extractSegments(bodyContent: any[]): Array<{text: string, startIndex: number, endIndex: number}> {
+        const segments: Array<{text: string, startIndex: number, endIndex: number}> = [];
+        for (const element of bodyContent) {
           if (element.paragraph?.elements) {
             for (const textElement of element.paragraph.elements) {
               if (textElement.textRun?.content && textElement.startIndex != null && textElement.endIndex != null) {
                 segments.push({
                   text: textElement.textRun.content,
                   startIndex: textElement.startIndex,
-                  endIndex: textElement.endIndex
+                  endIndex: textElement.endIndex,
                 });
               }
             }
           }
         }
+        return segments;
       }
 
-      // Format the response to show text with indices
-      let formattedContent = 'Document content with indices:\n\n';
-      for (const segment of segments) {
-        const lines = segment.text.split('\n');
-        let offset = segment.startIndex;
-        for (const line of lines) {
-          if (line.trim()) {
-            formattedContent += `[${offset}-${offset + line.length}] ${line}\n`;
+      // Helper to format segments into indexed text
+      function formatSegments(segments: Array<{text: string, startIndex: number, endIndex: number}>): string {
+        let result = '';
+        for (const segment of segments) {
+          const lines = segment.text.split('\n');
+          let offset = segment.startIndex;
+          for (const line of lines) {
+            if (line.trim()) {
+              result += `[${offset}-${offset + line.length}] ${line}\n`;
+            }
+            offset += line.length + 1; // +1 for the newline
           }
-          offset += line.length + 1; // +1 for the newline
+        }
+        return result;
+      }
+
+      const tabs = (document.data as any).tabs as any[] | undefined;
+      let formattedContent = 'Document content with indices:\n\n';
+      let totalLength = 0;
+
+      if (tabs && tabs.length > 1) {
+        // Multi-tab document
+        for (const tab of tabs) {
+          const title = tab.tabProperties?.title || 'Untitled';
+          const bodyContent = tab.documentTab?.body?.content;
+          formattedContent += `=== Tab: ${title} ===\n`;
+          if (bodyContent) {
+            const segments = extractSegments(bodyContent);
+            formattedContent += formatSegments(segments);
+            if (segments.length > 0) {
+              totalLength += segments[segments.length - 1].endIndex;
+            }
+          }
+          formattedContent += '\n';
+        }
+      } else if (tabs && tabs.length === 1) {
+        // Single-tab document via tabs API
+        const bodyContent = tabs[0].documentTab?.body?.content;
+        if (bodyContent) {
+          const segments = extractSegments(bodyContent);
+          formattedContent += formatSegments(segments);
+          totalLength = segments.length > 0 ? segments[segments.length - 1].endIndex : 0;
+        }
+      } else {
+        // Fallback to legacy body content
+        const bodyContent = document.data.body?.content;
+        if (bodyContent) {
+          const segments = extractSegments(bodyContent);
+          formattedContent += formatSegments(segments);
+          totalLength = segments.length > 0 ? segments[segments.length - 1].endIndex : 0;
         }
       }
 
-      const totalLength = segments.length > 0 ? segments[segments.length - 1].endIndex : 0;
       return {
         content: [{
           type: "text",
@@ -1419,11 +1467,14 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       // Use Drive API v3 for comments
       const response = await ctx.getDrive().comments.list({
         fileId: a.documentId,
-        fields: 'comments(id,content,quotedFileContent,author,createdTime,resolved,replies)',
-        pageSize: 100
+        fields: 'comments(id,content,quotedFileContent,author,createdTime,resolved,replies),nextPageToken',
+        pageSize: a.pageSize || 100,
+        pageToken: a.pageToken,
+        includeDeleted: a.includeDeleted || false,
       });
 
       const comments = response.data.comments || [];
+      const nextPageToken = response.data.nextPageToken;
 
       if (comments.length === 0) {
         return {
@@ -1451,8 +1502,13 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         return result;
       }).join('\n\n');
 
+      let text = `Found ${comments.length} comment${comments.length === 1 ? '' : 's'}:\n\n${formattedComments}`;
+      if (nextPageToken) {
+        text += `\n\nMore comments available. Use pageToken: "${nextPageToken}" to fetch the next page.`;
+      }
+
       return {
-        content: [{ type: "text", text: `Found ${comments.length} comment${comments.length === 1 ? '' : 's'}:\n\n${formattedComments}` }],
+        content: [{ type: "text", text }],
         isError: false
       };
     }

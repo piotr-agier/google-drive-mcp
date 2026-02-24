@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import { describe, it, before, after } from 'node:test';
 import { setupTestServer, type TestContext } from '../helpers/setup-server.js';
 
-const EXPECTED_TOOL_COUNT = 62;
+const EXPECTED_TOOL_COUNT = 70;
 
 const EXPECTED_TOOLS = [
   'search', 'createTextFile', 'updateTextFile', 'createFolder', 'listFolder', 'listSharedDrives',
   'deleteItem', 'renameItem', 'moveItem',
   'createGoogleDoc', 'updateGoogleDoc', 'insertText', 'deleteRange',
-  'readGoogleDoc', 'listDocumentTabs', 'applyTextStyle', 'applyParagraphStyle',
+  'readGoogleDoc', 'listDocumentTabs', 'applyTextStyle', 'applyParagraphStyle', 'formatGoogleDocText', 'formatGoogleDocParagraph', 'findAndReplaceInDoc',
   'listComments', 'getComment', 'addComment', 'replyToComment', 'deleteComment',
   'createGoogleSheet', 'updateGoogleSheet', 'getGoogleSheetContent',
   'formatGoogleSheetCells', 'formatGoogleSheetText', 'formatGoogleSheetNumbers',
@@ -21,7 +21,7 @@ const EXPECTED_TOOLS = [
   'styleGoogleSlidesShape', 'setGoogleSlidesBackground',
   'createGoogleSlidesTextBox', 'createGoogleSlidesShape',
   'getGoogleSlidesSpeakerNotes', 'updateGoogleSlidesSpeakerNotes',
-  'uploadFile', 'downloadFile',
+  'uploadFile', 'downloadFile', 'listPermissions', 'addPermission', 'updatePermission', 'removePermission', 'shareFile',
   'listCalendars', 'getCalendarEvents', 'getCalendarEvent',
   'createCalendarEvent', 'updateCalendarEvent', 'deleteCalendarEvent',
   'insertTable', 'editTableCell', 'insertImageFromUrl', 'insertLocalImage',

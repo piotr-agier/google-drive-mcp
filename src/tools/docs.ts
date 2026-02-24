@@ -575,6 +575,13 @@ const GetDocumentInfoSchema = z.object({
   documentId: z.string().min(1, "Document ID is required")
 });
 
+const FindAndReplaceInDocSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  findText: z.string().min(1, "findText is required"),
+  replaceText: z.string(),
+  matchCase: z.boolean().optional().default(false),
+});
+
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
@@ -702,6 +709,67 @@ export const toolDefinitions: ToolDefinition[] = [
         keepWithNext: { type: "boolean", description: "Keep with next paragraph" }
       },
       required: ["documentId"]
+    }
+  },
+  {
+    name: "formatGoogleDocText",
+    description: "Compatibility alias for applyTextStyle.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentId: { type: "string", description: "The document ID" },
+        startIndex: { type: "number", description: "Start index (1-based) - use with endIndex" },
+        endIndex: { type: "number", description: "End index (exclusive) - use with startIndex" },
+        textToFind: { type: "string", description: "Text to find and format (alternative to indices)" },
+        matchInstance: { type: "number", description: "Which instance of textToFind (default: 1)" },
+        bold: { type: "boolean", description: "Make text bold" },
+        italic: { type: "boolean", description: "Make text italic" },
+        underline: { type: "boolean", description: "Underline text" },
+        strikethrough: { type: "boolean", description: "Strikethrough text" },
+        fontSize: { type: "number", description: "Font size in points" },
+        fontFamily: { type: "string", description: "Font family name" },
+        foregroundColor: { type: "string", description: "Hex color (e.g., #FF0000)" },
+        backgroundColor: { type: "string", description: "Hex background color" },
+        linkUrl: { type: "string", description: "URL for hyperlink" }
+      },
+      required: ["documentId"]
+    }
+  },
+  {
+    name: "formatGoogleDocParagraph",
+    description: "Compatibility alias for applyParagraphStyle.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentId: { type: "string", description: "The document ID" },
+        startIndex: { type: "number", description: "Start index (1-based) - use with endIndex" },
+        endIndex: { type: "number", description: "End index (exclusive) - use with startIndex" },
+        textToFind: { type: "string", description: "Text within the target paragraph" },
+        matchInstance: { type: "number", description: "Which instance of textToFind (default: 1)" },
+        indexWithinParagraph: { type: "number", description: "Any index within the target paragraph" },
+        alignment: { type: "string", enum: ["START", "END", "CENTER", "JUSTIFIED"], description: "Text alignment" },
+        indentStart: { type: "number", description: "Left indent in points" },
+        indentEnd: { type: "number", description: "Right indent in points" },
+        spaceAbove: { type: "number", description: "Space above in points" },
+        spaceBelow: { type: "number", description: "Space below in points" },
+        namedStyleType: { type: "string", enum: ["NORMAL_TEXT", "TITLE", "SUBTITLE", "HEADING_1", "HEADING_2", "HEADING_3", "HEADING_4", "HEADING_5", "HEADING_6"], description: "Named paragraph style" },
+        keepWithNext: { type: "boolean", description: "Keep with next paragraph" }
+      },
+      required: ["documentId"]
+    }
+  },
+  {
+    name: "findAndReplaceInDoc",
+    description: "Find and replace text across a Google Document",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentId: { type: "string", description: "The document ID" },
+        findText: { type: "string", description: "Text to find" },
+        replaceText: { type: "string", description: "Replacement text" },
+        matchCase: { type: "boolean", description: "Case-sensitive match (default: false)" }
+      },
+      required: ["documentId", "findText", "replaceText"]
     }
   },
   {
@@ -1461,7 +1529,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
     // TEXT & PARAGRAPH STYLE
     // =========================================================================
 
-    case "applyTextStyle": {
+    case "applyTextStyle":
+    case "formatGoogleDocText": {
       const validation = ApplyTextStyleSchema.safeParse(args);
       if (!validation.success) {
         return errorResponse(validation.error.errors[0].message);
@@ -1524,7 +1593,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       };
     }
 
-    case "applyParagraphStyle": {
+    case "applyParagraphStyle":
+    case "formatGoogleDocParagraph": {
       const validation = ApplyParagraphStyleSchema.safeParse(args);
       if (!validation.success) {
         return errorResponse(validation.error.errors[0].message);
@@ -1594,6 +1664,38 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       return {
         content: [{ type: "text", text: `Successfully applied paragraph style to range ${startIndex}-${endIndex}` }],
         isError: false
+      };
+    }
+
+    case "findAndReplaceInDoc": {
+      const validation = FindAndReplaceInDocSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const a = validation.data;
+
+      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+      const response = await docs.documents.batchUpdate({
+        documentId: a.documentId,
+        requestBody: {
+          requests: [
+            {
+              replaceAllText: {
+                containsText: {
+                  text: a.findText,
+                  matchCase: a.matchCase,
+                },
+                replaceText: a.replaceText,
+              },
+            },
+          ],
+        },
+      });
+
+      const occurrences = response.data.replies?.[0]?.replaceAllText?.occurrencesChanged ?? 0;
+      return {
+        content: [{ type: 'text', text: `Replaced ${occurrences} occurrence(s) of "${a.findText}".` }],
+        isError: false,
       };
     }
 

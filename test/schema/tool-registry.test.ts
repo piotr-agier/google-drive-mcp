@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { describe, it, before, after } from 'node:test';
 import { setupTestServer, type TestContext } from '../helpers/setup-server.js';
 
-const EXPECTED_TOOL_COUNT = 61;
+const EXPECTED_TOOL_COUNT = 62;
 
 const EXPECTED_TOOLS = [
-  'search', 'createTextFile', 'updateTextFile', 'createFolder', 'listFolder',
+  'search', 'createTextFile', 'updateTextFile', 'createFolder', 'listFolder', 'listSharedDrives',
   'deleteItem', 'renameItem', 'moveItem',
   'createGoogleDoc', 'updateGoogleDoc', 'insertText', 'deleteRange',
   'readGoogleDoc', 'listDocumentTabs', 'applyTextStyle', 'applyParagraphStyle',

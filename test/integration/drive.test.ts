@@ -102,6 +102,19 @@ describe('Drive tools', () => {
     });
   });
 
+  // --- listSharedDrives ---
+  describe('listSharedDrives', () => {
+    it('happy path', async () => {
+      ctx.mocks.drive.service.drives.list._setImpl(async () => ({
+        data: { drives: [{ id: 'd1', name: 'Engineering Shared Drive', hidden: false }] },
+      }));
+      const res = await callTool(ctx.client, 'listSharedDrives', {});
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Engineering Shared Drive'));
+      assert.ok(res.content[0].text.includes('d1'));
+    });
+  });
+
   // --- deleteItem ---
   describe('deleteItem', () => {
     it('happy path', async () => {

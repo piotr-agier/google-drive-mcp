@@ -65,13 +65,16 @@ export function createDriveMock() {
     create: stub(tracker, 'comments.create', { id: 'comment-new', content: 'new comment' }),
     delete: stub(tracker, 'comments.delete', {}),
   };
+  const drives = {
+    list: stub(tracker, 'drives.list', { drives: [] }),
+  };
   const replies = {
     create: stub(tracker, 'replies.create', { id: 'reply-1', content: 'reply text' }),
   };
   const permissions = {
     create: stub(tracker, 'permissions.create', {}),
   };
-  return { service: { files, comments, replies, permissions }, tracker };
+  return { service: { files, comments, replies, permissions, drives }, tracker };
 }
 
 // ---------------------------------------------------------------------------

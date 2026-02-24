@@ -149,7 +149,7 @@ export const toolDefinitions: ToolDefinition[] = [
           description: "Data as array of arrays",
           items: { type: "array", items: { type: "string" } }
         },
-        parentFolderId: { type: "string", description: "Parent folder ID (defaults to root)", optional: true },
+        parentFolderId: { type: "string", description: "Parent folder ID (defaults to root)" },
         valueInputOption: {
           type: "string",
           enum: ["RAW", "USER_ENTERED"],
@@ -205,29 +205,25 @@ export const toolDefinitions: ToolDefinition[] = [
           type: "object",
           description: "Background color (RGB values 0-1)",
           properties: {
-            red: { type: "number", optional: true },
-            green: { type: "number", optional: true },
-            blue: { type: "number", optional: true }
-          },
-          optional: true
+            red: { type: "number" },
+            green: { type: "number" },
+            blue: { type: "number" }
+          }
         },
         horizontalAlignment: {
           type: "string",
           description: "Horizontal alignment",
-          enum: ["LEFT", "CENTER", "RIGHT"],
-          optional: true
+          enum: ["LEFT", "CENTER", "RIGHT"]
         },
         verticalAlignment: {
           type: "string",
           description: "Vertical alignment",
-          enum: ["TOP", "MIDDLE", "BOTTOM"],
-          optional: true
+          enum: ["TOP", "MIDDLE", "BOTTOM"]
         },
         wrapStrategy: {
           type: "string",
           description: "Text wrapping",
-          enum: ["OVERFLOW_CELL", "CLIP", "WRAP"],
-          optional: true
+          enum: ["OVERFLOW_CELL", "CLIP", "WRAP"]
         }
       },
       required: ["spreadsheetId", "range"]
@@ -241,21 +237,20 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         spreadsheetId: { type: "string", description: "Spreadsheet ID" },
         range: { type: "string", description: "Range to format (e.g., 'A1:C10')" },
-        bold: { type: "boolean", description: "Make text bold", optional: true },
-        italic: { type: "boolean", description: "Make text italic", optional: true },
-        strikethrough: { type: "boolean", description: "Strikethrough text", optional: true },
-        underline: { type: "boolean", description: "Underline text", optional: true },
-        fontSize: { type: "number", description: "Font size in points", optional: true },
-        fontFamily: { type: "string", description: "Font family name", optional: true },
+        bold: { type: "boolean", description: "Make text bold" },
+        italic: { type: "boolean", description: "Make text italic" },
+        strikethrough: { type: "boolean", description: "Strikethrough text" },
+        underline: { type: "boolean", description: "Underline text" },
+        fontSize: { type: "number", description: "Font size in points" },
+        fontFamily: { type: "string", description: "Font family name" },
         foregroundColor: {
           type: "object",
           description: "Text color (RGB values 0-1)",
           properties: {
-            red: { type: "number", optional: true },
-            green: { type: "number", optional: true },
-            blue: { type: "number", optional: true }
-          },
-          optional: true
+            red: { type: "number" },
+            green: { type: "number" },
+            blue: { type: "number" }
+          }
         }
       },
       required: ["spreadsheetId", "range"]
@@ -276,8 +271,7 @@ export const toolDefinitions: ToolDefinition[] = [
         type: {
           type: "string",
           description: "Format type",
-          enum: ["NUMBER", "CURRENCY", "PERCENT", "DATE", "TIME", "DATE_TIME", "SCIENTIFIC"],
-          optional: true
+          enum: ["NUMBER", "CURRENCY", "PERCENT", "DATE", "TIME", "DATE_TIME", "SCIENTIFIC"]
         }
       },
       required: ["spreadsheetId", "range", "pattern"]
@@ -296,23 +290,22 @@ export const toolDefinitions: ToolDefinition[] = [
           description: "Border style",
           enum: ["SOLID", "DASHED", "DOTTED", "DOUBLE"]
         },
-        width: { type: "number", description: "Border width (1-3)", optional: true },
+        width: { type: "number", description: "Border width (1-3)" },
         color: {
           type: "object",
           description: "Border color (RGB values 0-1)",
           properties: {
-            red: { type: "number", optional: true },
-            green: { type: "number", optional: true },
-            blue: { type: "number", optional: true }
-          },
-          optional: true
+            red: { type: "number" },
+            green: { type: "number" },
+            blue: { type: "number" }
+          }
         },
-        top: { type: "boolean", description: "Apply to top border", optional: true },
-        bottom: { type: "boolean", description: "Apply to bottom border", optional: true },
-        left: { type: "boolean", description: "Apply to left border", optional: true },
-        right: { type: "boolean", description: "Apply to right border", optional: true },
-        innerHorizontal: { type: "boolean", description: "Apply to inner horizontal borders", optional: true },
-        innerVertical: { type: "boolean", description: "Apply to inner vertical borders", optional: true }
+        top: { type: "boolean", description: "Apply to top border" },
+        bottom: { type: "boolean", description: "Apply to bottom border" },
+        left: { type: "boolean", description: "Apply to left border" },
+        right: { type: "boolean", description: "Apply to right border" },
+        innerHorizontal: { type: "boolean", description: "Apply to inner horizontal borders" },
+        innerVertical: { type: "boolean", description: "Apply to inner vertical borders" }
       },
       required: ["spreadsheetId", "range", "style"]
     }
@@ -361,27 +354,24 @@ export const toolDefinitions: ToolDefinition[] = [
             backgroundColor: {
               type: "object",
               properties: {
-                red: { type: "number", optional: true },
-                green: { type: "number", optional: true },
-                blue: { type: "number", optional: true }
-              },
-              optional: true
+                red: { type: "number" },
+                green: { type: "number" },
+                blue: { type: "number" }
+              }
             },
             textFormat: {
               type: "object",
               properties: {
-                bold: { type: "boolean", optional: true },
+                bold: { type: "boolean" },
                 foregroundColor: {
                   type: "object",
                   properties: {
-                    red: { type: "number", optional: true },
-                    green: { type: "number", optional: true },
-                    blue: { type: "number", optional: true }
-                  },
-                  optional: true
+                    red: { type: "number" },
+                    green: { type: "number" },
+                    blue: { type: "number" }
+                  }
                 }
-              },
-              optional: true
+              }
             }
           }
         }

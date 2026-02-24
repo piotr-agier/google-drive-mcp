@@ -121,7 +121,7 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         name: { type: "string", description: "File name (.txt or .md)" },
         content: { type: "string", description: "File content" },
-        parentFolderId: { type: "string", description: "Optional parent folder ID", optional: true }
+        parentFolderId: { type: "string", description: "Optional parent folder ID" }
       },
       required: ["name", "content"]
     }
@@ -134,7 +134,7 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         fileId: { type: "string", description: "ID of the file to update" },
         content: { type: "string", description: "New file content" },
-        name: { type: "string", description: "Optional new name (.txt or .md)", optional: true }
+        name: { type: "string", description: "Optional new name (.txt or .md)" }
       },
       required: ["fileId", "content"]
     }
@@ -146,7 +146,7 @@ export const toolDefinitions: ToolDefinition[] = [
       type: "object",
       properties: {
         name: { type: "string", description: "Folder name" },
-        parent: { type: "string", description: "Optional parent folder ID or path", optional: true }
+        parent: { type: "string", description: "Optional parent folder ID or path" }
       },
       required: ["name"]
     }
@@ -157,9 +157,9 @@ export const toolDefinitions: ToolDefinition[] = [
     inputSchema: {
       type: "object",
       properties: {
-        folderId: { type: "string", description: "Folder ID", optional: true },
-        pageSize: { type: "number", description: "Items to return (default 50, max 100)", optional: true },
-        pageToken: { type: "string", description: "Token for next page", optional: true }
+        folderId: { type: "string", description: "Folder ID" },
+        pageSize: { type: "number", description: "Items to return (default 50, max 100)" },
+        pageToken: { type: "string", description: "Token for next page" }
       }
     }
   },
@@ -193,7 +193,7 @@ export const toolDefinitions: ToolDefinition[] = [
       type: "object",
       properties: {
         itemId: { type: "string", description: "ID of the item to move" },
-        destinationFolderId: { type: "string", description: "Destination folder ID", optional: true }
+        destinationFolderId: { type: "string", description: "Destination folder ID" }
       },
       required: ["itemId"]
     }
@@ -218,9 +218,9 @@ export const toolDefinitions: ToolDefinition[] = [
       type: "object",
       properties: {
         localPath: { type: "string", description: "Absolute path to the local file to upload" },
-        name: { type: "string", description: "File name in Drive (defaults to local filename)", optional: true },
-        parentFolderId: { type: "string", description: "Parent folder ID or path (e.g., '/Work/Projects'). Creates folders if needed. Defaults to root.", optional: true },
-        mimeType: { type: "string", description: "MIME type (auto-detected from extension if omitted)", optional: true }
+        name: { type: "string", description: "File name in Drive (defaults to local filename)" },
+        parentFolderId: { type: "string", description: "Parent folder ID or path (e.g., '/Work/Projects'). Creates folders if needed. Defaults to root." },
+        mimeType: { type: "string", description: "MIME type (auto-detected from extension if omitted)" }
       },
       required: ["localPath"]
     }
@@ -235,13 +235,11 @@ export const toolDefinitions: ToolDefinition[] = [
         localPath: { type: "string", description: "Absolute local path to save the file (must start with /). Can be a directory (filename auto-resolved from Drive metadata) or a full file path. Path is normalized before use." },
         exportMimeType: {
           type: "string",
-          description: "For Google Workspace files: MIME type to export as (e.g., 'application/pdf', 'text/csv'). Auto-detected from file extension if omitted. Ignored for non-Workspace files.",
-          optional: true
+          description: "For Google Workspace files: MIME type to export as (e.g., 'application/pdf', 'text/csv'). Auto-detected from file extension if omitted. Ignored for non-Workspace files."
         },
         overwrite: {
           type: "boolean",
-          description: "Whether to overwrite if file already exists at localPath. When false (default), returns an error instead of replacing the file.",
-          optional: true
+          description: "Whether to overwrite if file already exists at localPath. When false (default), returns an error instead of replacing the file."
         }
       },
       required: ["fileId", "localPath"]

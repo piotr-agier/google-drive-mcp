@@ -147,7 +147,7 @@ export const toolDefinitions: ToolDefinition[] = [
             }
           }
         },
-        parentFolderId: { type: "string", description: "Parent folder ID (defaults to root)", optional: true }
+        parentFolderId: { type: "string", description: "Parent folder ID (defaults to root)" }
       },
       required: ["name", "slides"]
     }
@@ -181,7 +181,7 @@ export const toolDefinitions: ToolDefinition[] = [
       type: "object",
       properties: {
         presentationId: { type: "string", description: "Presentation ID" },
-        slideIndex: { type: "number", description: "Specific slide index (optional)", optional: true }
+        slideIndex: { type: "number", description: "Specific slide index (optional)" }
       },
       required: ["presentationId"]
     }
@@ -194,23 +194,22 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         presentationId: { type: "string", description: "Presentation ID" },
         objectId: { type: "string", description: "Object ID of the text element" },
-        startIndex: { type: "number", description: "Start index (0-based)", optional: true },
-        endIndex: { type: "number", description: "End index (0-based)", optional: true },
-        bold: { type: "boolean", description: "Make text bold", optional: true },
-        italic: { type: "boolean", description: "Make text italic", optional: true },
-        underline: { type: "boolean", description: "Underline text", optional: true },
-        strikethrough: { type: "boolean", description: "Strikethrough text", optional: true },
-        fontSize: { type: "number", description: "Font size in points", optional: true },
-        fontFamily: { type: "string", description: "Font family name", optional: true },
+        startIndex: { type: "number", description: "Start index (0-based)" },
+        endIndex: { type: "number", description: "End index (0-based)" },
+        bold: { type: "boolean", description: "Make text bold" },
+        italic: { type: "boolean", description: "Make text italic" },
+        underline: { type: "boolean", description: "Underline text" },
+        strikethrough: { type: "boolean", description: "Strikethrough text" },
+        fontSize: { type: "number", description: "Font size in points" },
+        fontFamily: { type: "string", description: "Font family name" },
         foregroundColor: {
           type: "object",
           description: "Text color (RGB values 0-1)",
           properties: {
-            red: { type: "number", optional: true },
-            green: { type: "number", optional: true },
-            blue: { type: "number", optional: true }
-          },
-          optional: true
+            red: { type: "number" },
+            green: { type: "number" },
+            blue: { type: "number" }
+          }
         }
       },
       required: ["presentationId", "objectId"]
@@ -227,15 +226,13 @@ export const toolDefinitions: ToolDefinition[] = [
         alignment: {
           type: "string",
           description: "Text alignment",
-          enum: ["START", "CENTER", "END", "JUSTIFIED"],
-          optional: true
+          enum: ["START", "CENTER", "END", "JUSTIFIED"]
         },
-        lineSpacing: { type: "number", description: "Line spacing multiplier", optional: true },
+        lineSpacing: { type: "number", description: "Line spacing multiplier" },
         bulletStyle: {
           type: "string",
           description: "Bullet style",
-          enum: ["NONE", "DISC", "ARROW", "SQUARE", "DIAMOND", "STAR", "NUMBERED"],
-          optional: true
+          enum: ["NONE", "DISC", "ARROW", "SQUARE", "DIAMOND", "STAR", "NUMBERED"]
         }
       },
       required: ["presentationId", "objectId"]
@@ -253,29 +250,26 @@ export const toolDefinitions: ToolDefinition[] = [
           type: "object",
           description: "Background color (RGBA values 0-1)",
           properties: {
-            red: { type: "number", optional: true },
-            green: { type: "number", optional: true },
-            blue: { type: "number", optional: true },
-            alpha: { type: "number", optional: true }
-          },
-          optional: true
+            red: { type: "number" },
+            green: { type: "number" },
+            blue: { type: "number" },
+            alpha: { type: "number" }
+          }
         },
         outlineColor: {
           type: "object",
           description: "Outline color (RGB values 0-1)",
           properties: {
-            red: { type: "number", optional: true },
-            green: { type: "number", optional: true },
-            blue: { type: "number", optional: true }
-          },
-          optional: true
+            red: { type: "number" },
+            green: { type: "number" },
+            blue: { type: "number" }
+          }
         },
-        outlineWeight: { type: "number", description: "Outline thickness in points", optional: true },
+        outlineWeight: { type: "number", description: "Outline thickness in points" },
         outlineDashStyle: {
           type: "string",
           description: "Outline dash style",
-          enum: ["SOLID", "DOT", "DASH", "DASH_DOT", "LONG_DASH", "LONG_DASH_DOT"],
-          optional: true
+          enum: ["SOLID", "DOT", "DASH", "DASH_DOT", "LONG_DASH", "LONG_DASH_DOT"]
         }
       },
       required: ["presentationId", "objectId"]
@@ -297,10 +291,10 @@ export const toolDefinitions: ToolDefinition[] = [
           type: "object",
           description: "Background color (RGBA values 0-1)",
           properties: {
-            red: { type: "number", optional: true },
-            green: { type: "number", optional: true },
-            blue: { type: "number", optional: true },
-            alpha: { type: "number", optional: true }
+            red: { type: "number" },
+            green: { type: "number" },
+            blue: { type: "number" },
+            alpha: { type: "number" }
           }
         }
       },
@@ -320,9 +314,9 @@ export const toolDefinitions: ToolDefinition[] = [
         y: { type: "number", description: "Y position in EMU" },
         width: { type: "number", description: "Width in EMU" },
         height: { type: "number", description: "Height in EMU" },
-        fontSize: { type: "number", description: "Font size in points", optional: true },
-        bold: { type: "boolean", description: "Make text bold", optional: true },
-        italic: { type: "boolean", description: "Make text italic", optional: true }
+        fontSize: { type: "number", description: "Font size in points" },
+        bold: { type: "boolean", description: "Make text bold" },
+        italic: { type: "boolean", description: "Make text italic" }
       },
       required: ["presentationId", "pageObjectId", "text", "x", "y", "width", "height"]
     }
@@ -348,12 +342,11 @@ export const toolDefinitions: ToolDefinition[] = [
           type: "object",
           description: "Fill color (RGBA values 0-1)",
           properties: {
-            red: { type: "number", optional: true },
-            green: { type: "number", optional: true },
-            blue: { type: "number", optional: true },
-            alpha: { type: "number", optional: true }
-          },
-          optional: true
+            red: { type: "number" },
+            green: { type: "number" },
+            blue: { type: "number" },
+            alpha: { type: "number" }
+          }
         }
       },
       required: ["presentationId", "pageObjectId", "shapeType", "x", "y", "width", "height"]

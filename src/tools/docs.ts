@@ -587,7 +587,7 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         name: { type: "string", description: "Doc name" },
         content: { type: "string", description: "Doc content" },
-        parentFolderId: { type: "string", description: "Parent folder ID", optional: true }
+        parentFolderId: { type: "string", description: "Parent folder ID" }
       },
       required: ["name", "content"]
     }

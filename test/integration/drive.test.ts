@@ -171,7 +171,6 @@ describe('Drive tools', () => {
   // --- listPermissions ---
   describe('listPermissions', () => {
     it('happy path', async () => {
-      ctx.mocks.drive.service.permissions.create._resetImpl();
       const res = await callTool(ctx.client, 'listPermissions', { fileId: 'file-1' });
       assert.equal(res.isError, false);
     });

@@ -362,6 +362,34 @@ Add the server to your Claude Desktop configuration:
   - `newName`: Name for the copied file (optional, defaults to "Copy of [original name]")
   - `parentFolderId`: Destination folder ID (optional, defaults to same location)
 
+#### Sharing and Permissions
+- **listPermissions** - List current sharing permissions on a file/folder
+  - `fileId`: File or folder ID
+
+- **addPermission** - Add a new permission to a file/folder
+  - `fileId`: File or folder ID
+  - `type`: Permission target type (`user`, `group`, `domain`, `anyone`)
+  - `role`: Permission role (`reader`, `commenter`, `writer`, `fileOrganizer`, `organizer`, `owner`)
+  - `emailAddress`: Required for `user`/`group` types
+  - `domain`: Required for `domain` type
+  - `sendNotificationEmail`: Send notification email (optional)
+
+- **updatePermission** - Update role for an existing permission
+  - `fileId`: File or folder ID
+  - `permissionId`: Permission ID
+  - `role`: New role
+
+- **removePermission** - Remove a permission from a file/folder
+  - `fileId`: File or folder ID
+  - `permissionId`: Permission ID (optional if `emailAddress` is provided)
+  - `emailAddress`: Email to find permission by (optional fallback)
+
+- **shareFile** - Share file with a user email (idempotent helper)
+  - `fileId`: File or folder ID
+  - `emailAddress`: Recipient email
+  - `role`: Role (`reader`, `commenter`, `writer`)
+  - `sendNotificationEmail`: Send notification email (optional)
+
 - **uploadFile** - Upload a local file (any type: image, audio, video, PDF, etc.) to Google Drive
   - `localPath`: Absolute path to the local file
   - `name`: File name in Drive (optional, defaults to local filename)
@@ -443,6 +471,19 @@ Add the server to your Claude Desktop configuration:
   - `indentStart`, `indentEnd`: Indent in points (optional)
   - `spaceAbove`, `spaceBelow`: Spacing in points (optional)
   - `keepWithNext`: Keep with next paragraph (optional)
+
+- **formatGoogleDocText** - Alias for `applyTextStyle` (compatibility helper)
+  - Same parameters as `applyTextStyle`
+
+- **formatGoogleDocParagraph** - Alias for `applyParagraphStyle` (compatibility helper)
+  - Same parameters as `applyParagraphStyle`
+
+- **findAndReplaceInDoc** - Find and replace text across a Google Doc
+  - `documentId`: Document ID
+  - `findText`: Text to find
+  - `replaceText`: Replacement text
+  - `matchCase`: Case-sensitive match (optional, default: false)
+  - `dryRun`: Only report estimated matches, don’t modify document (optional, default: false)
 
 #### Tables and Images
 - **insertTable** - Insert a new table at a given index

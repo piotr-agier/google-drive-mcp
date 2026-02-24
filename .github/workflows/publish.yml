@@ -4,13 +4,13 @@ on:
   release:
     types: [published]
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   publish:
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
-      id-token: write
 
     steps:
       - uses: actions/checkout@v4
@@ -20,7 +20,6 @@ jobs:
         with:
           node-version: 20
           registry-url: 'https://registry.npmjs.org'
-          cache: npm
 
       - name: Install dependencies
         run: npm ci
@@ -40,4 +39,4 @@ jobs:
           fi
 
       - name: Publish
-        run: npm publish --provenance --access public
+        run: npm publish

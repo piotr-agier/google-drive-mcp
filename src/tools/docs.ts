@@ -456,7 +456,8 @@ const DeleteRangeSchema = z.object({
 const ReadGoogleDocSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
   format: z.enum(['text', 'json', 'markdown']).optional().default('text'),
-  maxLength: z.number().int().min(1).optional()
+  maxLength: z.number().int().min(1).optional(),
+  tabId: z.string().optional()
 });
 
 const ListDocumentTabsSchema = z.object({
@@ -632,13 +633,14 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "readGoogleDoc",
-    description: "Read content of a Google Doc with format options",
+    description: "Read content of a Google Doc with format options. Supports multi-tab documents.",
     inputSchema: {
       type: "object",
       properties: {
         documentId: { type: "string", description: "The document ID" },
         format: { type: "string", enum: ["text", "json", "markdown"], description: "Output format (default: text)" },
-        maxLength: { type: "number", description: "Maximum characters to return" }
+        maxLength: { type: "number", description: "Maximum characters to return" },
+        tabId: { type: "string", description: "Read a specific tab by ID (from listDocumentTabs). If omitted, all tabs are returned." }
       },
       required: ["documentId"]
     }
@@ -1270,7 +1272,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
 
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
       const docResponse = await docs.documents.get({
-        documentId: a.documentId
+        documentId: a.documentId,
+        includeTabsContent: true,
       });
 
       const doc = docResponse.data;
@@ -1287,40 +1290,78 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         };
       }
 
-      // Extract plain text from document
-      let text = '';
-      const body = doc.body;
-      if (body?.content) {
-        for (const element of body.content) {
+      // Helper to extract plain text from body content
+      function extractText(bodyContent: any[]): string {
+        let result = '';
+        for (const element of bodyContent) {
           if (element.paragraph?.elements) {
             for (const elem of element.paragraph.elements) {
               if (elem.textRun?.content) {
-                text += elem.textRun.content;
+                result += elem.textRun.content;
               }
             }
           } else if (element.table) {
-            // Handle tables
             for (const row of element.table.tableRows || []) {
               for (const cell of row.tableCells || []) {
                 for (const cellContent of cell.content || []) {
                   if (cellContent.paragraph?.elements) {
                     for (const elem of cellContent.paragraph.elements) {
                       if (elem.textRun?.content) {
-                        text += elem.textRun.content;
+                        result += elem.textRun.content;
                       }
                     }
                   }
                 }
-                text += '\t';
+                result += '\t';
               }
-              text += '\n';
+              result += '\n';
             }
           }
+        }
+        return result;
+      }
+
+      let text = '';
+      const tabs = (doc as any).tabs as any[] | undefined;
+
+      if (tabs && tabs.length > 0) {
+        if (a.tabId) {
+          // Find the specific tab
+          const tab = tabs.find((t: any) => t.tabProperties?.tabId === a.tabId);
+          if (!tab) {
+            return errorResponse(`Tab with ID "${a.tabId}" not found. Use listDocumentTabs to see available tabs.`);
+          }
+          const bodyContent = tab.documentTab?.body?.content;
+          if (bodyContent) {
+            text = extractText(bodyContent);
+          }
+        } else if (tabs.length > 1) {
+          // Multi-tab: include all tabs with headers
+          for (const tab of tabs) {
+            const title = tab.tabProperties?.title || 'Untitled';
+            text += `=== Tab: ${title} ===\n`;
+            const bodyContent = tab.documentTab?.body?.content;
+            if (bodyContent) {
+              text += extractText(bodyContent);
+            }
+            text += '\n';
+          }
+        } else {
+          // Single tab via tabs API
+          const bodyContent = tabs[0].documentTab?.body?.content;
+          if (bodyContent) {
+            text = extractText(bodyContent);
+          }
+        }
+      } else {
+        // Fallback to legacy body content
+        const body = doc.body;
+        if (body?.content) {
+          text = extractText(body.content);
         }
       }
 
       if (format === 'markdown') {
-        // Basic markdown conversion - could be enhanced
         text = `# ${doc.title}\n\n${text}`;
       }
 

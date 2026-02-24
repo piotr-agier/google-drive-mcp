@@ -402,6 +402,26 @@ Add the server to your Claude Desktop configuration:
   - `exportMimeType`: For Google Workspace files, MIME type to export as (optional, e.g., 'application/pdf', 'text/csv')
   - `overwrite`: Whether to overwrite existing files (optional, default: false)
 
+#### PDF Ingestion and Conversion (v1.6.0)
+- **convertPdfToGoogleDoc** - Convert a PDF already stored in Drive into an editable Google Doc
+  - `fileId`: Source PDF file ID
+  - `newName`: Optional destination doc name
+  - `parentFolderId`: Optional destination folder
+
+- **bulkConvertFolderPdfs** - Convert all PDFs in a folder and return per-file success/failure summary
+  - `folderId`: Source folder ID
+  - `maxResults`: Maximum PDFs to process (optional, default: 100)
+  - `continueOnError`: Continue processing after individual failures (optional, default: true)
+
+- **uploadPdfWithSplit** - Upload a local PDF with optional split planning metadata
+  - `localPath`: Absolute local path to PDF
+  - `split`: Enable split mode metadata output (optional, default: false)
+  - `maxPagesPerChunk`: Advisory chunk size for split planning (optional)
+  - `parentFolderId`: Optional destination folder
+  - `namePrefix`: Optional uploaded file name prefix
+
+> Note: `uploadPdfWithSplit` currently uploads the PDF and records split-plan parameters; physical page-splitting execution is a follow-up enhancement.
+
 ### Folder Operations
 - **createFolder** - Create a new folder
   - `name`: Folder name
@@ -432,6 +452,26 @@ Add the server to your Claude Desktop configuration:
 - **listDocumentTabs** - List all tabs in a Google Doc with their IDs and hierarchy
   - `documentId`: Document ID
   - `includeContent`: Include content summary (character count) for each tab (optional)
+
+- **addDocumentTab** - Add a new tab in a Google Doc
+  - `documentId`: Document ID
+  - `title`: Tab title
+
+- **renameDocumentTab** - Rename an existing tab in a Google Doc
+  - `documentId`: Document ID
+  - `tabId`: Tab ID
+  - `title`: New tab title
+
+- **insertSmartChip** - Insert a smart chip token (person/date/file) at an index
+  - `documentId`: Document ID
+  - `index`: Insertion index (1-based)
+  - `chipType`: `person`, `date`, or `file`
+  - `personEmail`: Required for `person` chip
+  - `date`: Required for `date` chip
+  - `fileId`: Required for `file` chip
+
+- **readSmartChips** - Read smart chip-like elements from a document
+  - `documentId`: Document ID
 
 - **listGoogleDocs** - List Google Documents with optional filtering
   - `query`: Search query to filter by name or content (optional)

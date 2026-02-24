@@ -121,7 +121,7 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         name: { type: "string", description: "File name (.txt or .md)" },
         content: { type: "string", description: "File content" },
-        parentFolderId: { type: "string", description: "Optional parent folder ID" }
+        parentFolderId: { type: "string", description: "Parent folder ID" }
       },
       required: ["name", "content"]
     }
@@ -134,7 +134,7 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         fileId: { type: "string", description: "ID of the file to update" },
         content: { type: "string", description: "New file content" },
-        name: { type: "string", description: "Optional new name (.txt or .md)" }
+        name: { type: "string", description: "New name (.txt or .md)" }
       },
       required: ["fileId", "content"]
     }
@@ -146,7 +146,7 @@ export const toolDefinitions: ToolDefinition[] = [
       type: "object",
       properties: {
         name: { type: "string", description: "Folder name" },
-        parent: { type: "string", description: "Optional parent folder ID or path" }
+        parent: { type: "string", description: "Parent folder ID or path" }
       },
       required: ["name"]
     }

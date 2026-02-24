@@ -36,7 +36,14 @@ function resolveOAuthScopes(): string[] {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
-    .map((s) => SCOPE_ALIASES[s] ?? s);
+    .map((s) => {
+      if (SCOPE_ALIASES[s]) return SCOPE_ALIASES[s];
+      if (s.startsWith('https://')) return s;
+      const known = Object.keys(SCOPE_ALIASES).join(', ');
+      throw new Error(
+        `Unknown OAuth scope alias "${s}". Use a full URL (https://...) or one of: ${known}`
+      );
+    });
 
   if (scopes.length === 0) return [...DEFAULT_SCOPES];
   return [...new Set(scopes)];

@@ -19,7 +19,20 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          registry-url: 'https://registry.npmjs.org'
+          registry-url: "https://registry.npmjs.org"
+
+      # Ensure npm supports OIDC well (Node 20 may ship an older npm)
+      - name: Upgrade npm
+        run: npm i -g npm@latest && npm --version
+
+      # Kill any token-based auth that might exist (repo .npmrc, runner ~/.npmrc, etc.)
+      - name: Ensure no npm token auth is configured
+        run: |
+          rm -f .npmrc || true
+          rm -f ~/.npmrc || true
+          npm config delete //registry.npmjs.org/:_authToken || true
+          npm config delete _authToken || true
+          npm config set registry https://registry.npmjs.org
 
       - name: Install dependencies
         run: npm ci
@@ -38,5 +51,5 @@ jobs:
             exit 1
           fi
 
-      - name: Publish
+      - name: Publish (OIDC Trusted Publishing)
         run: npm publish

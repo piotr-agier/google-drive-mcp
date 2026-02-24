@@ -579,6 +579,7 @@ const FindAndReplaceInDocSchema = z.object({
   findText: z.string().min(1, "findText is required"),
   replaceText: z.string(),
   matchCase: z.boolean().optional().default(false),
+  dryRun: z.boolean().optional().default(false),
 });
 
 // ---------------------------------------------------------------------------
@@ -765,7 +766,8 @@ export const toolDefinitions: ToolDefinition[] = [
         documentId: { type: "string", description: "The document ID" },
         findText: { type: "string", description: "Text to find" },
         replaceText: { type: "string", description: "Replacement text" },
-        matchCase: { type: "boolean", description: "Case-sensitive match (default: false)" }
+        matchCase: { type: "boolean", description: "Case-sensitive match (default: false)" },
+        dryRun: { type: "boolean", description: "Only count matches, do not modify document (default: false)" }
       },
       required: ["documentId", "findText", "replaceText"]
     }
@@ -1634,6 +1636,28 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const a = validation.data;
 
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+
+      if (a.dryRun) {
+        const doc = await docs.documents.get({ documentId: a.documentId });
+        let text = '';
+        const content = doc.data.body?.content || [];
+        for (const el of content) {
+          if (el.paragraph?.elements) {
+            for (const elem of el.paragraph.elements) {
+              if (elem.textRun?.content) text += elem.textRun.content;
+            }
+          }
+        }
+        const escaped = a.findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const flags = a.matchCase ? 'g' : 'gi';
+        const matches = text.match(new RegExp(escaped, flags));
+        const count = matches ? matches.length : 0;
+        return {
+          content: [{ type: 'text', text: `Dry run: found ${count} occurrence(s) of "${a.findText}".` }],
+          isError: false,
+        };
+      }
+
       const response = await docs.documents.batchUpdate({
         documentId: a.documentId,
         requestBody: {

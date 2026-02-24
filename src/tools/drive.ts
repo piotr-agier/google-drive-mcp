@@ -174,8 +174,8 @@ export const toolDefinitions: ToolDefinition[] = [
     inputSchema: {
       type: "object",
       properties: {
-        pageSize: { type: "number", description: "Drives to return (default 50, max 100)", optional: true },
-        pageToken: { type: "string", description: "Token for next page", optional: true }
+        pageSize: { type: "number", description: "Drives to return (default 50, max 100)" },
+        pageToken: { type: "string", description: "Token for next page" }
       }
     }
   },
@@ -488,8 +488,12 @@ export async function handleTool(
       });
 
       const drives = res.data.drives || [];
+      if (drives.length === 0) {
+        return { content: [{ type: 'text', text: 'No shared drives found.' }], isError: false };
+      }
+
       const formatted = drives
-        .map((d: drive_v3.Schema$Drive) => `🗂️ ${d.name} (ID: ${d.id}${d.hidden ? ', hidden' : ''})`)
+        .map((d: drive_v3.Schema$Drive) => `${d.name} (ID: ${d.id}${d.hidden ? ', hidden' : ''})`)
         .join('\n');
 
       let response = `Found ${drives.length} shared drives:\n${formatted}`;

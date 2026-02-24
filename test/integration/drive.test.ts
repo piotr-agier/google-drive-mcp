@@ -113,6 +113,24 @@ describe('Drive tools', () => {
       assert.ok(res.content[0].text.includes('Engineering Shared Drive'));
       assert.ok(res.content[0].text.includes('d1'));
     });
+
+    it('empty result', async () => {
+      ctx.mocks.drive.service.drives.list._setImpl(async () => ({
+        data: { drives: [] },
+      }));
+      const res = await callTool(ctx.client, 'listSharedDrives', {});
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('No shared drives found'));
+    });
+
+    it('pagination token forwarded', async () => {
+      ctx.mocks.drive.service.drives.list._setImpl(async () => ({
+        data: { drives: [{ id: 'd1', name: 'Drive A', hidden: false }], nextPageToken: 'tok2' },
+      }));
+      const res = await callTool(ctx.client, 'listSharedDrives', { pageSize: 1 });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('tok2'));
+    });
   });
 
   // --- deleteItem ---

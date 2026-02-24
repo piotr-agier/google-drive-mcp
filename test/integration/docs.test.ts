@@ -252,6 +252,20 @@ describe('Docs tools', () => {
       assert.ok(res.content[0].text.includes('Replaced'));
     });
 
+    it('dryRun counts matches without replacing', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'My Doc',
+          body: { content: [{ paragraph: { elements: [{ textRun: { content: 'Hello Hello World\n' } }] } }] },
+        },
+      }));
+      const res = await callTool(ctx.client, 'findAndReplaceInDoc', {
+        documentId: 'doc-1', findText: 'Hello', replaceText: 'Hi', dryRun: true,
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('found 2 occurrence'));
+    });
+
     it('validation error', async () => {
       const res = await callTool(ctx.client, 'findAndReplaceInDoc', {});
       assert.equal(res.isError, true);

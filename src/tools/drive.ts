@@ -120,7 +120,12 @@ const UpdatePermissionSchema = z.object({
 
 const RemovePermissionSchema = z.object({
   fileId: z.string().min(1, "File ID is required"),
-  permissionId: z.string().min(1, "Permission ID is required"),
+  permissionId: z.string().optional(),
+  emailAddress: z.string().email("Valid email is required").optional(),
+}).superRefine((data, ctx) => {
+  if (!data.permissionId && !data.emailAddress) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Either permissionId or emailAddress is required" });
+  }
 });
 
 const ShareFileSchema = z.object({
@@ -332,14 +337,15 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "removePermission",
-    description: "Remove a permission from a file",
+    description: "Remove a permission from a file (by permissionId or emailAddress)",
     inputSchema: {
       type: "object",
       properties: {
         fileId: { type: "string", description: "Google Drive file ID" },
-        permissionId: { type: "string", description: "Permission ID" }
+        permissionId: { type: "string", description: "Permission ID" },
+        emailAddress: { type: "string", description: "User email (alternative to permissionId)" }
       },
-      required: ["fileId", "permissionId"]
+      required: ["fileId"]
     }
   },
   {
@@ -874,13 +880,29 @@ export async function handleTool(
       if (!validation.success) return errorResponse(validation.error.errors[0].message);
       const data = validation.data;
 
+      let permissionId = data.permissionId;
+      if (!permissionId && data.emailAddress) {
+        const listed = await ctx.getDrive().permissions.list({
+          fileId: data.fileId,
+          fields: 'permissions(id,type,emailAddress)',
+          supportsAllDrives: true,
+        });
+        const found = (listed.data.permissions || []).find(
+          (p) => p.type === 'user' && (p.emailAddress || '').toLowerCase() === data.emailAddress!.toLowerCase(),
+        );
+        if (!found?.id) {
+          return errorResponse(`No permission found for ${data.emailAddress}`);
+        }
+        permissionId = found.id;
+      }
+
       await ctx.getDrive().permissions.delete({
         fileId: data.fileId,
-        permissionId: data.permissionId,
+        permissionId: permissionId!,
         supportsAllDrives: true,
       });
 
-      return { content: [{ type: 'text', text: `Permission removed: ${data.permissionId}` }], isError: false };
+      return { content: [{ type: 'text', text: `Permission removed: ${permissionId}` }], isError: false };
     }
 
     case "shareFile": {
@@ -900,6 +922,13 @@ export async function handleTool(
       );
 
       if (existingPerm?.id) {
+        if (existingPerm.role === data.role) {
+          return {
+            content: [{ type: 'text', text: `No changes needed: ${data.emailAddress} already has role ${data.role}. Permission ID: ${existingPerm.id}` }],
+            isError: false,
+          };
+        }
+
         const updated = await ctx.getDrive().permissions.update({
           fileId: data.fileId,
           permissionId: existingPerm.id,

@@ -229,6 +229,29 @@ describe('Drive tools', () => {
       });
       assert.equal(res.isError, false);
     });
+
+    it('removePermission by email lookup', async () => {
+      ctx.mocks.drive.service.permissions.list._setImpl(async () => ({
+        data: { permissions: [{ id: 'perm-1', type: 'user', emailAddress: 'user@example.com' }] },
+      }));
+      const res = await callTool(ctx.client, 'removePermission', {
+        fileId: 'file-1', emailAddress: 'user@example.com',
+      });
+      assert.equal(res.isError, false);
+    });
+
+    it('shareFile no-op when role already matches', async () => {
+      ctx.mocks.drive.service.permissions.list._setImpl(async () => ({
+        data: { permissions: [{ id: 'perm-1', type: 'user', emailAddress: 'user@example.com', role: 'writer' }] },
+      }));
+
+      const res = await callTool(ctx.client, 'shareFile', {
+        fileId: 'file-1', emailAddress: 'user@example.com', role: 'writer',
+      });
+
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('No changes needed'));
+    });
   });
 
   // --- moveItem ---

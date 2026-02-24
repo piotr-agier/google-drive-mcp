@@ -1038,8 +1038,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         italic?: boolean;
         underline?: boolean;
         strikethrough?: boolean;
-        foregroundColor?: string | null;
-        backgroundColor?: string | null;
+        foregroundColor?: string;
+        backgroundColor?: string;
       }
 
       // Helper to extract segments from body content
@@ -1058,13 +1058,15 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
                   const ts = textElement.textRun.textStyle;
                   if (ts) {
                     if (ts.weightedFontFamily?.fontFamily) seg.fontFamily = ts.weightedFontFamily.fontFamily;
-                    if (ts.fontSize?.magnitude) seg.fontSize = ts.fontSize.magnitude;
+                    if (ts.fontSize?.magnitude != null) seg.fontSize = ts.fontSize.magnitude;
                     if (ts.bold) seg.bold = true;
                     if (ts.italic) seg.italic = true;
                     if (ts.underline) seg.underline = true;
                     if (ts.strikethrough) seg.strikethrough = true;
-                    seg.foregroundColor = rgbColorToHex(ts.foregroundColor);
-                    seg.backgroundColor = rgbColorToHex(ts.backgroundColor);
+                    const fg = rgbColorToHex(ts.foregroundColor);
+                    const bg = rgbColorToHex(ts.backgroundColor);
+                    if (fg) seg.foregroundColor = fg;
+                    if (bg) seg.backgroundColor = bg;
                   }
                 }
                 segments.push(seg);
@@ -1079,26 +1081,19 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       function formatSegments(segments: Segment[]): string {
         let result = '';
         for (const segment of segments) {
-          if (withFormatting && hasFormattingInfo(segment)) {
-            // Rich output: metadata line + indented text
-            const meta = buildMetaLine(segment);
-            const lines = segment.text.split('\n');
-            let offset = segment.startIndex;
-            for (const line of lines) {
-              if (line.trim()) {
+          const hasMeta = withFormatting && hasFormattingInfo(segment);
+          const meta = hasMeta ? buildMetaLine(segment) : null;
+          const lines = segment.text.split('\n');
+          let offset = segment.startIndex;
+          for (const line of lines) {
+            if (line.trim()) {
+              if (meta) {
                 result += `[${offset}-${offset + line.length}] ${meta}\n  ${line}\n`;
-              }
-              offset += line.length + 1;
-            }
-          } else {
-            const lines = segment.text.split('\n');
-            let offset = segment.startIndex;
-            for (const line of lines) {
-              if (line.trim()) {
+              } else {
                 result += `[${offset}-${offset + line.length}] ${line}\n`;
               }
-              offset += line.length + 1;
             }
+            offset += line.length + 1;
           }
         }
         return result;
@@ -1190,7 +1185,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         const sorted = [...fontUsage.entries()].sort((a, b) => b[1].charCount - a[1].charCount);
         for (const [font, info] of sorted) {
           const sizesStr = info.sizes.size > 0 ? [...info.sizes].sort((a, b) => a - b).join(', ') + ' pt' : 'default size';
-          const stylesStr = info.styles.size > 0 ? [...info.styles].join(', ') : 'normal';
+          const stylesStr = info.styles.size > 0 ? [...info.styles].sort().join(', ') : 'normal';
           formattedContent += `${font}: sizes [${sizesStr}], styles [${stylesStr}], ~${info.charCount} chars\n`;
         }
       }

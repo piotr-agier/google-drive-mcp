@@ -444,7 +444,7 @@ describe('Docs tools', () => {
       assert.ok(text.includes('style=italic'), 'should show italic in Tab1');
       assert.ok(text.includes('style=bold'), 'should show bold in Tab2');
       assert.ok(text.includes('--- Fonts summary ---'), 'should include fonts summary');
-      assert.ok(text.includes('Georgia: sizes [10, 14 pt], styles [italic, bold]'), 'fonts summary should aggregate Georgia with sizes and styles');
+      assert.ok(text.includes('Georgia: sizes [10, 14 pt], styles [bold, italic]'), 'fonts summary should aggregate Georgia with sizes and styles');
     });
 
     it('includes tab headers only when multiple tabs', async () => {

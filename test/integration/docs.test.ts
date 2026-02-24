@@ -98,6 +98,79 @@ describe('Docs tools', () => {
       assert.ok(res.content[0].text.includes('Hello World'));
     });
 
+    it('reads multi-tab document', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Multi-Tab Doc',
+          tabs: [
+            {
+              tabProperties: { tabId: 'tab-1', title: 'Tab1' },
+              documentTab: {
+                body: { content: [{ paragraph: { elements: [{ textRun: { content: 'First tab\n' } }] } }] },
+              },
+            },
+            {
+              tabProperties: { tabId: 'tab-2', title: 'Tab2' },
+              documentTab: {
+                body: { content: [{ paragraph: { elements: [{ textRun: { content: 'Second tab\n' } }] } }] },
+              },
+            },
+          ],
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('=== Tab: Tab1 ==='));
+      assert.ok(res.content[0].text.includes('=== Tab: Tab2 ==='));
+      assert.ok(res.content[0].text.includes('First tab'));
+      assert.ok(res.content[0].text.includes('Second tab'));
+    });
+
+    it('reads specific tab by tabId', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Multi-Tab Doc',
+          tabs: [
+            {
+              tabProperties: { tabId: 'tab-1', title: 'Tab1' },
+              documentTab: {
+                body: { content: [{ paragraph: { elements: [{ textRun: { content: 'First tab\n' } }] } }] },
+              },
+            },
+            {
+              tabProperties: { tabId: 'tab-2', title: 'Tab2' },
+              documentTab: {
+                body: { content: [{ paragraph: { elements: [{ textRun: { content: 'Second tab\n' } }] } }] },
+              },
+            },
+          ],
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', tabId: 'tab-2' });
+      assert.equal(res.isError, false);
+      assert.ok(!res.content[0].text.includes('First tab'));
+      assert.ok(res.content[0].text.includes('Second tab'));
+    });
+
+    it('returns error for unknown tabId', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Multi-Tab Doc',
+          tabs: [
+            {
+              tabProperties: { tabId: 'tab-1', title: 'Tab1' },
+              documentTab: {
+                body: { content: [{ paragraph: { elements: [{ textRun: { content: 'First tab\n' } }] } }] },
+              },
+            },
+          ],
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', tabId: 'nonexistent' });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.includes('not found'));
+    });
+
     it('validation error', async () => {
       const res = await callTool(ctx.client, 'readGoogleDoc', {});
       assert.equal(res.isError, true);

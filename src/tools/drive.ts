@@ -888,6 +888,32 @@ export async function handleTool(
       if (!validation.success) return errorResponse(validation.error.errors[0].message);
       const data = validation.data;
 
+      // Idempotent behavior: update existing permission for the same principal instead of creating duplicates.
+      const existing = await ctx.getDrive().permissions.list({
+        fileId: data.fileId,
+        fields: 'permissions(id,type,emailAddress,role)',
+        supportsAllDrives: true,
+      });
+
+      const existingPerm = (existing.data.permissions || []).find(
+        (p) => p.type === 'user' && (p.emailAddress || '').toLowerCase() === data.emailAddress.toLowerCase(),
+      );
+
+      if (existingPerm?.id) {
+        const updated = await ctx.getDrive().permissions.update({
+          fileId: data.fileId,
+          permissionId: existingPerm.id,
+          requestBody: { role: data.role },
+          fields: 'id,type,role,emailAddress',
+          supportsAllDrives: true,
+        });
+
+        return {
+          content: [{ type: 'text', text: `Updated existing permission for ${updated.data.emailAddress || data.emailAddress} to ${updated.data.role}. Permission ID: ${updated.data.id}` }],
+          isError: false,
+        };
+      }
+
       const response = await ctx.getDrive().permissions.create({
         fileId: data.fileId,
         requestBody: {

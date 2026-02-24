@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it, before, after } from 'node:test';
 import { setupTestServer, type TestContext } from '../helpers/setup-server.js';
 
-const EXPECTED_TOOL_COUNT = 77;
+const EXPECTED_TOOL_COUNT = 80;
 
 const EXPECTED_TOOLS = [
   'search', 'createTextFile', 'updateTextFile', 'createFolder', 'listFolder', 'listSharedDrives',
@@ -13,7 +13,7 @@ const EXPECTED_TOOLS = [
   'createGoogleSheet', 'updateGoogleSheet', 'getGoogleSheetContent',
   'formatGoogleSheetCells', 'formatGoogleSheetText', 'formatGoogleSheetNumbers',
   'setGoogleSheetBorders', 'mergeGoogleSheetCells', 'addGoogleSheetConditionalFormat',
-  'getSpreadsheetInfo', 'appendSpreadsheetRows', 'addSpreadsheetSheet', 'listSheets', 'renameSheet', 'deleteSheet',
+  'getSpreadsheetInfo', 'appendSpreadsheetRows', 'addSpreadsheetSheet', 'listSheets', 'renameSheet', 'deleteSheet', 'addDataValidation', 'protectRange', 'addNamedRange',
   'listGoogleSheets', 'copyFile',
   'createGoogleSlides', 'updateGoogleSlides',
   'getGoogleDocContent', 'getGoogleSlidesContent',

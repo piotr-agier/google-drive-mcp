@@ -152,6 +152,39 @@ describe('Docs tools', () => {
     });
   });
 
+  // --- formatGoogleDocText / formatGoogleDocParagraph aliases ---
+  describe('format alias tools', () => {
+    it('formatGoogleDocText delegates successfully', async () => {
+      const res = await callTool(ctx.client, 'formatGoogleDocText', {
+        documentId: 'doc-1', startIndex: 1, endIndex: 5, bold: true,
+      });
+      assert.equal(res.isError, false);
+    });
+
+    it('formatGoogleDocParagraph delegates successfully', async () => {
+      const res = await callTool(ctx.client, 'formatGoogleDocParagraph', {
+        documentId: 'doc-1', startIndex: 1, endIndex: 5, alignment: 'CENTER',
+      });
+      assert.equal(res.isError, false);
+    });
+  });
+
+  // --- findAndReplaceInDoc ---
+  describe('findAndReplaceInDoc', () => {
+    it('happy path', async () => {
+      const res = await callTool(ctx.client, 'findAndReplaceInDoc', {
+        documentId: 'doc-1', findText: 'Hello', replaceText: 'Hi',
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Replaced'));
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'findAndReplaceInDoc', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
   // --- listComments ---
   describe('listComments', () => {
     it('happy path', async () => {

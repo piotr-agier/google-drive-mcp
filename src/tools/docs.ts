@@ -714,7 +714,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "formatGoogleDocText",
-    description: "Compatibility alias for applyTextStyle.",
+    description: "Apply text formatting (bold, italic, font, color, links) to a range or found text in a Google Doc. Alias for applyTextStyle.",
     inputSchema: {
       type: "object",
       properties: {
@@ -738,7 +738,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "formatGoogleDocParagraph",
-    description: "Compatibility alias for applyParagraphStyle.",
+    description: "Apply paragraph formatting (alignment, indentation, spacing, heading style) in a Google Doc. Alias for applyParagraphStyle.",
     inputSchema: {
       type: "object",
       properties: {
@@ -761,7 +761,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "findAndReplaceInDoc",
-    description: "Find and replace text across a Google Document",
+    description: "Find and replace text across a Google Document. Dry-run mode counts matches from paragraph text only (may differ from actual replacements which cover tables, headers, footers, etc.)",
     inputSchema: {
       type: "object",
       properties: {
@@ -769,7 +769,7 @@ export const toolDefinitions: ToolDefinition[] = [
         findText: { type: "string", description: "Text to find" },
         replaceText: { type: "string", description: "Replacement text" },
         matchCase: { type: "boolean", description: "Case-sensitive match (default: false)" },
-        dryRun: { type: "boolean", description: "Only count matches, do not modify document (default: false)" }
+        dryRun: { type: "boolean", description: "Only count approximate matches from paragraph text, do not modify document (default: false)" }
       },
       required: ["documentId", "findText", "replaceText"]
     }
@@ -1694,7 +1694,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         const matches = text.match(new RegExp(escaped, flags));
         const count = matches ? matches.length : 0;
         return {
-          content: [{ type: 'text', text: `Dry run: found ${count} occurrence(s) of "${a.findText}".` }],
+          content: [{ type: 'text', text: `Dry run (paragraph text only, approximate): found ${count} occurrence(s) of "${a.findText}". Note: actual replacement covers the full document including tables, headers, and footers.` }],
           isError: false,
         };
       }

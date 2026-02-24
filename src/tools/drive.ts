@@ -880,7 +880,7 @@ export async function handleTool(
       if (!validation.success) return errorResponse(validation.error.errors[0].message);
       const data = validation.data;
 
-      let permissionId = data.permissionId;
+      let permissionId: string | undefined = data.permissionId;
       if (!permissionId && data.emailAddress) {
         const listed = await ctx.getDrive().permissions.list({
           fileId: data.fileId,
@@ -896,9 +896,13 @@ export async function handleTool(
         permissionId = found.id;
       }
 
+      if (!permissionId) {
+        return errorResponse("Could not resolve a permission ID to remove");
+      }
+
       await ctx.getDrive().permissions.delete({
         fileId: data.fileId,
-        permissionId: permissionId!,
+        permissionId,
         supportsAllDrives: true,
       });
 

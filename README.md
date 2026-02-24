@@ -572,6 +572,37 @@ Add the server to your Claude Desktop configuration:
   - `spreadsheetId`: Spreadsheet ID
   - `sheetTitle`: Title for the new sheet
 
+- **listSheets** - List tabs/sheets in a spreadsheet
+  - `spreadsheetId`: Spreadsheet ID
+
+- **renameSheet** - Rename a sheet/tab by `sheetId`
+  - `spreadsheetId`: Spreadsheet ID
+  - `sheetId`: Sheet ID
+  - `newTitle`: New title
+
+- **deleteSheet** - Delete a sheet/tab by `sheetId`
+  - `spreadsheetId`: Spreadsheet ID
+  - `sheetId`: Sheet ID
+
+- **addDataValidation** - Add data validation rules to a range
+  - `spreadsheetId`: Spreadsheet ID
+  - `range`: A1 range (e.g., `Sheet1!A1:A10`)
+  - `conditionType`: `ONE_OF_LIST`, `NUMBER_GREATER`, `NUMBER_LESS`, or `TEXT_CONTAINS`
+  - `values`: Condition values (required for `ONE_OF_LIST`)
+  - `strict`: Reject invalid values (optional, default: `true`)
+  - `showCustomUi`: Show dropdown/custom UI (optional, default: `true`)
+
+- **protectRange** - Protect a range in a spreadsheet
+  - `spreadsheetId`: Spreadsheet ID
+  - `range`: A1 range
+  - `description`: Protection description (optional)
+  - `warningOnly`: Warn instead of enforce (optional, default: `false`)
+
+- **addNamedRange** - Create a named range
+  - `spreadsheetId`: Spreadsheet ID
+  - `name`: Named range name
+  - `range`: A1 range
+
 - **listGoogleSheets** - List Google Spreadsheets with optional filtering
   - `query`: Search query to filter by name or content (optional)
   - `maxResults`: Maximum spreadsheets to return, 1-100 (optional, default: 20)
@@ -693,6 +724,26 @@ Add the server to your Claude Desktop configuration:
   - `presentationId`: Presentation ID
   - `slideIndex`: Slide index (0-based)
   - `notes`: The speaker notes content to set
+
+#### Slide Operations and Templating
+- **deleteGoogleSlide** - Delete a slide by object ID
+  - `presentationId`: Presentation ID
+  - `slideObjectId`: Slide object ID
+
+- **duplicateSlide** - Duplicate a slide by object ID
+  - `presentationId`: Presentation ID
+  - `slideObjectId`: Slide object ID
+
+- **reorderSlides** - Reorder slides by object IDs and insertion index
+  - `presentationId`: Presentation ID
+  - `slideObjectIds`: Array of slide object IDs to move
+  - `insertionIndex`: Target insertion index
+
+- **replaceAllTextInSlides** - Replace text across a presentation
+  - `presentationId`: Presentation ID
+  - `containsText`: Text to find
+  - `replaceText`: Replacement text
+  - `matchCase`: Match case (optional, default: `false`)
 
 ### Google Calendar
 - **listCalendars** - List all accessible Google Calendars

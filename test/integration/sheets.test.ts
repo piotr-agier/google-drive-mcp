@@ -253,6 +253,36 @@ describe('Sheets tools', () => {
     });
   });
 
+  // --- governance helpers ---
+  describe('validation/protection/named-range tools', () => {
+    it('addDataValidation happy path', async () => {
+      setupSheetsMock();
+      const res = await callTool(ctx.client, 'addDataValidation', {
+        spreadsheetId: 'sheet-1', range: 'Sheet1!A1:A10', conditionType: 'ONE_OF_LIST', values: ['A', 'B'],
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Added data validation'));
+    });
+
+    it('protectRange happy path', async () => {
+      setupSheetsMock();
+      const res = await callTool(ctx.client, 'protectRange', {
+        spreadsheetId: 'sheet-1', range: 'Sheet1!A1:B10', description: 'Lock critical',
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Protected range'));
+    });
+
+    it('addNamedRange happy path', async () => {
+      setupSheetsMock();
+      const res = await callTool(ctx.client, 'addNamedRange', {
+        spreadsheetId: 'sheet-1', name: 'InputRange', range: 'Sheet1!A1:B10',
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Added named range'));
+    });
+  });
+
   // --- listGoogleSheets ---
   describe('listGoogleSheets', () => {
     it('happy path', async () => {

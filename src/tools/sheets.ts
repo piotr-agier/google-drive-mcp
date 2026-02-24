@@ -141,6 +141,28 @@ const DeleteSheetSchema = z.object({
   sheetId: z.number().int()
 });
 
+const AddDataValidationSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  range: z.string().min(1, "Range is required"),
+  conditionType: z.enum(["ONE_OF_LIST", "NUMBER_GREATER", "NUMBER_LESS", "TEXT_CONTAINS"]),
+  values: z.array(z.string()).optional(),
+  strict: z.boolean().optional().default(true),
+  showCustomUi: z.boolean().optional().default(true)
+});
+
+const ProtectRangeSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  range: z.string().min(1, "Range is required"),
+  description: z.string().optional(),
+  warningOnly: z.boolean().optional().default(false)
+});
+
+const AddNamedRangeSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  name: z.string().min(1, "Name is required"),
+  range: z.string().min(1, "Range is required")
+});
+
 const ListGoogleSheetsSchema = z.object({
   maxResults: z.number().int().min(1).max(100).optional().default(20),
   query: z.string().optional(),
@@ -465,6 +487,49 @@ export const toolDefinitions: ToolDefinition[] = [
         sheetId: { type: "number", description: "Sheet ID" }
       },
       required: ["spreadsheetId", "sheetId"]
+    }
+  },
+  {
+    name: "addDataValidation",
+    description: "Add data validation rules to a sheet range",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        range: { type: "string", description: "A1 range" },
+        conditionType: { type: "string", enum: ["ONE_OF_LIST", "NUMBER_GREATER", "NUMBER_LESS", "TEXT_CONTAINS"], description: "Validation condition type" },
+        values: { type: "array", items: { type: "string" }, description: "Condition values (required for ONE_OF_LIST)" },
+        strict: { type: "boolean", description: "Reject invalid values" },
+        showCustomUi: { type: "boolean", description: "Show dropdown/custom UI" }
+      },
+      required: ["spreadsheetId", "range", "conditionType"]
+    }
+  },
+  {
+    name: "protectRange",
+    description: "Protect a range in a spreadsheet",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        range: { type: "string", description: "A1 range" },
+        description: { type: "string", description: "Protection description" },
+        warningOnly: { type: "boolean", description: "Warn instead of enforce" }
+      },
+      required: ["spreadsheetId", "range"]
+    }
+  },
+  {
+    name: "addNamedRange",
+    description: "Create a named range",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        name: { type: "string", description: "Named range name" },
+        range: { type: "string", description: "A1 range" }
+      },
+      required: ["spreadsheetId", "name", "range"]
     }
   },
   {
@@ -1146,6 +1211,125 @@ export async function handleTool(
       });
 
       return { content: [{ type: 'text', text: `Deleted sheet ${a.sheetId}.` }], isError: false };
+    }
+
+    case "addDataValidation": {
+      const validation = AddDataValidationSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+
+      const rangeData = await sheets.spreadsheets.get({
+        spreadsheetId: a.spreadsheetId,
+        ranges: [a.range],
+        fields: 'sheets(properties(sheetId,title))'
+      });
+      const { sheetName, cellRange: a1Range } = parseA1Range(a.range);
+      const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
+      if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
+        return errorResponse(`Sheet "${sheetName}" not found`);
+      }
+      const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
+
+      const conditionValues = (a.values || []).map(v => ({ userEnteredValue: v }));
+      if (a.conditionType === 'ONE_OF_LIST' && conditionValues.length === 0) {
+        return errorResponse('values are required when conditionType is ONE_OF_LIST');
+      }
+
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: a.spreadsheetId,
+        requestBody: {
+          requests: [{
+            setDataValidation: {
+              range: gridRange,
+              rule: {
+                condition: {
+                  type: a.conditionType,
+                  values: conditionValues,
+                },
+                strict: a.strict,
+                showCustomUi: a.showCustomUi,
+              },
+            },
+          }],
+        },
+      });
+
+      return { content: [{ type: 'text', text: `Added data validation (${a.conditionType}) to ${a.range}.` }], isError: false };
+    }
+
+    case "protectRange": {
+      const validation = ProtectRangeSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      const rangeData = await sheets.spreadsheets.get({
+        spreadsheetId: a.spreadsheetId,
+        ranges: [a.range],
+        fields: 'sheets(properties(sheetId,title))'
+      });
+      const { sheetName, cellRange: a1Range } = parseA1Range(a.range);
+      const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
+      if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
+        return errorResponse(`Sheet "${sheetName}" not found`);
+      }
+      const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
+
+      const response = await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: a.spreadsheetId,
+        requestBody: {
+          requests: [{
+            addProtectedRange: {
+              protectedRange: {
+                range: gridRange,
+                description: a.description,
+                warningOnly: a.warningOnly,
+              },
+            },
+          }],
+        },
+      });
+
+      const protectedRangeId = response.data.replies?.[0]?.addProtectedRange?.protectedRange?.protectedRangeId;
+      return { content: [{ type: 'text', text: `Protected range ${a.range}${protectedRangeId ? ` (id: ${protectedRangeId})` : ''}.` }], isError: false };
+    }
+
+    case "addNamedRange": {
+      const validation = AddNamedRangeSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      const rangeData = await sheets.spreadsheets.get({
+        spreadsheetId: a.spreadsheetId,
+        ranges: [a.range],
+        fields: 'sheets(properties(sheetId,title))'
+      });
+      const { sheetName, cellRange: a1Range } = parseA1Range(a.range);
+      const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
+      if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
+        return errorResponse(`Sheet "${sheetName}" not found`);
+      }
+      const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
+
+      const response = await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: a.spreadsheetId,
+        requestBody: {
+          requests: [{
+            addNamedRange: {
+              namedRange: {
+                name: a.name,
+                range: gridRange,
+              },
+            },
+          }],
+        },
+      });
+
+      const namedRangeId = response.data.replies?.[0]?.addNamedRange?.namedRange?.namedRangeId;
+      return { content: [{ type: 'text', text: `Added named range "${a.name}" for ${a.range}${namedRangeId ? ` (id: ${namedRangeId})` : ''}.` }], isError: false };
     }
 
     case "listGoogleSheets": {

@@ -316,6 +316,10 @@ Add the server to your Claude Desktop configuration:
   - `pageSize`: Number of results (optional, max 100)
   - `pageToken`: Pagination token (optional)
 
+- **listSharedDrives** - List available Google Shared Drives
+  - `pageSize`: Number of drives to return (optional, default 50, max 100)
+  - `pageToken`: Pagination token (optional)
+
 ### File Management
 - **createTextFile** - Create a text or markdown file
   - `name`: File name (must end with .txt or .md)

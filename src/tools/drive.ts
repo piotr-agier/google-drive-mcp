@@ -61,6 +61,11 @@ const ListFolderSchema = z.object({
   pageToken: z.string().optional()
 });
 
+const ListSharedDrivesSchema = z.object({
+  pageSize: z.number().int().min(1).max(100).optional(),
+  pageToken: z.string().optional()
+});
+
 const DeleteItemSchema = z.object({
   itemId: z.string().min(1, "Item ID is required")
 });
@@ -159,6 +164,17 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         folderId: { type: "string", description: "Folder ID", optional: true },
         pageSize: { type: "number", description: "Items to return (default 50, max 100)", optional: true },
+        pageToken: { type: "string", description: "Token for next page", optional: true }
+      }
+    }
+  },
+  {
+    name: "listSharedDrives",
+    description: "List available Google Shared Drives",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pageSize: { type: "number", description: "Drives to return (default 50, max 100)", optional: true },
         pageToken: { type: "string", description: "Token for next page", optional: true }
       }
     }
@@ -457,6 +473,35 @@ export async function handleTool(
       return {
         content: [{ type: "text", text: response }],
         isError: false
+      };
+    }
+
+    case "listSharedDrives": {
+      const validation = ListSharedDrivesSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const data = validation.data;
+
+      const res = await ctx.getDrive().drives.list({
+        pageSize: Math.min(data.pageSize || 50, 100),
+        pageToken: data.pageToken,
+        fields: 'nextPageToken, drives(id, name, createdTime, hidden)'
+      });
+
+      const drives = res.data.drives || [];
+      const formatted = drives
+        .map((d: drive_v3.Schema$Drive) => `🗂️ ${d.name} (ID: ${d.id}${d.hidden ? ', hidden' : ''})`)
+        .join('\n');
+
+      let response = `Found ${drives.length} shared drives:\n${formatted}`;
+      if (res.data.nextPageToken) {
+        response += `\n\nMore results available. Use pageToken: ${res.data.nextPageToken}`;
+      }
+
+      return {
+        content: [{ type: 'text', text: response }],
+        isError: false,
       };
     }
 

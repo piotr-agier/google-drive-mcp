@@ -198,6 +198,24 @@ describe('Drive tools', () => {
       assert.equal(res.isError, false);
     });
 
+    it('shareFile updates existing user permission (idempotent)', async () => {
+      ctx.mocks.drive.service.permissions.list._setImpl(async () => ({
+        data: { permissions: [{ id: 'perm-1', type: 'user', emailAddress: 'user@example.com', role: 'reader' }] },
+      }));
+
+      const res = await callTool(ctx.client, 'shareFile', {
+        fileId: 'file-1', emailAddress: 'user@example.com', role: 'writer',
+      });
+
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Updated existing permission'));
+
+      const createCalls = ctx.mocks.drive.tracker.getCalls('permissions.create');
+      const updateCalls = ctx.mocks.drive.tracker.getCalls('permissions.update');
+      assert.equal(createCalls.length, 0);
+      assert.ok(updateCalls.length >= 1);
+    });
+
     it('updatePermission happy path', async () => {
       const res = await callTool(ctx.client, 'updatePermission', {
         fileId: 'file-1', permissionId: 'perm-1', role: 'commenter',

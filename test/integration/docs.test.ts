@@ -603,4 +603,21 @@ describe('Docs tools', () => {
       assert.equal(res.isError, true);
     });
   });
+
+  describe('v1.6.0 docs tab/chip tools', () => {
+    it('addDocumentTab happy path', async () => {
+      const res = await callTool(ctx.client, 'addDocumentTab', { documentId: 'doc-1', title: 'New Tab' });
+      assert.equal(res.isError, false);
+    });
+
+    it('renameDocumentTab happy path', async () => {
+      const res = await callTool(ctx.client, 'renameDocumentTab', { documentId: 'doc-1', tabId: 'tab-1', title: 'Renamed' });
+      assert.equal(res.isError, false);
+    });
+
+    it('readSmartChips happy path', async () => {
+      const res = await callTool(ctx.client, 'readSmartChips', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+    });
+  });
 });

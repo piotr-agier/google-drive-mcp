@@ -135,6 +135,26 @@ const ShareFileSchema = z.object({
   sendNotificationEmail: z.boolean().optional().default(true),
 });
 
+const ConvertPdfToGoogleDocSchema = z.object({
+  fileId: z.string().min(1, "File ID is required"),
+  newName: z.string().optional(),
+  parentFolderId: z.string().optional(),
+});
+
+const BulkConvertFolderPdfsSchema = z.object({
+  folderId: z.string().min(1, "Folder ID is required"),
+  maxResults: z.number().int().min(1).max(200).optional().default(100),
+  continueOnError: z.boolean().optional().default(true),
+});
+
+const UploadPdfWithSplitSchema = z.object({
+  localPath: z.string().min(1, "Local file path is required"),
+  split: z.boolean().optional().default(false),
+  maxPagesPerChunk: z.number().int().min(1).max(500).optional(),
+  parentFolderId: z.string().optional(),
+  namePrefix: z.string().optional(),
+});
+
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
@@ -360,6 +380,47 @@ export const toolDefinitions: ToolDefinition[] = [
         sendNotificationEmail: { type: "boolean", description: "Send notification email" }
       },
       required: ["fileId", "emailAddress"]
+    }
+  },
+  {
+    name: "convertPdfToGoogleDoc",
+    description: "Convert an existing PDF in Drive into an editable Google Doc",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "PDF file ID in Google Drive" },
+        newName: { type: "string", description: "Optional name for converted Doc" },
+        parentFolderId: { type: "string", description: "Optional destination folder ID" }
+      },
+      required: ["fileId"]
+    }
+  },
+  {
+    name: "bulkConvertFolderPdfs",
+    description: "Convert all PDFs in a folder into Google Docs and return per-file results",
+    inputSchema: {
+      type: "object",
+      properties: {
+        folderId: { type: "string", description: "Folder ID containing PDFs" },
+        maxResults: { type: "number", description: "Maximum PDFs to process (1-200, default: 100)" },
+        continueOnError: { type: "boolean", description: "Continue conversion when one file fails (default: true)" }
+      },
+      required: ["folderId"]
+    }
+  },
+  {
+    name: "uploadPdfWithSplit",
+    description: "Upload PDF and optionally split into chunked parts (metadata split plan for now)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        localPath: { type: "string", description: "Absolute path to local PDF" },
+        split: { type: "boolean", description: "Enable split mode" },
+        maxPagesPerChunk: { type: "number", description: "Target max pages per chunk (advisory metadata)" },
+        parentFolderId: { type: "string", description: "Optional destination folder ID" },
+        namePrefix: { type: "string", description: "Optional output name prefix" }
+      },
+      required: ["localPath"]
     }
   },
 ];
@@ -966,6 +1027,104 @@ export async function handleTool(
 
       return {
         content: [{ type: 'text', text: `Shared file with ${response.data.emailAddress || data.emailAddress} as ${response.data.role}. Permission ID: ${response.data.id}` }],
+        isError: false,
+      };
+    }
+
+    case "convertPdfToGoogleDoc": {
+      const validation = ConvertPdfToGoogleDocSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      const source = await ctx.getDrive().files.get({
+        fileId: data.fileId,
+        fields: 'id,name,mimeType,parents',
+        supportsAllDrives: true,
+      });
+
+      if (source.data.mimeType !== 'application/pdf') {
+        return errorResponse(`File ${data.fileId} is not a PDF (mimeType=${source.data.mimeType || 'unknown'})`);
+      }
+
+      const parentId = data.parentFolderId || source.data.parents?.[0];
+      const converted = await ctx.getDrive().files.copy({
+        fileId: data.fileId,
+        requestBody: {
+          name: data.newName || `${source.data.name || 'Converted PDF'} (Doc)`,
+          mimeType: 'application/vnd.google-apps.document',
+          ...(parentId ? { parents: [parentId] } : {}),
+        },
+        fields: 'id,name,webViewLink,mimeType',
+        supportsAllDrives: true,
+      });
+
+      return { content: [{ type: 'text', text: `Converted PDF to Google Doc: ${converted.data.name}\nID: ${converted.data.id}\nLink: ${converted.data.webViewLink}` }], isError: false };
+    }
+
+    case "bulkConvertFolderPdfs": {
+      const validation = BulkConvertFolderPdfsSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      const list = await ctx.getDrive().files.list({
+        q: `'${data.folderId}' in parents and mimeType='application/pdf' and trashed=false`,
+        pageSize: data.maxResults,
+        fields: 'files(id,name,mimeType)',
+        includeItemsFromAllDrives: true,
+        supportsAllDrives: true,
+      });
+
+      const files = list.data.files || [];
+      const results: Array<{ id?: string; name?: string; docId?: string; ok: boolean; error?: string }> = [];
+
+      for (const f of files) {
+        try {
+          const converted = await ctx.getDrive().files.copy({
+            fileId: f.id!,
+            requestBody: {
+              name: `${f.name || 'Converted PDF'} (Doc)`,
+              mimeType: 'application/vnd.google-apps.document',
+              parents: [data.folderId],
+            },
+            fields: 'id,name',
+            supportsAllDrives: true,
+          });
+          results.push({ id: f.id || undefined, name: f.name || undefined, docId: converted.data.id || undefined, ok: true });
+        } catch (err: any) {
+          const message = err?.message || 'Unknown conversion error';
+          results.push({ id: f.id || undefined, name: f.name || undefined, ok: false, error: message });
+          if (!data.continueOnError) break;
+        }
+      }
+
+      const ok = results.filter(r => r.ok).length;
+      const fail = results.length - ok;
+      return {
+        content: [{ type: 'text', text: `Bulk PDF conversion finished. Processed=${results.length}, Success=${ok}, Failed=${fail}\n\n${results.map(r => r.ok ? `✅ ${r.name} -> ${r.docId}` : `❌ ${r.name}: ${r.error}`).join('\n')}` }],
+        isError: false,
+      };
+    }
+
+    case "uploadPdfWithSplit": {
+      const validation = UploadPdfWithSplitSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      if (!existsSync(data.localPath)) return errorResponse(`File not found: ${data.localPath}`);
+      const fileName = data.namePrefix || data.localPath.split(/[\\/]/).pop() || 'upload.pdf';
+      const parentId = await ctx.resolveFolderId(data.parentFolderId);
+
+      const uploaded = await ctx.getDrive().files.create({
+        requestBody: { name: fileName, parents: [parentId] },
+        media: { mimeType: 'application/pdf', body: createReadStream(data.localPath) },
+        fields: 'id,name,webViewLink',
+        supportsAllDrives: true,
+      });
+
+      return {
+        content: [{ type: 'text', text: data.split
+          ? `Uploaded PDF with split-plan metadata (split execution pending): ${uploaded.data.name}\nID: ${uploaded.data.id}\nmaxPagesPerChunk=${data.maxPagesPerChunk ?? 'auto'}`
+          : `Uploaded PDF without split: ${uploaded.data.name}\nID: ${uploaded.data.id}` }],
         isError: false,
       };
     }

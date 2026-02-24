@@ -100,6 +100,36 @@ const DownloadFileSchema = z.object({
   overwrite: z.boolean().optional().default(false),
 });
 
+const ListPermissionsSchema = z.object({
+  fileId: z.string().min(1, "File ID is required"),
+});
+
+const AddPermissionSchema = z.object({
+  fileId: z.string().min(1, "File ID is required"),
+  emailAddress: z.string().email("Valid email is required"),
+  role: z.enum(["owner", "organizer", "fileOrganizer", "writer", "commenter", "reader"]).default("reader"),
+  type: z.enum(["user", "group", "domain", "anyone"]).default("user"),
+  sendNotificationEmail: z.boolean().optional().default(false),
+});
+
+const UpdatePermissionSchema = z.object({
+  fileId: z.string().min(1, "File ID is required"),
+  permissionId: z.string().min(1, "Permission ID is required"),
+  role: z.enum(["owner", "organizer", "fileOrganizer", "writer", "commenter", "reader"]),
+});
+
+const RemovePermissionSchema = z.object({
+  fileId: z.string().min(1, "File ID is required"),
+  permissionId: z.string().min(1, "Permission ID is required"),
+});
+
+const ShareFileSchema = z.object({
+  fileId: z.string().min(1, "File ID is required"),
+  emailAddress: z.string().email("Valid email is required"),
+  role: z.enum(["writer", "commenter", "reader"]).default("reader"),
+  sendNotificationEmail: z.boolean().optional().default(true),
+});
+
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
@@ -259,6 +289,71 @@ export const toolDefinitions: ToolDefinition[] = [
         }
       },
       required: ["fileId", "localPath"]
+    }
+  },
+  {
+    name: "listPermissions",
+    description: "List sharing permissions for a file",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "Google Drive file ID" }
+      },
+      required: ["fileId"]
+    }
+  },
+  {
+    name: "addPermission",
+    description: "Add a sharing permission to a file",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "Google Drive file ID" },
+        emailAddress: { type: "string", description: "Target user/group email" },
+        role: { type: "string", enum: ["owner", "organizer", "fileOrganizer", "writer", "commenter", "reader"], description: "Permission role" },
+        type: { type: "string", enum: ["user", "group", "domain", "anyone"], description: "Principal type" },
+        sendNotificationEmail: { type: "boolean", description: "Send notification email" }
+      },
+      required: ["fileId", "emailAddress"]
+    }
+  },
+  {
+    name: "updatePermission",
+    description: "Update an existing permission role",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "Google Drive file ID" },
+        permissionId: { type: "string", description: "Permission ID" },
+        role: { type: "string", enum: ["owner", "organizer", "fileOrganizer", "writer", "commenter", "reader"], description: "New role" }
+      },
+      required: ["fileId", "permissionId", "role"]
+    }
+  },
+  {
+    name: "removePermission",
+    description: "Remove a permission from a file",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "Google Drive file ID" },
+        permissionId: { type: "string", description: "Permission ID" }
+      },
+      required: ["fileId", "permissionId"]
+    }
+  },
+  {
+    name: "shareFile",
+    description: "Convenience wrapper to share a file with a user email",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "Google Drive file ID" },
+        emailAddress: { type: "string", description: "User email" },
+        role: { type: "string", enum: ["writer", "commenter", "reader"], description: "Access role" },
+        sendNotificationEmail: { type: "boolean", description: "Send notification email" }
+      },
+      required: ["fileId", "emailAddress"]
     }
   },
 ];
@@ -710,6 +805,103 @@ export async function handleTool(
               : `Type: ${downloadResult.driveMimeType}`,
           ].join('\n'),
         }],
+        isError: false,
+      };
+    }
+
+    case "listPermissions": {
+      const validation = ListPermissionsSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      const response = await ctx.getDrive().permissions.list({
+        fileId: data.fileId,
+        fields: 'permissions(id,type,role,emailAddress,domain,displayName)',
+        supportsAllDrives: true,
+      });
+
+      const permissions = response.data.permissions || [];
+      if (permissions.length === 0) {
+        return { content: [{ type: 'text', text: 'No permissions found.' }], isError: false };
+      }
+
+      const lines = permissions.map((p) => {
+        const who = p.emailAddress || p.domain || p.displayName || p.type || 'unknown';
+        return `- ${p.id}: ${who} (${p.type}) => ${p.role}`;
+      });
+
+      return { content: [{ type: 'text', text: `Permissions for file ${data.fileId}:\n${lines.join('\n')}` }], isError: false };
+    }
+
+    case "addPermission": {
+      const validation = AddPermissionSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      const response = await ctx.getDrive().permissions.create({
+        fileId: data.fileId,
+        requestBody: {
+          type: data.type,
+          role: data.role,
+          emailAddress: data.emailAddress,
+        },
+        sendNotificationEmail: data.sendNotificationEmail,
+        fields: 'id,type,role,emailAddress',
+        supportsAllDrives: true,
+      });
+
+      return { content: [{ type: 'text', text: `Permission added: ${response.data.id} (${response.data.role}) for ${response.data.emailAddress || data.emailAddress}` }], isError: false };
+    }
+
+    case "updatePermission": {
+      const validation = UpdatePermissionSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      const response = await ctx.getDrive().permissions.update({
+        fileId: data.fileId,
+        permissionId: data.permissionId,
+        requestBody: { role: data.role },
+        fields: 'id,type,role,emailAddress',
+        supportsAllDrives: true,
+      });
+
+      return { content: [{ type: 'text', text: `Permission updated: ${response.data.id} => ${response.data.role}` }], isError: false };
+    }
+
+    case "removePermission": {
+      const validation = RemovePermissionSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      await ctx.getDrive().permissions.delete({
+        fileId: data.fileId,
+        permissionId: data.permissionId,
+        supportsAllDrives: true,
+      });
+
+      return { content: [{ type: 'text', text: `Permission removed: ${data.permissionId}` }], isError: false };
+    }
+
+    case "shareFile": {
+      const validation = ShareFileSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      const response = await ctx.getDrive().permissions.create({
+        fileId: data.fileId,
+        requestBody: {
+          type: 'user',
+          role: data.role,
+          emailAddress: data.emailAddress,
+        },
+        sendNotificationEmail: data.sendNotificationEmail,
+        fields: 'id,type,role,emailAddress',
+        supportsAllDrives: true,
+      });
+
+      return {
+        content: [{ type: 'text', text: `Shared file with ${response.data.emailAddress || data.emailAddress} as ${response.data.role}. Permission ID: ${response.data.id}` }],
         isError: false,
       };
     }

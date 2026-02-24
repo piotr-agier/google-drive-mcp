@@ -248,6 +248,21 @@ export GOOGLE_DRIVE_OAUTH_CREDENTIALS="/path/to/your/gcp-oauth.keys.json"
 #### 2. **Default File Location**
 Place `gcp-oauth.keys.json` in the project root directory
 
+### OAuth Scope Configuration
+
+By default, the server requests a broad scope set for Drive/Docs/Sheets/Slides/Calendar.
+You can override requested scopes with:
+
+```bash
+export GOOGLE_DRIVE_MCP_SCOPES="drive.readonly,documents,spreadsheets"
+```
+
+Notes:
+- Comma-separated list.
+- Values can be full scope URLs or short aliases:
+  `drive`, `drive.file`, `drive.readonly`, `documents`, `spreadsheets`, `presentations`, `calendar`, `calendar.events`.
+- Changing scopes usually requires re-authentication.
+
 ### Token Storage
 
 Authentication tokens are stored securely following the XDG Base Directory specification:

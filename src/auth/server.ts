@@ -5,8 +5,8 @@ import http from 'http';
 import open from 'open';
 import { loadCredentials } from './client.js';
 
-// OAuth scopes for Google Drive, Docs, Sheets, Slides, and Calendar
-const SCOPES = [
+// Default OAuth scopes for Google Drive, Docs, Sheets, Slides, and Calendar
+const DEFAULT_SCOPES = [
   'https://www.googleapis.com/auth/drive',
   'https://www.googleapis.com/auth/drive.file',
   'https://www.googleapis.com/auth/drive.readonly',
@@ -15,7 +15,34 @@ const SCOPES = [
   'https://www.googleapis.com/auth/presentations',
   'https://www.googleapis.com/auth/calendar',
   'https://www.googleapis.com/auth/calendar.events'
-];
+] as const;
+
+const SCOPE_ALIASES: Record<string, string> = {
+  drive: 'https://www.googleapis.com/auth/drive',
+  'drive.file': 'https://www.googleapis.com/auth/drive.file',
+  'drive.readonly': 'https://www.googleapis.com/auth/drive.readonly',
+  documents: 'https://www.googleapis.com/auth/documents',
+  spreadsheets: 'https://www.googleapis.com/auth/spreadsheets',
+  presentations: 'https://www.googleapis.com/auth/presentations',
+  calendar: 'https://www.googleapis.com/auth/calendar',
+  'calendar.events': 'https://www.googleapis.com/auth/calendar.events'
+};
+
+function resolveOAuthScopes(): string[] {
+  const raw = process.env.GOOGLE_DRIVE_MCP_SCOPES?.trim();
+  if (!raw) return [...DEFAULT_SCOPES];
+
+  const scopes = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => SCOPE_ALIASES[s] ?? s);
+
+  if (scopes.length === 0) return [...DEFAULT_SCOPES];
+  return [...new Set(scopes)];
+}
+
+const SCOPES = resolveOAuthScopes();
 
 export class AuthServer {
   private baseOAuth2Client: OAuth2Client; // Used by TokenManager for validation/refresh

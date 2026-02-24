@@ -1,14 +1,16 @@
 # Google Drive MCP Server
 
-A Model Context Protocol (MCP) server that provides secure integration with Google Drive, Docs, Sheets, and Slides. It allows Claude Desktop and other MCP clients to manage files in Google Drive through a standardized interface.
+A Model Context Protocol (MCP) server that provides secure integration with Google Drive, Docs, Sheets, Slides, and Calendar. It allows Claude Desktop and other MCP clients to manage files in Google Drive and calendar events through a standardized interface.
 
 ## Features
 
-- **Multi-format Support**: Work with Google Docs, Sheets, Slides, and regular files
-- **File Management**: Create, update, delete, rename, and move files and folders
+- **Multi-format Support**: Work with Google Docs, Sheets, Slides, Calendar, and regular files
+- **File Management**: Create, update, delete, rename, move, copy, upload, and download files and folders
 - **Advanced Search**: Search across your entire Google Drive
 - **Shared Drives Support**: Full access to Google Shared Drives (formerly Team Drives) in addition to My Drive
 - **Folder Navigation**: List and navigate through folder hierarchies with path support (e.g., `/Work/Projects`)
+- **Google Docs Editing**: Surgical text insertion/deletion, table management, image embedding, comments, and rich formatting
+- **Google Calendar**: Full calendar management — list calendars, create/update/delete events, Google Meet integration
 - **MCP Resource Protocol**: Files accessible as MCP resources for reading content
 - **Secure Authentication**: OAuth 2.0 with automatic token refresh
 
@@ -67,6 +69,7 @@ and Budget Spreadsheet template.
   - Google Docs API
   - Google Sheets API
   - Google Slides API
+  - Google Calendar API
 - **OAuth 2.0 Credentials**: Desktop application type (Client ID only - no client secret required)
 
 ## Google Cloud Setup
@@ -84,6 +87,7 @@ and Budget Spreadsheet template.
   - **Google Docs API**
   - **Google Sheets API**
   - **Google Slides API**
+  - **Google Calendar API**
 - Wait for each API to be enabled before proceeding
 
 ### 3. Configure OAuth Consent Screen
@@ -102,6 +106,8 @@ and Budget Spreadsheet template.
   - `.../auth/presentations`
   - `.../auth/drive`
   - `.../auth/drive.readonly`
+  - `.../auth/calendar`
+  - `.../auth/calendar.events`
 
 ### 4. Create OAuth 2.0 Credentials
 - Go to "APIs & Services" > "Credentials"
@@ -332,72 +338,186 @@ Add the server to your Claude Desktop configuration:
   - `itemId`: Item ID to move
   - `destinationFolderId`: Destination folder ID
 
+- **copyFile** - Create a copy of a Google Drive file or document
+  - `fileId`: ID of the file to copy
+  - `newName`: Name for the copied file (optional, defaults to "Copy of [original name]")
+  - `parentFolderId`: Destination folder ID (optional, defaults to same location)
+
+- **uploadFile** - Upload a local file (any type: image, audio, video, PDF, etc.) to Google Drive
+  - `localPath`: Absolute path to the local file
+  - `name`: File name in Drive (optional, defaults to local filename)
+  - `parentFolderId`: Parent folder ID or path (optional, e.g., '/Work/Projects')
+  - `mimeType`: MIME type (optional, auto-detected from extension)
+
+- **downloadFile** - Download a Google Drive file to a local path
+  - `fileId`: Google Drive file ID
+  - `localPath`: Absolute local path to save the file (can be a directory or full file path)
+  - `exportMimeType`: For Google Workspace files, MIME type to export as (optional, e.g., 'application/pdf', 'text/csv')
+  - `overwrite`: Whether to overwrite existing files (optional, default: false)
+
 ### Folder Operations
 - **createFolder** - Create a new folder
   - `name`: Folder name
   - `parent`: Parent folder ID or path (optional)
 
-### Google Workspace
+### Google Docs
+
+#### Create and Update
 - **createGoogleDoc** - Create a Google Doc
   - `name`: Document name
   - `content`: Document content
   - `parentFolderId`: Parent folder ID (optional)
 
-- **updateGoogleDoc** - Update a Google Doc
+- **updateGoogleDoc** - Replace all content in a Google Doc
   - `documentId`: Document ID
   - `content`: New content
 
-- **getGoogleDocContent** - Get document content with text indices
+#### Reading and Discovery
+- **readGoogleDoc** - Read content of a Google Doc with format options
   - `documentId`: Document ID
-  - Returns text with character positions for formatting
+  - `format`: Output format — `text`, `json`, or `markdown` (optional, default: text)
+  - `maxLength`: Maximum characters to return (optional)
 
-- **formatGoogleDocText** - Apply text formatting to a range
+- **getGoogleDocContent** - Get document content with text indices for formatting
   - `documentId`: Document ID
-  - `startIndex`: Start position (1-based)
-  - `endIndex`: End position (1-based)
-  - `bold`: Make text bold (optional)
-  - `italic`: Make text italic (optional)
-  - `underline`: Underline text (optional)
-  - `strikethrough`: Strikethrough text (optional)
+  - `includeFormatting`: Include font, style, and color info for each text span (optional, default: false)
+
+- **listDocumentTabs** - List all tabs in a Google Doc with their IDs and hierarchy
+  - `documentId`: Document ID
+  - `includeContent`: Include content summary (character count) for each tab (optional)
+
+- **listGoogleDocs** - List Google Documents with optional filtering
+  - `query`: Search query to filter by name or content (optional)
+  - `maxResults`: Maximum documents to return, 1-100 (optional, default: 20)
+  - `orderBy`: Sort order — `name`, `modifiedTime`, or `createdTime` (optional)
+
+- **getDocumentInfo** - Get detailed metadata about a specific Google Document
+  - `documentId`: Document ID
+
+#### Surgical Editing
+- **insertText** - Insert text at a specific index (doesn't replace entire doc)
+  - `documentId`: Document ID
+  - `text`: Text to insert
+  - `index`: Position to insert at (1-based)
+
+- **deleteRange** - Delete content between start and end indices
+  - `documentId`: Document ID
+  - `startIndex`: Start index (1-based, inclusive)
+  - `endIndex`: End index (exclusive)
+
+#### Text and Paragraph Styling
+- **applyTextStyle** - Apply text formatting (bold, italic, color, etc.) to a range or found text
+  - `documentId`: Document ID
+  - Target (use one): `startIndex`+`endIndex` OR `textToFind`+`matchInstance`
+  - `bold`, `italic`, `underline`, `strikethrough`: Text styling (optional)
   - `fontSize`: Font size in points (optional)
-  - `foregroundColor`: Text color as RGB (0-1) (optional)
+  - `fontFamily`: Font family name (optional)
+  - `foregroundColor`: Hex color, e.g., `#FF0000` (optional)
+  - `backgroundColor`: Hex background color (optional)
+  - `linkUrl`: URL for hyperlink (optional)
 
-- **formatGoogleDocParagraph** - Apply paragraph formatting to a range
+- **applyParagraphStyle** - Apply paragraph formatting
   - `documentId`: Document ID
-  - `startIndex`: Start position (1-based)
-  - `endIndex`: End position (1-based)
-  - `namedStyleType`: Style like HEADING_1, HEADING_2, etc. (optional)
+  - Target (use one): `startIndex`+`endIndex` OR `textToFind`+`matchInstance` OR `indexWithinParagraph`
+  - `namedStyleType`: NORMAL_TEXT, TITLE, SUBTITLE, HEADING_1 through HEADING_6 (optional)
   - `alignment`: START, CENTER, END, or JUSTIFIED (optional)
-  - `lineSpacing`: Line spacing multiplier (optional)
-  - `spaceAbove`: Space above paragraph in points (optional)
-  - `spaceBelow`: Space below paragraph in points (optional)
+  - `indentStart`, `indentEnd`: Indent in points (optional)
+  - `spaceAbove`, `spaceBelow`: Spacing in points (optional)
+  - `keepWithNext`: Keep with next paragraph (optional)
 
+#### Tables and Images
+- **insertTable** - Insert a new table at a given index
+  - `documentId`: Document ID
+  - `rows`: Number of rows
+  - `columns`: Number of columns
+  - `index`: Position to insert at (1-based)
+
+- **editTableCell** - Edit content and/or style of a specific table cell
+  - `documentId`: Document ID
+  - `tableStartIndex`: Starting index of the table element
+  - `rowIndex`: Row index (0-based)
+  - `columnIndex`: Column index (0-based)
+  - `textContent`: New text content (optional)
+  - `bold`, `italic`, `fontSize`, `alignment`: Cell styling (optional)
+
+- **insertImageFromUrl** - Insert an inline image from a publicly accessible URL
+  - `documentId`: Document ID
+  - `imageUrl`: Publicly accessible URL to the image
+  - `index`: Position to insert at (1-based)
+  - `width`, `height`: Image dimensions in points (optional)
+
+- **insertLocalImage** - Upload a local image file to Drive and insert it into a document
+  - `documentId`: Document ID
+  - `localImagePath`: Absolute path to the local image file
+  - `index`: Position to insert at (1-based)
+  - `width`, `height`: Image dimensions in points (optional)
+  - `uploadToSameFolder`: Upload to same folder as document (optional, default: true)
+
+#### Comments
+- **listComments** - List all comments in a Google Document
+  - `documentId`: Document ID
+  - `includeDeleted`: Include deleted comments (optional, default: false)
+  - `pageSize`: Max comments to return, 1-100 (optional, default: 100)
+  - `pageToken`: Token for next page of results (optional)
+
+- **getComment** - Get a specific comment with its full thread of replies
+  - `documentId`: Document ID
+  - `commentId`: Comment ID
+
+- **addComment** - Add a comment anchored to a specific text range
+  - `documentId`: Document ID
+  - `startIndex`: Start index (1-based)
+  - `endIndex`: End index (exclusive)
+  - `commentText`: The comment content
+
+- **replyToComment** - Add a reply to an existing comment
+  - `documentId`: Document ID
+  - `commentId`: Comment ID to reply to
+  - `replyText`: The reply content
+
+- **deleteComment** - Delete a comment from the document
+  - `documentId`: Document ID
+  - `commentId`: Comment ID to delete
+
+### Google Sheets
+
+#### Create and Update
 - **createGoogleSheet** - Create a Google Sheet
   - `name`: Spreadsheet name
   - `data`: 2D array of cell values
   - `parentFolderId`: Parent folder ID (optional)
+  - `valueInputOption`: `RAW` (default, safe) or `USER_ENTERED` (evaluates formulas) (optional)
 
 - **updateGoogleSheet** - Update a Google Sheet
   - `spreadsheetId`: Spreadsheet ID
-  - `range`: Range to update (e.g., "A1:C10")
+  - `range`: Range to update (e.g., 'Sheet1!A1:C10')
   - `data`: 2D array of new values
-
-- **createGoogleSlides** - Create a presentation
-  - `name`: Presentation name
-  - `slides`: Array of slides with title and content
-  - `parentFolderId`: Parent folder ID (optional)
-
-- **updateGoogleSlides** - Update an existing presentation
-  - `presentationId`: Presentation ID
-  - `slides`: Array of slides with title and content (replaces all existing slides)
-
-### Google Sheets Formatting Tools
+  - `valueInputOption`: `RAW` (default, safe) or `USER_ENTERED` (evaluates formulas) (optional)
 
 - **getGoogleSheetContent** - Get spreadsheet content with cell information
   - `spreadsheetId`: Spreadsheet ID
   - `range`: Range to get (e.g., 'Sheet1!A1:C10')
-  - Returns cell values for the specified range
 
+#### Sheet Management
+- **getSpreadsheetInfo** - Get detailed information about a spreadsheet including all sheets/tabs
+  - `spreadsheetId`: Spreadsheet ID
+
+- **appendSpreadsheetRows** - Append rows to the end of a sheet
+  - `spreadsheetId`: Spreadsheet ID
+  - `range`: A1 notation range indicating where to append (e.g., 'A1' or 'Sheet1!A1')
+  - `values`: 2D array of values to append
+  - `valueInputOption`: `RAW` or `USER_ENTERED` (optional, default: USER_ENTERED)
+
+- **addSpreadsheetSheet** - Add a new sheet/tab to an existing spreadsheet
+  - `spreadsheetId`: Spreadsheet ID
+  - `sheetTitle`: Title for the new sheet
+
+- **listGoogleSheets** - List Google Spreadsheets with optional filtering
+  - `query`: Search query to filter by name or content (optional)
+  - `maxResults`: Maximum spreadsheets to return, 1-100 (optional, default: 20)
+  - `orderBy`: Sort order — `name`, `modifiedTime`, or `createdTime` (optional)
+
+#### Formatting
 - **formatGoogleSheetCells** - Format cell properties
   - `spreadsheetId`: Spreadsheet ID
   - `range`: Range to format (e.g., 'A1:C10')
@@ -409,10 +529,7 @@ Add the server to your Claude Desktop configuration:
 - **formatGoogleSheetText** - Apply text formatting to cells
   - `spreadsheetId`: Spreadsheet ID
   - `range`: Range to format (e.g., 'A1:C10')
-  - `bold`: Make text bold (optional)
-  - `italic`: Make text italic (optional)
-  - `strikethrough`: Strikethrough text (optional)
-  - `underline`: Underline text (optional)
+  - `bold`, `italic`, `strikethrough`, `underline`: Text styling (optional)
   - `fontSize`: Font size in points (optional)
   - `fontFamily`: Font name (optional)
   - `foregroundColor`: Text color (RGB 0-1) (optional)
@@ -447,36 +564,46 @@ Add the server to your Claude Desktop configuration:
     - `backgroundColor`: Cell color (RGB 0-1) (optional)
     - `textFormat`: Text formatting with bold and foregroundColor (optional)
 
-### Google Slides Formatting Tools
+### Google Slides
 
+#### Create and Update
+- **createGoogleSlides** - Create a presentation
+  - `name`: Presentation name
+  - `slides`: Array of slides with title and content
+  - `parentFolderId`: Parent folder ID (optional)
+
+- **updateGoogleSlides** - Update an existing presentation
+  - `presentationId`: Presentation ID
+  - `slides`: Array of slides with title and content (replaces all existing slides)
+
+#### Content and Formatting
 - **getGoogleSlidesContent** - Get presentation content with element IDs
   - `presentationId`: Presentation ID
   - `slideIndex`: Specific slide index (optional)
-  - Returns element IDs for formatting
 
 - **formatGoogleSlidesText** - Apply text formatting to slide elements
   - `presentationId`: Presentation ID
   - `objectId`: Element ID
-  - `startIndex`/`endIndex`: Text range (optional)
-  - `bold`, `italic`, `underline`, `strikethrough`: Text styling
-  - `fontSize`: Font size in points
-  - `fontFamily`: Font name
-  - `foregroundColor`: Text color (RGB 0-1)
+  - `startIndex`/`endIndex`: Text range (optional, 0-based)
+  - `bold`, `italic`, `underline`, `strikethrough`: Text styling (optional)
+  - `fontSize`: Font size in points (optional)
+  - `fontFamily`: Font name (optional)
+  - `foregroundColor`: Text color (RGB 0-1) (optional)
 
 - **formatGoogleSlidesParagraph** - Apply paragraph formatting
   - `presentationId`: Presentation ID
   - `objectId`: Element ID
-  - `alignment`: START, CENTER, END, or JUSTIFIED
-  - `lineSpacing`: Line spacing multiplier
-  - `bulletStyle`: NONE, DISC, ARROW, SQUARE, DIAMOND, STAR, or NUMBERED
+  - `alignment`: START, CENTER, END, or JUSTIFIED (optional)
+  - `lineSpacing`: Line spacing multiplier (optional)
+  - `bulletStyle`: NONE, DISC, ARROW, SQUARE, DIAMOND, STAR, or NUMBERED (optional)
 
 - **styleGoogleSlidesShape** - Style shapes and elements
   - `presentationId`: Presentation ID
   - `objectId`: Shape ID
-  - `backgroundColor`: Fill color (RGBA 0-1)
-  - `outlineColor`: Border color (RGB 0-1)
-  - `outlineWeight`: Border thickness in points
-  - `outlineDashStyle`: SOLID, DOT, DASH, etc.
+  - `backgroundColor`: Fill color (RGBA 0-1) (optional)
+  - `outlineColor`: Border color (RGB 0-1) (optional)
+  - `outlineWeight`: Border thickness in points (optional)
+  - `outlineDashStyle`: SOLID, DOT, DASH, DASH_DOT, LONG_DASH, or LONG_DASH_DOT (optional)
 
 - **setGoogleSlidesBackground** - Set slide background color
   - `presentationId`: Presentation ID
@@ -497,17 +624,58 @@ Add the server to your Claude Desktop configuration:
   - `x`, `y`, `width`, `height`: Position/size in EMU
   - `backgroundColor`: Fill color (RGBA 0-1) (optional)
 
-### Speaker Notes
-
+#### Speaker Notes
 - **getGoogleSlidesSpeakerNotes** - Get speaker notes from a slide
   - `presentationId`: Presentation ID
   - `slideIndex`: Slide index (0-based)
-  - Returns the speaker notes text or a message if no notes exist
 
 - **updateGoogleSlidesSpeakerNotes** - Update or set speaker notes for a slide
   - `presentationId`: Presentation ID
   - `slideIndex`: Slide index (0-based)
   - `notes`: The speaker notes content to set
+
+### Google Calendar
+- **listCalendars** - List all accessible Google Calendars
+  - `showHidden`: Include hidden calendars (optional, default: false)
+
+- **getCalendarEvents** - Get events from a calendar with optional filtering
+  - `calendarId`: Calendar ID (optional, default: primary)
+  - `timeMin`: Start of time range, RFC3339 (optional, e.g., '2024-01-01T00:00:00Z')
+  - `timeMax`: End of time range, RFC3339 (optional)
+  - `query`: Free text search in events (optional)
+  - `maxResults`: Maximum events to return, 1-250 (optional, default: 50)
+  - `singleEvents`: Expand recurring events into instances (optional, default: true)
+  - `orderBy`: Sort order — `startTime` or `updated` (optional, default: startTime)
+
+- **getCalendarEvent** - Get a single calendar event by ID
+  - `eventId`: Event ID
+  - `calendarId`: Calendar ID (optional, default: primary)
+
+- **createCalendarEvent** - Create a new calendar event with Google Meet support
+  - `summary`: Event title
+  - `start`: Start time (`dateTime` for timed events, `date` for all-day, optional `timeZone`)
+  - `end`: End time (same format as start)
+  - `calendarId`: Calendar ID (optional, default: primary)
+  - `description`: Event description (optional)
+  - `location`: Event location (optional)
+  - `attendees`: Array of email addresses (optional)
+  - `sendUpdates`: `all`, `externalOnly`, or `none` (optional, default: none)
+  - `conferenceType`: `hangoutsMeet` to add Google Meet link (optional)
+  - `recurrence`: Array of RRULE strings for recurring events (optional)
+  - `visibility`: `default`, `public`, `private`, or `confidential` (optional)
+
+- **updateCalendarEvent** - Update an existing calendar event
+  - `eventId`: Event ID
+  - `calendarId`: Calendar ID (optional, default: primary)
+  - `summary`, `description`, `location`: Updated fields (optional)
+  - `start`, `end`: Updated times (optional)
+  - `attendees`: Updated attendee emails, replaces existing (optional)
+  - `sendUpdates`: `all`, `externalOnly`, or `none` (optional, default: none)
+
+- **deleteCalendarEvent** - Delete a calendar event
+  - `eventId`: Event ID
+  - `calendarId`: Calendar ID (optional, default: primary)
+  - `sendUpdates`: Send cancellation notifications (optional, default: none)
 
 ## Authentication Flow
 
@@ -545,7 +713,7 @@ npm run auth
 ### Security Features
 - **No Client Secrets**: Desktop OAuth flow works with client ID only
 - **Secure Token Storage**: Tokens stored with 0600 permissions in XDG-compliant location
-- **Scoped Access**: Minimal permissions requested (drive.file, documents, spreadsheets, presentations)
+- **Scoped Access**: Minimal permissions requested (drive.file, documents, spreadsheets, presentations, calendar)
 - **Local Execution**: All processing happens on your machine
 - **Automatic Token Refresh**: Reduces need for re-authentication
 - **Token Migration**: Legacy tokens automatically moved to secure location
@@ -750,11 +918,20 @@ google-drive-mcp/
 ├── src/                    # Source code
 │   ├── index.ts           # Main server implementation
 │   ├── auth.ts            # Main authentication module
-│   └── auth/              # Authentication components
-│       ├── client.ts      # OAuth2 client setup
-│       ├── server.ts      # Local auth server
-│       ├── tokenManager.ts # Token storage and validation
-│       └── utils.ts       # Auth utilities
+│   ├── auth/              # Authentication components
+│   │   ├── client.ts      # OAuth2 client setup
+│   │   ├── server.ts      # Local auth server
+│   │   ├── tokenManager.ts # Token storage and validation
+│   │   └── utils.ts       # Auth utilities
+│   ├── tools/             # Tool implementations by service
+│   │   ├── drive.ts       # File management tools
+│   │   ├── docs.ts        # Google Docs tools
+│   │   ├── sheets.ts      # Google Sheets tools
+│   │   ├── slides.ts      # Google Slides tools
+│   │   └── calendar.ts    # Google Calendar tools
+│   ├── utils.ts           # Shared utility functions
+│   ├── types.ts           # TypeScript type definitions
+│   └── download-file.ts   # File download helper
 ├── dist/                  # Compiled JavaScript (generated)
 ├── scripts/               # Build scripts
 │   └── build.js          # Custom build script

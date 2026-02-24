@@ -168,6 +168,51 @@ describe('Drive tools', () => {
     });
   });
 
+  // --- listPermissions ---
+  describe('listPermissions', () => {
+    it('happy path', async () => {
+      ctx.mocks.drive.service.permissions.create._resetImpl();
+      const res = await callTool(ctx.client, 'listPermissions', { fileId: 'file-1' });
+      assert.equal(res.isError, false);
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'listPermissions', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- addPermission / shareFile ---
+  describe('permission mutations', () => {
+    it('addPermission happy path', async () => {
+      const res = await callTool(ctx.client, 'addPermission', {
+        fileId: 'file-1', emailAddress: 'user@example.com', role: 'reader', type: 'user',
+      });
+      assert.equal(res.isError, false);
+    });
+
+    it('shareFile happy path', async () => {
+      const res = await callTool(ctx.client, 'shareFile', {
+        fileId: 'file-1', emailAddress: 'user@example.com', role: 'writer',
+      });
+      assert.equal(res.isError, false);
+    });
+
+    it('updatePermission happy path', async () => {
+      const res = await callTool(ctx.client, 'updatePermission', {
+        fileId: 'file-1', permissionId: 'perm-1', role: 'commenter',
+      });
+      assert.equal(res.isError, false);
+    });
+
+    it('removePermission happy path', async () => {
+      const res = await callTool(ctx.client, 'removePermission', {
+        fileId: 'file-1', permissionId: 'perm-1',
+      });
+      assert.equal(res.isError, false);
+    });
+  });
+
   // --- moveItem ---
   describe('moveItem', () => {
     it('happy path', async () => {

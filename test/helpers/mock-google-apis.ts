@@ -72,7 +72,11 @@ export function createDriveMock() {
     create: stub(tracker, 'replies.create', { id: 'reply-1', content: 'reply text' }),
   };
   const permissions = {
-    create: stub(tracker, 'permissions.create', {}),
+    create: stub(tracker, 'permissions.create', { id: 'perm-1', role: 'reader', emailAddress: 'user@example.com', type: 'user' }),
+    list: stub(tracker, 'permissions.list', { permissions: [{ id: 'perm-1', role: 'reader', emailAddress: 'user@example.com', type: 'user' }] }),
+    update: stub(tracker, 'permissions.update', { id: 'perm-1', role: 'commenter', emailAddress: 'user@example.com', type: 'user' }),
+    delete: stub(tracker, 'permissions.delete', {}),
+    get: stub(tracker, 'permissions.get', { id: 'perm-1', role: 'reader', emailAddress: 'user@example.com', type: 'user' }),
   };
   return { service: { files, comments, replies, permissions, drives }, tracker };
 }

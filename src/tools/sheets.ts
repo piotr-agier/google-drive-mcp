@@ -126,6 +126,21 @@ const AddSpreadsheetSheetSchema = z.object({
   sheetTitle: z.string().min(1, "Sheet title is required")
 });
 
+const ListSheetsSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required")
+});
+
+const RenameSheetSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  sheetId: z.number().int(),
+  newTitle: z.string().min(1, "New title is required")
+});
+
+const DeleteSheetSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  sheetId: z.number().int()
+});
+
 const ListGoogleSheetsSchema = z.object({
   maxResults: z.number().int().min(1).max(100).optional().default(20),
   query: z.string().optional(),
@@ -414,6 +429,42 @@ export const toolDefinitions: ToolDefinition[] = [
         sheetTitle: { type: "string", description: "Title for the new sheet/tab" }
       },
       required: ["spreadsheetId", "sheetTitle"]
+    }
+  },
+  {
+    name: "listSheets",
+    description: "List tabs/sheets in a Google Spreadsheet",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" }
+      },
+      required: ["spreadsheetId"]
+    }
+  },
+  {
+    name: "renameSheet",
+    description: "Rename a sheet/tab by sheetId",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        sheetId: { type: "number", description: "Sheet ID" },
+        newTitle: { type: "string", description: "New title" }
+      },
+      required: ["spreadsheetId", "sheetId", "newTitle"]
+    }
+  },
+  {
+    name: "deleteSheet",
+    description: "Delete a sheet/tab by sheetId",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        sheetId: { type: "number", description: "Sheet ID" }
+      },
+      required: ["spreadsheetId", "sheetId"]
     }
   },
   {
@@ -1036,6 +1087,65 @@ export async function handleTool(
         content: [{ type: "text", text: `Successfully added sheet "${addedSheet.title}" (Sheet ID: ${addedSheet.sheetId}) to spreadsheet.` }],
         isError: false
       };
+    }
+
+    case "listSheets": {
+      const validation = ListSheetsSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      const response = await sheets.spreadsheets.get({
+        spreadsheetId: a.spreadsheetId,
+        fields: 'sheets.properties(sheetId,title,index,hidden)'
+      });
+
+      const tabs = response.data.sheets || [];
+      if (tabs.length === 0) {
+        return { content: [{ type: 'text', text: 'No sheets found.' }], isError: false };
+      }
+
+      const lines = tabs.map((s) => `- ${s.properties?.title} (id: ${s.properties?.sheetId}, index: ${s.properties?.index}${s.properties?.hidden ? ', hidden' : ''})`);
+      return { content: [{ type: 'text', text: `Sheets in spreadsheet ${a.spreadsheetId}:\n${lines.join('\n')}` }], isError: false };
+    }
+
+    case "renameSheet": {
+      const validation = RenameSheetSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: a.spreadsheetId,
+        requestBody: {
+          requests: [{
+            updateSheetProperties: {
+              properties: { sheetId: a.sheetId, title: a.newTitle },
+              fields: 'title'
+            }
+          }]
+        }
+      });
+
+      return { content: [{ type: 'text', text: `Renamed sheet ${a.sheetId} to "${a.newTitle}".` }], isError: false };
+    }
+
+    case "deleteSheet": {
+      const validation = DeleteSheetSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: a.spreadsheetId,
+        requestBody: {
+          requests: [{
+            deleteSheet: { sheetId: a.sheetId }
+          }]
+        }
+      });
+
+      return { content: [{ type: 'text', text: `Deleted sheet ${a.sheetId}.` }], isError: false };
     }
 
     case "listGoogleSheets": {

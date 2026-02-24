@@ -124,6 +124,29 @@ const UpdateGoogleSlidesSpeakerNotesSchema = z.object({
   notes: z.string()
 });
 
+const DeleteGoogleSlideSchema = z.object({
+  presentationId: z.string().min(1, "Presentation ID is required"),
+  slideObjectId: z.string().min(1, "Slide object ID is required")
+});
+
+const DuplicateSlideSchema = z.object({
+  presentationId: z.string().min(1, "Presentation ID is required"),
+  slideObjectId: z.string().min(1, "Slide object ID is required")
+});
+
+const ReorderSlidesSchema = z.object({
+  presentationId: z.string().min(1, "Presentation ID is required"),
+  slideObjectIds: z.array(z.string().min(1)).min(1, "At least one slide object ID is required"),
+  insertionIndex: z.number().min(0)
+});
+
+const ReplaceAllTextInSlidesSchema = z.object({
+  presentationId: z.string().min(1, "Presentation ID is required"),
+  containsText: z.string().min(1, "containsText is required"),
+  replaceText: z.string(),
+  matchCase: z.boolean().optional().default(false)
+});
+
 // ---------------------------------------------------------------------------
 // Tool Definitions
 // ---------------------------------------------------------------------------
@@ -375,6 +398,57 @@ export const toolDefinitions: ToolDefinition[] = [
         notes: { type: "string", description: "Speaker notes content" }
       },
       required: ["presentationId", "slideIndex", "notes"]
+    }
+  },
+  {
+    name: "deleteGoogleSlide",
+    description: "Delete a slide from a presentation",
+    inputSchema: {
+      type: "object",
+      properties: {
+        presentationId: { type: "string", description: "Presentation ID" },
+        slideObjectId: { type: "string", description: "Slide object ID" }
+      },
+      required: ["presentationId", "slideObjectId"]
+    }
+  },
+  {
+    name: "duplicateSlide",
+    description: "Duplicate a slide in a presentation",
+    inputSchema: {
+      type: "object",
+      properties: {
+        presentationId: { type: "string", description: "Presentation ID" },
+        slideObjectId: { type: "string", description: "Slide object ID" }
+      },
+      required: ["presentationId", "slideObjectId"]
+    }
+  },
+  {
+    name: "reorderSlides",
+    description: "Reorder one or more slides in a presentation",
+    inputSchema: {
+      type: "object",
+      properties: {
+        presentationId: { type: "string", description: "Presentation ID" },
+        slideObjectIds: { type: "array", items: { type: "string" }, description: "Slide object IDs to move" },
+        insertionIndex: { type: "number", description: "Target insertion index" }
+      },
+      required: ["presentationId", "slideObjectIds", "insertionIndex"]
+    }
+  },
+  {
+    name: "replaceAllTextInSlides",
+    description: "Replace all matching text across presentation slides",
+    inputSchema: {
+      type: "object",
+      properties: {
+        presentationId: { type: "string", description: "Presentation ID" },
+        containsText: { type: "string", description: "Text to find" },
+        replaceText: { type: "string", description: "Replacement text" },
+        matchCase: { type: "boolean", description: "Case-sensitive match" }
+      },
+      required: ["presentationId", "containsText", "replaceText"]
     }
   },
 ];
@@ -1271,6 +1345,97 @@ export async function handleTool(
       return {
         content: [{ type: "text", text: `Successfully updated speaker notes for slide ${a.slideIndex}` }],
         isError: false
+      };
+    }
+
+    case "deleteGoogleSlide": {
+      const validation = DeleteGoogleSlideSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
+      await slidesService.presentations.batchUpdate({
+        presentationId: a.presentationId,
+        requestBody: {
+          requests: [{ deleteObject: { objectId: a.slideObjectId } }]
+        }
+      });
+
+      return {
+        content: [{ type: 'text', text: `Deleted slide ${a.slideObjectId}` }],
+        isError: false,
+      };
+    }
+
+    case "duplicateSlide": {
+      const validation = DuplicateSlideSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
+      const response = await slidesService.presentations.batchUpdate({
+        presentationId: a.presentationId,
+        requestBody: {
+          requests: [{ duplicateObject: { objectId: a.slideObjectId } }]
+        }
+      });
+
+      const dupId = response.data.replies?.[0]?.duplicateObject?.objectId;
+      return {
+        content: [{ type: 'text', text: `Duplicated slide ${a.slideObjectId}${dupId ? ` -> ${dupId}` : ''}` }],
+        isError: false,
+      };
+    }
+
+    case "reorderSlides": {
+      const validation = ReorderSlidesSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
+      await slidesService.presentations.batchUpdate({
+        presentationId: a.presentationId,
+        requestBody: {
+          requests: [{
+            updateSlidesPosition: {
+              slideObjectIds: a.slideObjectIds,
+              insertionIndex: a.insertionIndex,
+            }
+          }]
+        }
+      });
+
+      return {
+        content: [{ type: 'text', text: `Reordered ${a.slideObjectIds.length} slide(s) to index ${a.insertionIndex}` }],
+        isError: false,
+      };
+    }
+
+    case "replaceAllTextInSlides": {
+      const validation = ReplaceAllTextInSlidesSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
+      const response = await slidesService.presentations.batchUpdate({
+        presentationId: a.presentationId,
+        requestBody: {
+          requests: [{
+            replaceAllText: {
+              containsText: {
+                text: a.containsText,
+                matchCase: a.matchCase,
+              },
+              replaceText: a.replaceText,
+            }
+          }]
+        }
+      });
+
+      const count = response.data.replies?.[0]?.replaceAllText?.occurrencesChanged ?? 0;
+      return {
+        content: [{ type: 'text', text: `Replaced ${count} occurrence(s) of "${a.containsText}" in slides.` }],
+        isError: false,
       };
     }
 

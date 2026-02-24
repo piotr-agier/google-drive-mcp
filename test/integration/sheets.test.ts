@@ -231,6 +231,28 @@ describe('Sheets tools', () => {
     });
   });
 
+  // --- listSheets / renameSheet / deleteSheet ---
+  describe('sheet lifecycle tools', () => {
+    it('listSheets happy path', async () => {
+      setupSheetsMock();
+      const res = await callTool(ctx.client, 'listSheets', { spreadsheetId: 'sheet-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Sheet1'));
+    });
+
+    it('renameSheet happy path', async () => {
+      const res = await callTool(ctx.client, 'renameSheet', { spreadsheetId: 'sheet-1', sheetId: 0, newTitle: 'Renamed' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Renamed'));
+    });
+
+    it('deleteSheet happy path', async () => {
+      const res = await callTool(ctx.client, 'deleteSheet', { spreadsheetId: 'sheet-1', sheetId: 0 });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Deleted sheet'));
+    });
+  });
+
   // --- listGoogleSheets ---
   describe('listGoogleSheets', () => {
     it('happy path', async () => {

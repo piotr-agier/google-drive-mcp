@@ -298,4 +298,21 @@ describe('Drive tools', () => {
       assert.equal(res.isError, true);
     });
   });
+
+  describe('v1.6.0 pdf conversion tools', () => {
+    it('convertPdfToGoogleDoc happy path', async () => {
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({ data: { id: 'pdf-1', name: 'A.pdf', mimeType: 'application/pdf', parents: ['root'] } }));
+      ctx.mocks.drive.service.files.copy._setImpl(async () => ({ data: { id: 'doc-1', name: 'A (Doc)', webViewLink: 'https://doc' } }));
+      const res = await callTool(ctx.client, 'convertPdfToGoogleDoc', { fileId: 'pdf-1' });
+      assert.equal(res.isError, false);
+    });
+
+    it('bulkConvertFolderPdfs happy path', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({ data: { files: [{ id: 'p1', name: 'X.pdf' }] } }));
+      ctx.mocks.drive.service.files.copy._setImpl(async () => ({ data: { id: 'd1', name: 'X (Doc)' } }));
+      const res = await callTool(ctx.client, 'bulkConvertFolderPdfs', { folderId: 'folder-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Success=1'));
+    });
+  });
 });

@@ -9,12 +9,36 @@ import type { ToolDefinition, ToolContext, ToolResult } from '../types.js';
 import { errorResponse } from '../types.js';
 import { escapeDriveQuery, getMimeTypeFromFilename, TEXT_MIME_TYPES } from '../utils.js';
 import { downloadDriveFile } from '../download-file.js';
+import { getSecureTokenPath } from '../auth/utils.js';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
+
+const SCOPE_ALIASES: Record<string, string> = {
+  drive: 'https://www.googleapis.com/auth/drive',
+  'drive.file': 'https://www.googleapis.com/auth/drive.file',
+  'drive.readonly': 'https://www.googleapis.com/auth/drive.readonly',
+  documents: 'https://www.googleapis.com/auth/documents',
+  spreadsheets: 'https://www.googleapis.com/auth/spreadsheets',
+  presentations: 'https://www.googleapis.com/auth/presentations',
+  calendar: 'https://www.googleapis.com/auth/calendar',
+  'calendar.events': 'https://www.googleapis.com/auth/calendar.events'
+};
+
+const SCOPE_PRESETS: Record<string, string[]> = {
+  readonly: ['drive.readonly'],
+  'content-editor': ['drive.file', 'documents', 'spreadsheets', 'presentations'],
+  full: ['drive', 'documents', 'spreadsheets', 'presentations', 'calendar', 'calendar.events']
+};
+
+const DEFAULT_SCOPES = [
+  'drive', 'drive.file', 'drive.readonly',
+  'documents', 'spreadsheets', 'presentations',
+  'calendar', 'calendar.events'
+].map((s) => SCOPE_ALIASES[s]);
 
 // MIME types for binary file uploads (extension → MIME)
 const BINARY_MIME_TYPES: Record<string, string> = {
@@ -196,6 +220,36 @@ const RestoreRevisionSchema = z.object({
   revisionId: z.string().min(1, "Revision ID is required"),
   confirm: z.boolean().optional().default(false),
 });
+
+const AuthTestFileAccessSchema = z.object({
+  fileId: z.string().optional(),
+});
+
+const AuthClearTokensSchema = z.object({
+  confirm: z.boolean().optional().default(false),
+});
+
+const AuthSetScopePresetSchema = z.object({
+  preset: z.enum(['readonly', 'content-editor', 'full']),
+  clearTokens: z.boolean().optional().default(false),
+});
+
+function getRequestedScopes(): string[] {
+  const raw = process.env.GOOGLE_DRIVE_MCP_SCOPES?.trim();
+  if (!raw) return [...DEFAULT_SCOPES];
+  const scopes = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => SCOPE_ALIASES[s] || s);
+  return [...new Set(scopes)];
+}
+
+function getGrantedScopesFromAuthClient(ctx: ToolContext): string[] {
+  const scopeRaw = ctx.authClient?.credentials?.scope;
+  if (!scopeRaw || typeof scopeRaw !== 'string') return [];
+  return [...new Set(scopeRaw.split(' ').map((s: string) => s.trim()).filter(Boolean))];
+}
 
 // ---------------------------------------------------------------------------
 // Tool definitions
@@ -488,6 +542,48 @@ export const toolDefinitions: ToolDefinition[] = [
         confirm: { type: "boolean", description: "Safety flag. Must be true to execute restore." }
       },
       required: ["fileId", "revisionId"]
+    }
+  },
+  {
+    name: "auth_getStatus",
+    description: "Show authentication/token status and scope diagnostics",
+    inputSchema: { type: "object", properties: {} }
+  },
+  {
+    name: "auth_listScopes",
+    description: "List configured/requested scopes and currently granted scopes",
+    inputSchema: { type: "object", properties: {} }
+  },
+  {
+    name: "auth_testFileAccess",
+    description: "Run auth diagnostics against Drive API/file access",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "Optional file ID for targeted access check" }
+      }
+    }
+  },
+  {
+    name: "auth_clearTokens",
+    description: "Clear saved OAuth tokens (requires confirm=true)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        confirm: { type: "boolean", description: "Must be true to clear tokens" }
+      }
+    }
+  },
+  {
+    name: "auth_setScopePreset",
+    description: "Select scope preset and receive deterministic re-auth instructions",
+    inputSchema: {
+      type: "object",
+      properties: {
+        preset: { type: "string", enum: ["readonly", "content-editor", "full"], description: "Scope preset" },
+        clearTokens: { type: "boolean", description: "Also clear saved tokens now" }
+      },
+      required: ["preset"]
     }
   },
 ];
@@ -1312,6 +1408,145 @@ export async function handleTool(
         content: [{
           type: 'text',
           text: `Restored file ${data.fileId} (${current.data.name || 'unnamed'}) from revision ${data.revisionId} (${revision.data.modifiedTime || 'unknown-time'}, by ${who}).`,
+        }],
+        isError: false,
+      };
+    }
+
+    case "auth_getStatus": {
+      const tokenPath = getSecureTokenPath();
+      const tokenFileExists = existsSync(tokenPath);
+      const requestedScopes = getRequestedScopes();
+      const grantedScopes = getGrantedScopesFromAuthClient(ctx);
+      const missingScopes = requestedScopes.filter((s) => !grantedScopes.includes(s));
+      const expiryDate = ctx.authClient?.credentials?.expiry_date as number | undefined;
+      const expiresInSec = expiryDate ? Math.floor((expiryDate - Date.now()) / 1000) : null;
+
+      const payload = {
+        tokenFilePath: tokenPath,
+        tokenFileExists,
+        hasAccessToken: !!ctx.authClient?.credentials?.access_token,
+        hasRefreshToken: !!ctx.authClient?.credentials?.refresh_token,
+        expiryDate: expiryDate || null,
+        expiresInSec,
+        requestedScopes,
+        grantedScopes,
+        missingScopes,
+      };
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Auth status:\n${JSON.stringify(payload, null, 2)}\n\nSummary: token file ${tokenFileExists ? 'found' : 'missing'}, missing scopes=${missingScopes.length}.`,
+        }],
+        isError: false,
+      };
+    }
+
+    case "auth_listScopes": {
+      const requestedScopes = getRequestedScopes();
+      const grantedScopes = getGrantedScopesFromAuthClient(ctx);
+      const missingScopes = requestedScopes.filter((s) => !grantedScopes.includes(s));
+      const presetsResolved = Object.fromEntries(
+        Object.entries(SCOPE_PRESETS).map(([k, v]) => [k, v.map((s) => SCOPE_ALIASES[s])]),
+      );
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Scopes:\n${JSON.stringify({ requestedScopes, grantedScopes, missingScopes, presets: presetsResolved }, null, 2)}`,
+        }],
+        isError: false,
+      };
+    }
+
+    case "auth_testFileAccess": {
+      const validation = AuthTestFileAccessSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      try {
+        let check: any;
+        if (data.fileId) {
+          const file = await ctx.getDrive().files.get({
+            fileId: data.fileId,
+            fields: 'id,name,mimeType,permissions',
+            supportsAllDrives: true,
+          });
+          check = { mode: 'file', fileId: file.data.id, name: file.data.name, mimeType: file.data.mimeType };
+        } else {
+          const list = await ctx.getDrive().files.list({
+            pageSize: 1,
+            fields: 'files(id,name,mimeType)',
+            includeItemsFromAllDrives: true,
+            supportsAllDrives: true,
+          });
+          check = { mode: 'list', visibleCount: list.data.files?.length || 0, sample: list.data.files?.[0] || null };
+        }
+
+        return {
+          content: [{ type: 'text', text: `Auth access check OK:\n${JSON.stringify(check, null, 2)}` }],
+          isError: false,
+        };
+      } catch (e: any) {
+        return {
+          content: [{ type: 'text', text: `Auth access check failed:\n${JSON.stringify({ message: e?.message || String(e) }, null, 2)}` }],
+          isError: true,
+        };
+      }
+    }
+
+    case "auth_clearTokens": {
+      const validation = AuthClearTokensSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+      if (!data.confirm) return errorResponse('Refusing token clear: set confirm=true.');
+
+      const tokenPath = getSecureTokenPath();
+      const existed = existsSync(tokenPath);
+      if (existed) {
+        try {
+          await readFile(tokenPath); // sanity check readable before clear response
+        } catch {}
+      }
+
+      // best-effort remove via drive-independent auth module behavior not exposed here, so unlink directly
+      try {
+        const fs = await import('fs/promises');
+        await fs.unlink(tokenPath);
+      } catch {}
+
+      return {
+        content: [{ type: 'text', text: `Tokens cleared (best-effort). File previously ${existed ? 'existed' : 'did not exist'} at ${tokenPath}. Re-run auth flow before next privileged operation.` }],
+        isError: false,
+      };
+    }
+
+    case "auth_setScopePreset": {
+      const validation = AuthSetScopePresetSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      const aliases = SCOPE_PRESETS[data.preset];
+      const resolved = aliases.map((a) => SCOPE_ALIASES[a]);
+      const envValue = aliases.join(',');
+
+      let clearMessage = '';
+      if (data.clearTokens) {
+        const tokenPath = getSecureTokenPath();
+        try {
+          const fs = await import('fs/promises');
+          await fs.unlink(tokenPath);
+          clearMessage = `\nTokens cleared at ${tokenPath}.`;
+        } catch {
+          clearMessage = `\nTokens clear requested, but no token file removed.`;
+        }
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Scope preset selected: ${data.preset}\nRequested scopes: ${JSON.stringify(resolved, null, 2)}\n\nSet env before restart:\nGOOGLE_DRIVE_MCP_SCOPES=${envValue}\n\nThen run auth flow (or restart server to trigger re-auth).${clearMessage}`,
         }],
         isError: false,
       };

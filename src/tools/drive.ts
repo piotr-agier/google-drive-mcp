@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import type { drive_v3 } from 'googleapis';
 import { existsSync, statSync, createReadStream } from 'fs';
+import { mkdtemp, writeFile, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { basename, extname, join } from 'path';
+import { PDFDocument } from 'pdf-lib';
 import type { ToolDefinition, ToolContext, ToolResult } from '../types.js';
 import { errorResponse } from '../types.js';
 import { escapeDriveQuery, getMimeTypeFromFilename, TEXT_MIME_TYPES } from '../utils.js';
@@ -154,6 +158,33 @@ const UploadPdfWithSplitSchema = z.object({
   parentFolderId: z.string().optional(),
   namePrefix: z.string().optional(),
 });
+
+async function splitPdfIntoChunkFiles(localPath: string, maxPagesPerChunk: number): Promise<{ tempDir: string; files: string[] }> {
+  const sourceBytes = await import('fs/promises').then((m) => m.readFile(localPath));
+  const source = await PDFDocument.load(sourceBytes);
+  const pageCount = source.getPageCount();
+
+  if (pageCount === 0) {
+    throw new Error('PDF contains no pages.');
+  }
+
+  const tempDir = await mkdtemp(join(tmpdir(), 'gdrive-mcp-split-'));
+  const files: string[] = [];
+
+  for (let start = 0, part = 1; start < pageCount; start += maxPagesPerChunk, part++) {
+    const end = Math.min(start + maxPagesPerChunk, pageCount);
+    const chunkDoc = await PDFDocument.create();
+    const pages = await chunkDoc.copyPages(source, Array.from({ length: end - start }, (_, i) => start + i));
+    for (const page of pages) chunkDoc.addPage(page);
+
+    const chunkBytes = await chunkDoc.save();
+    const chunkPath = join(tempDir, `part-${part}.pdf`);
+    await writeFile(chunkPath, chunkBytes);
+    files.push(chunkPath);
+  }
+
+  return { tempDir, files };
+}
 
 // ---------------------------------------------------------------------------
 // Tool definitions
@@ -1111,22 +1142,59 @@ export async function handleTool(
       const data = validation.data;
 
       if (!existsSync(data.localPath)) return errorResponse(`File not found: ${data.localPath}`);
-      const fileName = data.namePrefix || data.localPath.split(/[\\/]/).pop() || 'upload.pdf';
       const parentId = await ctx.resolveFolderId(data.parentFolderId);
 
-      const uploaded = await ctx.getDrive().files.create({
-        requestBody: { name: fileName, parents: [parentId] },
-        media: { mimeType: 'application/pdf', body: createReadStream(data.localPath) },
-        fields: 'id,name,webViewLink',
-        supportsAllDrives: true,
-      });
+      if (!data.split) {
+        const fileName = data.namePrefix || data.localPath.split(/[\\/]/).pop() || 'upload.pdf';
+        const uploaded = await ctx.getDrive().files.create({
+          requestBody: { name: fileName, parents: [parentId] },
+          media: { mimeType: 'application/pdf', body: createReadStream(data.localPath) },
+          fields: 'id,name,webViewLink',
+          supportsAllDrives: true,
+        });
 
-      return {
-        content: [{ type: 'text', text: data.split
-          ? `Uploaded PDF with split-plan metadata (split execution pending): ${uploaded.data.name}\nID: ${uploaded.data.id}\nmaxPagesPerChunk=${data.maxPagesPerChunk ?? 'auto'}`
-          : `Uploaded PDF without split: ${uploaded.data.name}\nID: ${uploaded.data.id}` }],
-        isError: false,
-      };
+        return {
+          content: [{ type: 'text', text: `Uploaded PDF without split: ${uploaded.data.name}\nID: ${uploaded.data.id}` }],
+          isError: false,
+        };
+      }
+
+      const maxPagesPerChunk = data.maxPagesPerChunk ?? 25;
+      const baseName = data.namePrefix || basename(data.localPath, extname(data.localPath));
+
+      let tempDir: string | undefined;
+      try {
+        const splitResult = await splitPdfIntoChunkFiles(data.localPath, maxPagesPerChunk);
+        tempDir = splitResult.tempDir;
+
+        const uploadedParts: Array<{ id?: string | null; name?: string | null }> = [];
+        for (let i = 0; i < splitResult.files.length; i++) {
+          const partPath = splitResult.files[i];
+          const partName = `${baseName}-part-${i + 1}.pdf`;
+
+          const uploaded = await ctx.getDrive().files.create({
+            requestBody: { name: partName, parents: [parentId] },
+            media: { mimeType: 'application/pdf', body: createReadStream(partPath) },
+            fields: 'id,name,webViewLink',
+            supportsAllDrives: true,
+          });
+
+          uploadedParts.push({ id: uploaded.data.id, name: uploaded.data.name });
+        }
+
+        const lines = uploadedParts.map((p, idx) => `- part ${idx + 1}: ${p.name} (ID: ${p.id})`);
+        return {
+          content: [{
+            type: 'text',
+            text: `Uploaded split PDF into ${uploadedParts.length} part(s) using maxPagesPerChunk=${maxPagesPerChunk}\n${lines.join('\n')}`,
+          }],
+          isError: false,
+        };
+      } finally {
+        if (tempDir) {
+          await rm(tempDir, { recursive: true, force: true });
+        }
+      }
     }
 
     default:

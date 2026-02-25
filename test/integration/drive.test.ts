@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it, before, after, beforeEach } from 'node:test';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PDFDocument } from 'pdf-lib';
 import { setupTestServer, callTool, type TestContext } from '../helpers/setup-server.js';
 
 describe('Drive tools', () => {
@@ -313,6 +317,42 @@ describe('Drive tools', () => {
       const res = await callTool(ctx.client, 'bulkConvertFolderPdfs', { folderId: 'folder-1' });
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('Success=1'));
+    });
+
+    it('uploadPdfWithSplit performs real split uploads', async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), 'gdrive-mcp-test-'));
+      try {
+        const pdfPath = join(tempDir, 'source.pdf');
+        const pdf = await PDFDocument.create();
+        pdf.addPage();
+        pdf.addPage();
+        pdf.addPage();
+        const bytes = await pdf.save();
+        await writeFile(pdfPath, bytes);
+
+        let counter = 0;
+        ctx.mocks.drive.service.files.create._setImpl(async ({ requestBody }: any) => {
+          counter += 1;
+          return { data: { id: `part-${counter}`, name: requestBody?.name } };
+        });
+
+        const res = await callTool(ctx.client, 'uploadPdfWithSplit', {
+          localPath: pdfPath,
+          split: true,
+          maxPagesPerChunk: 2,
+          namePrefix: 'invoice',
+        });
+
+        assert.equal(res.isError, false);
+        assert.ok(res.content[0].text.includes('Uploaded split PDF into 2 part(s)'));
+        assert.ok(res.content[0].text.includes('invoice-part-1.pdf'));
+        assert.ok(res.content[0].text.includes('invoice-part-2.pdf'));
+
+        const createCalls = ctx.mocks.drive.tracker.getCalls('files.create');
+        assert.equal(createCalls.length, 2);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
     });
   });
 });

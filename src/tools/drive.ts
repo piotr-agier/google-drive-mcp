@@ -135,6 +135,17 @@ const ShareFileSchema = z.object({
   sendNotificationEmail: z.boolean().optional().default(true),
 });
 
+const GetStartPageTokenSchema = z.object({
+  driveId: z.string().optional(),
+});
+
+const ListChangesSchema = z.object({
+  pageToken: z.string().min(1, "pageToken is required"),
+  pageSize: z.number().int().min(1).max(1000).optional().default(100),
+  driveId: z.string().optional(),
+  includeRemoved: z.boolean().optional().default(true),
+});
+
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
@@ -360,6 +371,30 @@ export const toolDefinitions: ToolDefinition[] = [
         sendNotificationEmail: { type: "boolean", description: "Send notification email" }
       },
       required: ["fileId", "emailAddress"]
+    }
+  },
+  {
+    name: "getStartPageToken",
+    description: "Get a start page token for incremental Drive change polling",
+    inputSchema: {
+      type: "object",
+      properties: {
+        driveId: { type: "string", description: "Optional shared drive ID" }
+      }
+    }
+  },
+  {
+    name: "listChanges",
+    description: "List Drive changes since a page token",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pageToken: { type: "string", description: "Page token returned by getStartPageToken/listChanges" },
+        pageSize: { type: "number", description: "Max changes to return (default 100, max 1000)" },
+        driveId: { type: "string", description: "Optional shared drive ID" },
+        includeRemoved: { type: "boolean", description: "Include removed items (default true)" }
+      },
+      required: ["pageToken"]
     }
   },
 ];
@@ -966,6 +1001,62 @@ export async function handleTool(
 
       return {
         content: [{ type: 'text', text: `Shared file with ${response.data.emailAddress || data.emailAddress} as ${response.data.role}. Permission ID: ${response.data.id}` }],
+        isError: false,
+      };
+    }
+
+    case "getStartPageToken": {
+      const validation = GetStartPageTokenSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      const response = await ctx.getDrive().changes.getStartPageToken({
+        driveId: data.driveId,
+        supportsAllDrives: true,
+      });
+
+      const token = response.data.startPageToken;
+      if (!token) return errorResponse('No startPageToken returned by Drive API.');
+
+      return {
+        content: [{ type: 'text', text: `Start page token: ${token}${data.driveId ? `\nDrive ID: ${data.driveId}` : ''}` }],
+        isError: false,
+      };
+    }
+
+    case "listChanges": {
+      const validation = ListChangesSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      const response = await ctx.getDrive().changes.list({
+        pageToken: data.pageToken,
+        pageSize: data.pageSize,
+        includeRemoved: data.includeRemoved,
+        restrictToMyDrive: data.driveId ? false : true,
+        driveId: data.driveId,
+        includeItemsFromAllDrives: true,
+        supportsAllDrives: true,
+        fields: 'nextPageToken,newStartPageToken,changes(fileId,removed,time,file(id,name,mimeType,trashed,modifiedTime))',
+      });
+
+      const changes = response.data.changes || [];
+      const lines = changes.map((c) => {
+        if (c.removed) return `- ${c.fileId} removed at ${c.time || 'unknown-time'}`;
+        const f = c.file;
+        return `- ${c.fileId}: ${f?.name || 'unknown'} (${f?.mimeType || 'unknown'})${f?.trashed ? ' [trashed]' : ''}`;
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: [
+            `Changes returned: ${changes.length}`,
+            lines.length ? lines.join('\n') : '(no changes)',
+            response.data.nextPageToken ? `nextPageToken=${response.data.nextPageToken}` : '',
+            response.data.newStartPageToken ? `newStartPageToken=${response.data.newStartPageToken}` : '',
+          ].filter(Boolean).join('\n'),
+        }],
         isError: false,
       };
     }

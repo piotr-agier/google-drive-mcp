@@ -280,6 +280,37 @@ describe('Drive tools', () => {
     });
   });
 
+  // --- change polling ---
+  describe('change polling', () => {
+    it('getStartPageToken happy path', async () => {
+      const res = await callTool(ctx.client, 'getStartPageToken', {});
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Start page token'));
+    });
+
+    it('listChanges happy path', async () => {
+      ctx.mocks.drive.service.changes.list._setImpl(async () => ({
+        data: {
+          changes: [
+            { fileId: 'file-1', removed: false, file: { id: 'file-1', name: 'Report', mimeType: 'application/pdf' } },
+            { fileId: 'file-2', removed: true, time: '2026-02-25T10:00:00Z' },
+          ],
+          nextPageToken: 'token-2',
+          newStartPageToken: 'token-new',
+        },
+      }));
+      const res = await callTool(ctx.client, 'listChanges', { pageToken: 'token-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Changes returned: 2'));
+      assert.ok(res.content[0].text.includes('nextPageToken=token-2'));
+    });
+
+    it('listChanges validation error', async () => {
+      const res = await callTool(ctx.client, 'listChanges', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
   // --- moveItem ---
   describe('moveItem', () => {
     it('happy path', async () => {

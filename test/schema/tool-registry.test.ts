@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it, before, after } from 'node:test';
 import { setupTestServer, type TestContext } from '../helpers/setup-server.js';
 
-const EXPECTED_TOOL_COUNT = 70;
+const EXPECTED_TOOL_COUNT = 72;
 
 const EXPECTED_TOOLS = [
   'search', 'createTextFile', 'updateTextFile', 'createFolder', 'listFolder', 'listSharedDrives',
@@ -21,7 +21,7 @@ const EXPECTED_TOOLS = [
   'styleGoogleSlidesShape', 'setGoogleSlidesBackground',
   'createGoogleSlidesTextBox', 'createGoogleSlidesShape',
   'getGoogleSlidesSpeakerNotes', 'updateGoogleSlidesSpeakerNotes',
-  'uploadFile', 'downloadFile', 'listPermissions', 'addPermission', 'updatePermission', 'removePermission', 'shareFile',
+  'uploadFile', 'downloadFile', 'listPermissions', 'addPermission', 'updatePermission', 'removePermission', 'shareFile', 'getStartPageToken', 'listChanges',
   'listCalendars', 'getCalendarEvents', 'getCalendarEvent',
   'createCalendarEvent', 'updateCalendarEvent', 'deleteCalendarEvent',
   'insertTable', 'editTableCell', 'insertImageFromUrl', 'insertLocalImage',

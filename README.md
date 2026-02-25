@@ -390,6 +390,16 @@ Add the server to your Claude Desktop configuration:
   - `role`: Role (`reader`, `commenter`, `writer`)
   - `sendNotificationEmail`: Send notification email (optional)
 
+#### Change polling (delta sync)
+- **getStartPageToken** - Get start token for incremental change polling
+  - `driveId`: Optional shared drive ID
+
+- **listChanges** - List changes since a page token
+  - `pageToken`: Token from `getStartPageToken`/previous `listChanges`
+  - `pageSize`: Max changes to return (optional)
+  - `driveId`: Optional shared drive ID
+  - `includeRemoved`: Include removed items (optional, default true)
+
 - **uploadFile** - Upload a local file (any type: image, audio, video, PDF, etc.) to Google Drive
   - `localPath`: Absolute path to the local file
   - `name`: File name in Drive (optional, defaults to local filename)

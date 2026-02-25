@@ -311,6 +311,36 @@ describe('Drive tools', () => {
     });
   });
 
+  // --- watch channels ---
+  describe('watch channels', () => {
+    it('watchFiles happy path', async () => {
+      const res = await callTool(ctx.client, 'watchFiles', {
+        fileId: 'file-1',
+        address: 'https://example.com/webhook',
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Watch channel created'));
+    });
+
+    it('watchChanges happy path', async () => {
+      const res = await callTool(ctx.client, 'watchChanges', {
+        pageToken: 'token-1',
+        address: 'https://example.com/webhook',
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Changes watch channel created'));
+    });
+
+    it('stopChannel happy path', async () => {
+      const res = await callTool(ctx.client, 'stopChannel', {
+        id: 'ch-1',
+        resourceId: 'res-1',
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Stopped channel'));
+    });
+  });
+
   // --- moveItem ---
   describe('moveItem', () => {
     it('happy path', async () => {

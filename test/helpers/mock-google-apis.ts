@@ -58,10 +58,15 @@ export function createDriveMock() {
     delete: stub(tracker, 'files.delete', {}),
     copy: stub(tracker, 'files.copy', { id: 'file-copy-1', name: 'Copy of test-file', webViewLink: 'https://link' }),
     export: stub(tracker, 'files.export', {}),
+    watch: stub(tracker, 'files.watch', { id: 'ch-file-1', resourceId: 'res-file-1', expiration: '9999999999999' }),
   };
   const changes = {
     getStartPageToken: stub(tracker, 'changes.getStartPageToken', { startPageToken: 'token-1' }),
     list: stub(tracker, 'changes.list', { changes: [], nextPageToken: 'token-2' }),
+    watch: stub(tracker, 'changes.watch', { id: 'ch-1', resourceId: 'res-1', expiration: '9999999999999' }),
+  };
+  const channels = {
+    stop: stub(tracker, 'channels.stop', {}),
   };
   const comments = {
     list: stub(tracker, 'comments.list', { comments: [] }),
@@ -82,7 +87,7 @@ export function createDriveMock() {
     delete: stub(tracker, 'permissions.delete', {}),
     get: stub(tracker, 'permissions.get', { id: 'perm-1', role: 'reader', emailAddress: 'user@example.com', type: 'user' }),
   };
-  return { service: { files, comments, replies, permissions, changes, drives }, tracker };
+  return { service: { files, comments, replies, permissions, changes, channels, drives }, tracker };
 }
 
 // ---------------------------------------------------------------------------

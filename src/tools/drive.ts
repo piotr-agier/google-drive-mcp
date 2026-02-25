@@ -146,6 +146,27 @@ const ListChangesSchema = z.object({
   includeRemoved: z.boolean().optional().default(true),
 });
 
+const WatchFilesSchema = z.object({
+  fileId: z.string().min(1, "fileId is required"),
+  address: z.string().url("address must be a valid URL"),
+  id: z.string().min(1).optional(),
+  token: z.string().optional(),
+  expirationMs: z.number().int().positive().optional(),
+});
+
+const WatchChangesSchema = z.object({
+  pageToken: z.string().min(1, "pageToken is required"),
+  address: z.string().url("address must be a valid URL"),
+  id: z.string().min(1).optional(),
+  token: z.string().optional(),
+  expirationMs: z.number().int().positive().optional(),
+});
+
+const StopChannelSchema = z.object({
+  id: z.string().min(1, "id is required"),
+  resourceId: z.string().min(1, "resourceId is required"),
+});
+
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
@@ -395,6 +416,48 @@ export const toolDefinitions: ToolDefinition[] = [
         includeRemoved: { type: "boolean", description: "Include removed items (default true)" }
       },
       required: ["pageToken"]
+    }
+  },
+  {
+    name: "watchFiles",
+    description: "Create webhook watch channel for a file",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "File ID to watch" },
+        address: { type: "string", description: "Webhook callback URL" },
+        id: { type: "string", description: "Optional channel ID" },
+        token: { type: "string", description: "Optional opaque token echoed in notifications" },
+        expirationMs: { type: "number", description: "Optional channel expiration epoch ms" }
+      },
+      required: ["fileId", "address"]
+    }
+  },
+  {
+    name: "watchChanges",
+    description: "Create webhook watch channel for Drive changes feed",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pageToken: { type: "string", description: "Change feed page token" },
+        address: { type: "string", description: "Webhook callback URL" },
+        id: { type: "string", description: "Optional channel ID" },
+        token: { type: "string", description: "Optional opaque token echoed in notifications" },
+        expirationMs: { type: "number", description: "Optional channel expiration epoch ms" }
+      },
+      required: ["pageToken", "address"]
+    }
+  },
+  {
+    name: "stopChannel",
+    description: "Stop an active Drive push notification channel",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Channel ID" },
+        resourceId: { type: "string", description: "Resource ID from watch response" }
+      },
+      required: ["id", "resourceId"]
     }
   },
 ];
@@ -1057,6 +1120,79 @@ export async function handleTool(
             response.data.newStartPageToken ? `newStartPageToken=${response.data.newStartPageToken}` : '',
           ].filter(Boolean).join('\n'),
         }],
+        isError: false,
+      };
+    }
+
+    case "watchFiles": {
+      const validation = WatchFilesSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      const channelId = data.id || `watch-files-${Date.now()}`;
+      const response = await ctx.getDrive().files.watch({
+        fileId: data.fileId,
+        requestBody: {
+          id: channelId,
+          type: 'web_hook',
+          address: data.address,
+          token: data.token,
+          expiration: data.expirationMs ? String(data.expirationMs) : undefined,
+        },
+        supportsAllDrives: true,
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Watch channel created for file ${data.fileId}\nid=${response.data.id || channelId}\nresourceId=${response.data.resourceId || 'unknown'}\nexpiration=${response.data.expiration || 'none'}`,
+        }],
+        isError: false,
+      };
+    }
+
+    case "watchChanges": {
+      const validation = WatchChangesSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      const channelId = data.id || `watch-changes-${Date.now()}`;
+      const response = await ctx.getDrive().changes.watch({
+        pageToken: data.pageToken,
+        requestBody: {
+          id: channelId,
+          type: 'web_hook',
+          address: data.address,
+          token: data.token,
+          expiration: data.expirationMs ? String(data.expirationMs) : undefined,
+        },
+        includeItemsFromAllDrives: true,
+        supportsAllDrives: true,
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Changes watch channel created\nid=${response.data.id || channelId}\nresourceId=${response.data.resourceId || 'unknown'}\nexpiration=${response.data.expiration || 'none'}`,
+        }],
+        isError: false,
+      };
+    }
+
+    case "stopChannel": {
+      const validation = StopChannelSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      await ctx.getDrive().channels.stop({
+        requestBody: {
+          id: data.id,
+          resourceId: data.resourceId,
+        },
+      });
+
+      return {
+        content: [{ type: 'text', text: `Stopped channel ${data.id} (resourceId=${data.resourceId})` }],
         isError: false,
       };
     }

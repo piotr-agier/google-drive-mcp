@@ -400,6 +400,25 @@ Add the server to your Claude Desktop configuration:
   - `driveId`: Optional shared drive ID
   - `includeRemoved`: Include removed items (optional, default true)
 
+#### Push channels (webhooks)
+- **watchFiles** - Start push notifications for a specific file
+  - `fileId`: File ID to watch
+  - `address`: Webhook callback URL
+  - `id`: Optional channel ID
+  - `token`: Optional opaque token echoed by Drive
+  - `expirationMs`: Optional channel expiration epoch millis
+
+- **watchChanges** - Start push notifications for Drive changes feed
+  - `pageToken`: Start token for change feed
+  - `address`: Webhook callback URL
+  - `id`: Optional channel ID
+  - `token`: Optional opaque token echoed by Drive
+  - `expirationMs`: Optional channel expiration epoch millis
+
+- **stopChannel** - Stop active push notification channel
+  - `id`: Channel ID
+  - `resourceId`: Resource ID from watch response
+
 - **uploadFile** - Upload a local file (any type: image, audio, video, PDF, etc.) to Google Drive
   - `localPath`: Absolute path to the local file
   - `name`: File name in Drive (optional, defaults to local filename)

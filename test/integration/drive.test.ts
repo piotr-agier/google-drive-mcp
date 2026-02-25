@@ -284,6 +284,40 @@ describe('Drive tools', () => {
     });
   });
 
+  // --- revisions ---
+  describe('revisions', () => {
+    it('getRevisions happy path', async () => {
+      const res = await callTool(ctx.client, 'getRevisions', { fileId: 'file-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Revisions for file file-1'));
+    });
+
+    it('restoreRevision requires confirmation', async () => {
+      const res = await callTool(ctx.client, 'restoreRevision', { fileId: 'file-1', revisionId: '1' });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.includes('confirm=true'));
+    });
+
+    it('restoreRevision happy path', async () => {
+      ctx.mocks.drive.service.revisions.get._setImpl(async (params: any) => {
+        if (params?.alt === 'media') return { data: 'mock-stream' };
+        return {
+          data: {
+            id: '1',
+            modifiedTime: '2026-01-01T10:00:00Z',
+            lastModifyingUser: { displayName: 'Tester' },
+            exportLinks: { 'application/pdf': 'https://example.com/export.pdf' },
+          },
+        };
+      });
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({ data: { name: 'Doc', mimeType: 'application/vnd.google-apps.document' } }));
+
+      const res = await callTool(ctx.client, 'restoreRevision', { fileId: 'file-1', revisionId: '1', confirm: true });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Restored file file-1'));
+    });
+  });
+
   // --- moveItem ---
   describe('moveItem', () => {
     it('happy path', async () => {

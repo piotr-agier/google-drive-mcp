@@ -78,7 +78,11 @@ export function createDriveMock() {
     delete: stub(tracker, 'permissions.delete', {}),
     get: stub(tracker, 'permissions.get', { id: 'perm-1', role: 'reader', emailAddress: 'user@example.com', type: 'user' }),
   };
-  return { service: { files, comments, replies, permissions, drives }, tracker };
+  const revisions = {
+    list: stub(tracker, 'revisions.list', { revisions: [{ id: '1', modifiedTime: '2026-01-01T10:00:00Z', lastModifyingUser: { displayName: 'User' } }] }),
+    get: stub(tracker, 'revisions.get', { id: '1', modifiedTime: '2026-01-01T10:00:00Z', exportLinks: { 'application/pdf': 'https://example.com/export.pdf' } }),
+  };
+  return { service: { files, comments, replies, permissions, revisions, drives }, tracker };
 }
 
 // ---------------------------------------------------------------------------

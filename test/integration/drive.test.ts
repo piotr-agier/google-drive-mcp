@@ -284,6 +284,39 @@ describe('Drive tools', () => {
     });
   });
 
+  // --- auth diagnostics ---
+  describe('auth diagnostics', () => {
+    it('auth_getStatus returns status payload', async () => {
+      const res = await callTool(ctx.client, 'auth_getStatus', {});
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Auth status'));
+    });
+
+    it('auth_listScopes returns scopes payload', async () => {
+      const res = await callTool(ctx.client, 'auth_listScopes', {});
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('requestedScopes'));
+    });
+
+    it('auth_testFileAccess works without fileId', async () => {
+      const res = await callTool(ctx.client, 'auth_testFileAccess', {});
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Auth access check OK'));
+    });
+
+    it('auth_clearTokens requires confirmation', async () => {
+      const res = await callTool(ctx.client, 'auth_clearTokens', {});
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.includes('confirm=true'));
+    });
+
+    it('auth_setScopePreset returns deterministic instructions', async () => {
+      const res = await callTool(ctx.client, 'auth_setScopePreset', { preset: 'readonly' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('GOOGLE_DRIVE_MCP_SCOPES=drive.readonly'));
+    });
+  });
+
   // --- revisions ---
   describe('revisions', () => {
     it('getRevisions happy path', async () => {

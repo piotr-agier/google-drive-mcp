@@ -822,7 +822,7 @@ export async function handleTool(
 
       const response = await ctx.getDrive().permissions.list({
         fileId: data.fileId,
-        fields: 'permissions(id,type,role,emailAddress,domain,displayName)',
+        fields: 'permissions(id,type,role,emailAddress,domain,displayName,permissionDetails(inherited,inheritedFrom,permissionType))',
         supportsAllDrives: true,
       });
 
@@ -833,7 +833,12 @@ export async function handleTool(
 
       const lines = permissions.map((p) => {
         const who = p.emailAddress || p.domain || p.displayName || p.type || 'unknown';
-        return `- ${p.id}: ${who} (${p.type}) => ${p.role}`;
+        const inherited = p.permissionDetails?.some((d) => d.inherited === true) ?? false;
+        const inheritedFrom = p.permissionDetails?.find((d) => d.inheritedFrom)?.inheritedFrom;
+        const inheritedMarker = inherited
+          ? ` [inherited${inheritedFrom ? ` from ${inheritedFrom}` : ''}]`
+          : ' [direct]';
+        return `- ${p.id}: ${who} (${p.type}) => ${p.role}${inheritedMarker}`;
       });
 
       return { content: [{ type: 'text', text: `Permissions for file ${data.fileId}:\n${lines.join('\n')}` }], isError: false };

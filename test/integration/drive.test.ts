@@ -170,9 +170,36 @@ describe('Drive tools', () => {
 
   // --- listPermissions ---
   describe('listPermissions', () => {
-    it('happy path', async () => {
+    it('happy path includes inherited/direct marker', async () => {
+      ctx.mocks.drive.service.permissions.list._setImpl(async () => ({
+        data: {
+          permissions: [
+            {
+              id: 'perm-1',
+              type: 'user',
+              emailAddress: 'user@example.com',
+              role: 'reader',
+              permissionDetails: [{ inherited: true, inheritedFrom: 'folder-123', permissionType: 'file' }],
+            },
+            {
+              id: 'perm-2',
+              type: 'user',
+              emailAddress: 'owner@example.com',
+              role: 'owner',
+              permissionDetails: [{ inherited: false, permissionType: 'file' }],
+            },
+          ],
+        },
+      }));
+
       const res = await callTool(ctx.client, 'listPermissions', { fileId: 'file-1' });
       assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('[inherited from folder-123]'));
+      assert.ok(res.content[0].text.includes('[direct]'));
+
+      const listCalls = ctx.mocks.drive.tracker.getCalls('permissions.list');
+      assert.ok(listCalls.length >= 1);
+      assert.ok(listCalls[0].args[0].fields.includes('permissionDetails(inherited,inheritedFrom,permissionType)'));
     });
 
     it('validation error', async () => {

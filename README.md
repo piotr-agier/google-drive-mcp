@@ -569,6 +569,7 @@ Add the server to your Claude Desktop configuration:
   - `valueInputOption`: `RAW` or `USER_ENTERED` (optional, default: USER_ENTERED)
 
 - **addSpreadsheetSheet** - Add a new sheet/tab to an existing spreadsheet
+- **addSheet** - Alias for `addSpreadsheetSheet`
   - `spreadsheetId`: Spreadsheet ID
   - `sheetTitle`: Title for the new sheet
 
@@ -740,6 +741,7 @@ Add the server to your Claude Desktop configuration:
   - `insertionIndex`: Target insertion index
 
 - **replaceAllTextInSlides** - Replace text across a presentation
+- **exportSlideThumbnail** - Export a slide thumbnail URL (PNG/JPEG, SMALL/MEDIUM/LARGE)
   - `presentationId`: Presentation ID
   - `containsText`: Text to find
   - `replaceText`: Replacement text

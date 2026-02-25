@@ -240,6 +240,22 @@ describe('Slides tools', () => {
     });
   });
 
+  // --- exportSlideThumbnail ---
+  describe('exportSlideThumbnail', () => {
+    it('happy path', async () => {
+      const res = await callTool(ctx.client, 'exportSlideThumbnail', {
+        presentationId: 'pres-1', slideObjectId: 'slide-1', mimeType: 'PNG', size: 'LARGE',
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('thumbnail URL'));
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'exportSlideThumbnail', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
   // --- getGoogleSlidesSpeakerNotes ---
   describe('getGoogleSlidesSpeakerNotes', () => {
     it('happy path', async () => {

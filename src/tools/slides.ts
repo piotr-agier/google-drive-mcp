@@ -147,6 +147,13 @@ const ReplaceAllTextInSlidesSchema = z.object({
   matchCase: z.boolean().optional().default(false)
 });
 
+const ExportSlideThumbnailSchema = z.object({
+  presentationId: z.string().min(1, "Presentation ID is required"),
+  slideObjectId: z.string().min(1, "Slide object ID is required"),
+  mimeType: z.enum(["PNG", "JPEG"]).optional().default("PNG"),
+  size: z.enum(["SMALL", "MEDIUM", "LARGE"]).optional().default("LARGE")
+});
+
 // ---------------------------------------------------------------------------
 // Tool Definitions
 // ---------------------------------------------------------------------------
@@ -449,6 +456,20 @@ export const toolDefinitions: ToolDefinition[] = [
         matchCase: { type: "boolean", description: "Case-sensitive match" }
       },
       required: ["presentationId", "containsText", "replaceText"]
+    }
+  },
+  {
+    name: "exportSlideThumbnail",
+    description: "Export a slide thumbnail URL",
+    inputSchema: {
+      type: "object",
+      properties: {
+        presentationId: { type: "string", description: "Presentation ID" },
+        slideObjectId: { type: "string", description: "Slide object ID" },
+        mimeType: { type: "string", enum: ["PNG", "JPEG"], description: "Thumbnail MIME type" },
+        size: { type: "string", enum: ["SMALL", "MEDIUM", "LARGE"], description: "Thumbnail size" }
+      },
+      required: ["presentationId", "slideObjectId"]
     }
   },
 ];
@@ -1435,6 +1456,28 @@ export async function handleTool(
       const count = response.data.replies?.[0]?.replaceAllText?.occurrencesChanged ?? 0;
       return {
         content: [{ type: 'text', text: `Replaced ${count} occurrence(s) of "${a.containsText}" in slides.` }],
+        isError: false,
+      };
+    }
+
+    case "exportSlideThumbnail": {
+      const validation = ExportSlideThumbnailSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
+      const response = await slidesService.presentations.pages.getThumbnail({
+        presentationId: a.presentationId,
+        pageObjectId: a.slideObjectId,
+        'thumbnailProperties.mimeType': a.mimeType,
+        'thumbnailProperties.thumbnailSize': a.size,
+      });
+
+      const url = response.data?.contentUrl;
+      if (!url) return errorResponse('No thumbnail URL returned by Google Slides API.');
+
+      return {
+        content: [{ type: 'text', text: `Slide thumbnail URL (${a.mimeType}, ${a.size}): ${url}` }],
         isError: false,
       };
     }

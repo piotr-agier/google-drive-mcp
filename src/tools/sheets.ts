@@ -126,6 +126,11 @@ const AddSpreadsheetSheetSchema = z.object({
   sheetTitle: z.string().min(1, "Sheet title is required")
 });
 
+const AddSheetSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  title: z.string().min(1, "Sheet title is required")
+});
+
 const ListSheetsSchema = z.object({
   spreadsheetId: z.string().min(1, "Spreadsheet ID is required")
 });
@@ -451,6 +456,18 @@ export const toolDefinitions: ToolDefinition[] = [
         sheetTitle: { type: "string", description: "Title for the new sheet/tab" }
       },
       required: ["spreadsheetId", "sheetTitle"]
+    }
+  },
+  {
+    name: "addSheet",
+    description: "Alias for addSpreadsheetSheet (adds a new sheet/tab)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        title: { type: "string", description: "Title for the new sheet/tab" }
+      },
+      required: ["spreadsheetId", "title"]
     }
   },
   {
@@ -1122,21 +1139,25 @@ export async function handleTool(
       };
     }
 
-    case "addSpreadsheetSheet": {
-      const validation = AddSpreadsheetSheetSchema.safeParse(args);
+    case "addSpreadsheetSheet":
+    case "addSheet": {
+      const isAlias = toolName === 'addSheet';
+      const validation = isAlias ? AddSheetSchema.safeParse(args) : AddSpreadsheetSheetSchema.safeParse(args);
       if (!validation.success) {
         return errorResponse(validation.error.errors[0].message);
       }
-      const a = validation.data;
+
+      const spreadsheetId = validation.data.spreadsheetId;
+      const sheetTitle = isAlias ? (validation.data as z.infer<typeof AddSheetSchema>).title : (validation.data as z.infer<typeof AddSpreadsheetSheetSchema>).sheetTitle;
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
       const response = await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: a.spreadsheetId,
+        spreadsheetId,
         requestBody: {
           requests: [{
             addSheet: {
               properties: {
-                title: a.sheetTitle
+                title: sheetTitle
               }
             }
           }]

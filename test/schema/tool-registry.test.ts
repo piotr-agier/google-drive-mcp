@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it, before, after } from 'node:test';
 import { setupTestServer, type TestContext } from '../helpers/setup-server.js';
 
-const EXPECTED_TOOL_COUNT = 80;
+const EXPECTED_TOOL_COUNT = 82;
 
 const EXPECTED_TOOLS = [
   'search', 'createTextFile', 'updateTextFile', 'createFolder', 'listFolder', 'listSharedDrives',
@@ -13,14 +13,14 @@ const EXPECTED_TOOLS = [
   'createGoogleSheet', 'updateGoogleSheet', 'getGoogleSheetContent',
   'formatGoogleSheetCells', 'formatGoogleSheetText', 'formatGoogleSheetNumbers',
   'setGoogleSheetBorders', 'mergeGoogleSheetCells', 'addGoogleSheetConditionalFormat',
-  'getSpreadsheetInfo', 'appendSpreadsheetRows', 'addSpreadsheetSheet', 'listSheets', 'renameSheet', 'deleteSheet', 'addDataValidation', 'protectRange', 'addNamedRange',
+  'getSpreadsheetInfo', 'appendSpreadsheetRows', 'addSpreadsheetSheet', 'addSheet', 'listSheets', 'renameSheet', 'deleteSheet', 'addDataValidation', 'protectRange', 'addNamedRange',
   'listGoogleSheets', 'copyFile',
   'createGoogleSlides', 'updateGoogleSlides',
   'getGoogleDocContent', 'getGoogleSlidesContent',
   'formatGoogleSlidesText', 'formatGoogleSlidesParagraph',
   'styleGoogleSlidesShape', 'setGoogleSlidesBackground',
   'createGoogleSlidesTextBox', 'createGoogleSlidesShape',
-  'getGoogleSlidesSpeakerNotes', 'updateGoogleSlidesSpeakerNotes', 'deleteGoogleSlide', 'duplicateSlide', 'reorderSlides', 'replaceAllTextInSlides',
+  'getGoogleSlidesSpeakerNotes', 'updateGoogleSlidesSpeakerNotes', 'deleteGoogleSlide', 'duplicateSlide', 'reorderSlides', 'replaceAllTextInSlides', 'exportSlideThumbnail',
   'uploadFile', 'downloadFile', 'listPermissions', 'addPermission', 'updatePermission', 'removePermission', 'shareFile',
   'listCalendars', 'getCalendarEvents', 'getCalendarEvent',
   'createCalendarEvent', 'updateCalendarEvent', 'deleteCalendarEvent',

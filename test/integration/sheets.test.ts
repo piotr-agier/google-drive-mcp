@@ -231,6 +231,25 @@ describe('Sheets tools', () => {
     });
   });
 
+  // --- addSheet (alias) ---
+  describe('addSheet', () => {
+    it('happy path', async () => {
+      ctx.mocks.sheets.service.spreadsheets.batchUpdate._setImpl(async () => ({
+        data: { replies: [{ addSheet: { properties: { title: 'AliasSheet', sheetId: 7 } } }] },
+      }));
+      const res = await callTool(ctx.client, 'addSheet', {
+        spreadsheetId: 'sheet-1', title: 'AliasSheet',
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('AliasSheet'));
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'addSheet', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
   // --- listSheets / renameSheet / deleteSheet ---
   describe('sheet lifecycle tools', () => {
     it('listSheets happy path', async () => {

@@ -169,6 +169,9 @@ export function createSlidesMock() {
           { objectId: 'body-1', shape: { placeholder: { type: 'BODY' } } },
         ],
       }),
+      getThumbnail: stub(tracker, 'presentations.pages.getThumbnail', {
+        contentUrl: 'https://slides.googleapis.com/mock-thumbnail.png',
+      }),
     },
   };
   return { service: { presentations }, tracker };

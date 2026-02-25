@@ -615,6 +615,17 @@ describe('Docs tools', () => {
       assert.equal(res.isError, false);
     });
 
+    it('insertSmartChip happy path', async () => {
+      const res = await callTool(ctx.client, 'insertSmartChip', { documentId: 'doc-1', index: 1, chipType: 'person', personEmail: 'user@example.com' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('user@example.com'));
+    });
+
+    it('insertSmartChip rejects missing email', async () => {
+      const res = await callTool(ctx.client, 'insertSmartChip', { documentId: 'doc-1', index: 1, chipType: 'person' });
+      assert.equal(res.isError, true);
+    });
+
     it('readSmartChips happy path', async () => {
       const res = await callTool(ctx.client, 'readSmartChips', { documentId: 'doc-1' });
       assert.equal(res.isError, false);

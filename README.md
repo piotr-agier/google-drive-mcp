@@ -461,13 +461,11 @@ Add the server to your Claude Desktop configuration:
   - `tabId`: Tab ID
   - `title`: New tab title
 
-- **insertSmartChip** - Insert a smart chip token (person/date/file) at an index
+- **insertSmartChip** - Insert a person smart chip (mention) at a document index. Only person chips are supported by the Docs API; date and file chips are read-only.
   - `documentId`: Document ID
   - `index`: Insertion index (1-based)
-  - `chipType`: `person`, `date`, or `file`
-  - `personEmail`: Required for `person` chip
-  - `date`: Required for `date` chip
-  - `fileId`: Required for `file` chip
+  - `chipType`: `person` (only supported type)
+  - `personEmail`: Email address for the person mention
 
 - **readSmartChips** - Read smart chip-like elements from a document
   - `documentId`: Document ID

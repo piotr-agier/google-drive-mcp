@@ -597,10 +597,8 @@ const RenameDocumentTabSchema = z.object({
 const InsertSmartChipSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
   index: z.number().int().min(1, "Index must be at least 1"),
-  chipType: z.enum(["person", "date", "file"]),
-  personEmail: z.string().email().optional(),
-  date: z.string().optional(),
-  fileId: z.string().optional(),
+  chipType: z.enum(["person"]),
+  personEmail: z.string().email("Valid email is required for person chip"),
 });
 
 const ReadSmartChipsSchema = z.object({
@@ -991,18 +989,16 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "insertSmartChip",
-    description: "Insert a smart chip (person/date/file) at a document index",
+    description: "Insert a person smart chip (mention) at a document index. Only person chips are supported by the Docs API; date and file chips are read-only.",
     inputSchema: {
       type: "object",
       properties: {
         documentId: { type: "string", description: "Document ID" },
         index: { type: "number", description: "Insertion index (1-based)" },
-        chipType: { type: "string", enum: ["person", "date", "file"], description: "Smart chip type" },
-        personEmail: { type: "string", description: "Email for person chip" },
-        date: { type: "string", description: "Date string for date chip" },
-        fileId: { type: "string", description: "Drive file ID for file chip" }
+        chipType: { type: "string", enum: ["person"], description: "Smart chip type (only 'person' is supported)" },
+        personEmail: { type: "string", description: "Email address for the person mention" }
       },
-      required: ["documentId", "index", "chipType"]
+      required: ["documentId", "index", "chipType", "personEmail"]
     }
   },
   {
@@ -2331,18 +2327,19 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const a = validation.data;
 
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-      const smartChip: any = a.chipType === 'person'
-        ? { personProperties: { email: a.personEmail } }
-        : a.chipType === 'date'
-          ? { dateProperties: { dateString: a.date } }
-          : { richLinkProperties: { uri: `https://drive.google.com/file/d/${a.fileId}/view` } };
-
       await docs.documents.batchUpdate({
         documentId: a.documentId,
-        requestBody: { requests: [{ insertInlineObject: { location: { index: a.index }, inlineObject: { embeddedObject: smartChip } } } as any] as any }
+        requestBody: {
+          requests: [{
+            insertPerson: {
+              personProperties: { email: a.personEmail },
+              location: { index: a.index },
+            },
+          } as any],
+        },
       });
 
-      return { content: [{ type: 'text', text: `Inserted ${a.chipType} smart chip at index ${a.index}.` }], isError: false };
+      return { content: [{ type: 'text', text: `Inserted person smart chip for ${a.personEmail} at index ${a.index}.` }], isError: false };
     }
 
     case "readSmartChips": {

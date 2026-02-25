@@ -589,7 +589,7 @@ Add the server to your Claude Desktop configuration:
   - `spreadsheetId`: Spreadsheet ID
   - `range`: A1 range (e.g., `Sheet1!A1:A10`)
   - `conditionType`: `ONE_OF_LIST`, `NUMBER_GREATER`, `NUMBER_LESS`, or `TEXT_CONTAINS`
-  - `values`: Condition values (required for `ONE_OF_LIST`)
+  - `values`: Condition values (e.g. list items, threshold)
   - `strict`: Reject invalid values (optional, default: `true`)
   - `showCustomUi`: Show dropdown/custom UI (optional, default: `true`)
 

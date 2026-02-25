@@ -270,6 +270,11 @@ describe('Sheets tools', () => {
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('Deleted sheet'));
     });
+
+    it('deleteSheet validation error', async () => {
+      const res = await callTool(ctx.client, 'deleteSheet', {});
+      assert.equal(res.isError, true);
+    });
   });
 
   // --- governance helpers ---
@@ -281,6 +286,13 @@ describe('Sheets tools', () => {
       });
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('Added data validation'));
+    });
+
+    it('addDataValidation requires values', async () => {
+      const res = await callTool(ctx.client, 'addDataValidation', {
+        spreadsheetId: 'sheet-1', range: 'Sheet1!A1:A10', conditionType: 'NUMBER_GREATER',
+      });
+      assert.equal(res.isError, true);
     });
 
     it('protectRange happy path', async () => {

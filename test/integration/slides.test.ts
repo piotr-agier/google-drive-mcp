@@ -216,6 +216,11 @@ describe('Slides tools', () => {
       assert.equal(res.isError, false);
     });
 
+    it('deleteGoogleSlide validation error', async () => {
+      const res = await callTool(ctx.client, 'deleteGoogleSlide', {});
+      assert.equal(res.isError, true);
+    });
+
     it('duplicateSlide happy path', async () => {
       const res = await callTool(ctx.client, 'duplicateSlide', {
         presentationId: 'pres-1', slideObjectId: 'slide-1',

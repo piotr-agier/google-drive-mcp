@@ -1434,10 +1434,15 @@ export async function handleTool(
         missingScopes,
       };
 
+      const status =
+        !tokenFileExists || !payload.hasRefreshToken ? 'needs_reauth' :
+        missingScopes.length > 0 ? 'scope_mismatch' :
+        'ok';
+
       return {
         content: [{
           type: 'text',
-          text: `Auth status:\n${JSON.stringify(payload, null, 2)}\n\nSummary: token file ${tokenFileExists ? 'found' : 'missing'}, missing scopes=${missingScopes.length}.`,
+          text: `Auth status (${status}):\n${JSON.stringify(payload, null, 2)}\n\nSummary: token file ${tokenFileExists ? 'found' : 'missing'}, missing scopes=${missingScopes.length}.`,
         }],
         isError: false,
       };
@@ -1546,7 +1551,7 @@ export async function handleTool(
       return {
         content: [{
           type: 'text',
-          text: `Scope preset selected: ${data.preset}\nRequested scopes: ${JSON.stringify(resolved, null, 2)}\n\nSet env before restart:\nGOOGLE_DRIVE_MCP_SCOPES=${envValue}\n\nThen run auth flow (or restart server to trigger re-auth).${clearMessage}`,
+          text: `Scope preset selected: ${data.preset}\nRequested scopes: ${JSON.stringify(resolved, null, 2)}\n\nNext steps:\n1) Export scope env:\n   GOOGLE_DRIVE_MCP_SCOPES=${envValue}\n2) Restart MCP server\n3) Run auth flow to refresh consent (if prompted)\n\nThis tool does not mutate process env automatically.${clearMessage}`,
         }],
         isError: false,
       };

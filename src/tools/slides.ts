@@ -137,7 +137,7 @@ const DuplicateSlideSchema = z.object({
 const ReorderSlidesSchema = z.object({
   presentationId: z.string().min(1, "Presentation ID is required"),
   slideObjectIds: z.array(z.string().min(1)).min(1, "At least one slide object ID is required"),
-  insertionIndex: z.number().min(0)
+  insertionIndex: z.number().int().min(0)
 });
 
 const ReplaceAllTextInSlidesSchema = z.object({

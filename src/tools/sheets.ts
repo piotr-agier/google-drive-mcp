@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { ToolDefinition, ToolResult, ToolContext } from '../types.js';
 import { errorResponse } from '../types.js';
-import { parseA1Range, convertA1ToGridRange, escapeDriveQuery } from '../utils.js';
+import { parseA1Range, convertA1ToGridRange, escapeDriveQuery, type GridRange } from '../utils.js';
 
 // ---------------------------------------------------------------------------
 // Zod Schemas
@@ -150,7 +150,7 @@ const AddDataValidationSchema = z.object({
   spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
   range: z.string().min(1, "Range is required"),
   conditionType: z.enum(["ONE_OF_LIST", "NUMBER_GREATER", "NUMBER_LESS", "TEXT_CONTAINS"]),
-  values: z.array(z.string()).optional(),
+  values: z.array(z.string()).min(1, "At least one value is required"),
   strict: z.boolean().optional().default(true),
   showCustomUi: z.boolean().optional().default(true)
 });
@@ -515,11 +515,11 @@ export const toolDefinitions: ToolDefinition[] = [
         spreadsheetId: { type: "string", description: "Spreadsheet ID" },
         range: { type: "string", description: "A1 range" },
         conditionType: { type: "string", enum: ["ONE_OF_LIST", "NUMBER_GREATER", "NUMBER_LESS", "TEXT_CONTAINS"], description: "Validation condition type" },
-        values: { type: "array", items: { type: "string" }, description: "Condition values (required for ONE_OF_LIST)" },
+        values: { type: "array", items: { type: "string" }, description: "Condition values (e.g. list items, threshold)" },
         strict: { type: "boolean", description: "Reject invalid values" },
         showCustomUi: { type: "boolean", description: "Show dropdown/custom UI" }
       },
-      required: ["spreadsheetId", "range", "conditionType"]
+      required: ["spreadsheetId", "range", "conditionType", "values"]
     }
   },
   {
@@ -563,6 +563,28 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   }
 ];
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+async function resolveGridRange(
+  sheetsService: ReturnType<ToolContext['google']['sheets']>,
+  spreadsheetId: string,
+  range: string
+): Promise<GridRange | string> {
+  const rangeData = await sheetsService.spreadsheets.get({
+    spreadsheetId,
+    ranges: [range],
+    fields: 'sheets(properties(sheetId,title))'
+  });
+  const { sheetName, cellRange: a1Range } = parseA1Range(range);
+  const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
+  if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
+    return `Sheet "${sheetName}" not found`;
+  }
+  return convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
+}
 
 // ---------------------------------------------------------------------------
 // Handler
@@ -1240,23 +1262,10 @@ export async function handleTool(
       const a = validation.data;
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      const gridRange = await resolveGridRange(sheets, a.spreadsheetId, a.range);
+      if (typeof gridRange === 'string') return errorResponse(gridRange);
 
-      const rangeData = await sheets.spreadsheets.get({
-        spreadsheetId: a.spreadsheetId,
-        ranges: [a.range],
-        fields: 'sheets(properties(sheetId,title))'
-      });
-      const { sheetName, cellRange: a1Range } = parseA1Range(a.range);
-      const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
-      if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
-        return errorResponse(`Sheet "${sheetName}" not found`);
-      }
-      const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
-
-      const conditionValues = (a.values || []).map(v => ({ userEnteredValue: v }));
-      if (a.conditionType === 'ONE_OF_LIST' && conditionValues.length === 0) {
-        return errorResponse('values are required when conditionType is ONE_OF_LIST');
-      }
+      const conditionValues = a.values.map(v => ({ userEnteredValue: v }));
 
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId: a.spreadsheetId,
@@ -1286,17 +1295,8 @@ export async function handleTool(
       const a = validation.data;
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      const rangeData = await sheets.spreadsheets.get({
-        spreadsheetId: a.spreadsheetId,
-        ranges: [a.range],
-        fields: 'sheets(properties(sheetId,title))'
-      });
-      const { sheetName, cellRange: a1Range } = parseA1Range(a.range);
-      const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
-      if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
-        return errorResponse(`Sheet "${sheetName}" not found`);
-      }
-      const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
+      const gridRange = await resolveGridRange(sheets, a.spreadsheetId, a.range);
+      if (typeof gridRange === 'string') return errorResponse(gridRange);
 
       const response = await sheets.spreadsheets.batchUpdate({
         spreadsheetId: a.spreadsheetId,
@@ -1323,17 +1323,8 @@ export async function handleTool(
       const a = validation.data;
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      const rangeData = await sheets.spreadsheets.get({
-        spreadsheetId: a.spreadsheetId,
-        ranges: [a.range],
-        fields: 'sheets(properties(sheetId,title))'
-      });
-      const { sheetName, cellRange: a1Range } = parseA1Range(a.range);
-      const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
-      if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
-        return errorResponse(`Sheet "${sheetName}" not found`);
-      }
-      const gridRange = convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
+      const gridRange = await resolveGridRange(sheets, a.spreadsheetId, a.range);
+      if (typeof gridRange === 'string') return errorResponse(gridRange);
 
       const response = await sheets.spreadsheets.batchUpdate({
         spreadsheetId: a.spreadsheetId,

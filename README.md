@@ -390,6 +390,15 @@ Add the server to your Claude Desktop configuration:
   - `role`: Role (`reader`, `commenter`, `writer`)
   - `sendNotificationEmail`: Send notification email (optional)
 
+- **getRevisions** - List revisions for a file
+  - `fileId`: File ID
+  - `pageSize`: Max revisions to return (optional)
+
+- **restoreRevision** - Restore a file from a selected revision (safety-confirmed)
+  - `fileId`: File ID
+  - `revisionId`: Revision ID to restore
+  - `confirm`: Must be `true` to execute restore
+
 - **uploadFile** - Upload a local file (any type: image, audio, video, PDF, etc.) to Google Drive
   - `localPath`: Absolute path to the local file
   - `name`: File name in Drive (optional, defaults to local filename)

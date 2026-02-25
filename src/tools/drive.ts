@@ -186,6 +186,17 @@ async function splitPdfIntoChunkFiles(localPath: string, maxPagesPerChunk: numbe
   return { tempDir, files };
 }
 
+const GetRevisionsSchema = z.object({
+  fileId: z.string().min(1, "File ID is required"),
+  pageSize: z.number().int().min(1).max(200).optional().default(50),
+});
+
+const RestoreRevisionSchema = z.object({
+  fileId: z.string().min(1, "File ID is required"),
+  revisionId: z.string().min(1, "Revision ID is required"),
+  confirm: z.boolean().optional().default(false),
+});
+
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
@@ -452,6 +463,31 @@ export const toolDefinitions: ToolDefinition[] = [
         namePrefix: { type: "string", description: "Optional output name prefix" }
       },
       required: ["localPath"]
+    }
+  },
+  {
+    name: "getRevisions",
+    description: "List revisions for a file",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "Google Drive file ID" },
+        pageSize: { type: "number", description: "Max revisions to return (default 50, max 200)" }
+      },
+      required: ["fileId"]
+    }
+  },
+  {
+    name: "restoreRevision",
+    description: "Restore a file to a selected revision (creates a new head revision)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "Google Drive file ID" },
+        revisionId: { type: "string", description: "Revision ID to restore" },
+        confirm: { type: "boolean", description: "Safety flag. Must be true to execute restore." }
+      },
+      required: ["fileId", "revisionId"]
     }
   },
 ];
@@ -1197,6 +1233,88 @@ export async function handleTool(
           await rm(tempDir, { recursive: true, force: true });
         }
       }
+    }
+
+    case "getRevisions": {
+      const validation = GetRevisionsSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      const response = await ctx.getDrive().revisions.list({
+        fileId: data.fileId,
+        pageSize: data.pageSize,
+        fields: 'revisions(id,modifiedTime,lastModifyingUser(displayName,emailAddress),keepForever,size,originalFilename)',
+      }) as any;
+
+      const revisions = response.data.revisions || [];
+      if (revisions.length === 0) {
+        return { content: [{ type: 'text', text: `No revisions found for file ${data.fileId}.` }], isError: false };
+      }
+
+      const lines = revisions.map((r: any) => {
+        const who = r.lastModifyingUser?.displayName || r.lastModifyingUser?.emailAddress || 'unknown';
+        return `- ${r.id}: ${r.modifiedTime || 'unknown-time'} by ${who}${r.keepForever ? ' [kept]' : ''}`;
+      });
+
+      return {
+        content: [{ type: 'text', text: `Revisions for file ${data.fileId}:\n${lines.join('\n')}` }],
+        isError: false,
+      };
+    }
+
+    case "restoreRevision": {
+      const validation = RestoreRevisionSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      if (!data.confirm) {
+        return errorResponse('Refusing restore: set confirm=true to restore a revision.');
+      }
+
+      const revision = await ctx.getDrive().revisions.get({
+        fileId: data.fileId,
+        revisionId: data.revisionId,
+        fields: 'id,modifiedTime,lastModifyingUser(displayName,emailAddress),exportLinks',
+      }) as any;
+
+      const exportLinks = revision.data.exportLinks || {};
+      const exportMimeType =
+        Object.keys(exportLinks).find((m) => m === 'application/pdf') ||
+        Object.keys(exportLinks)[0];
+
+      if (!exportMimeType || !exportLinks[exportMimeType]) {
+        return errorResponse('Selected revision cannot be restored via export/import with available export links.');
+      }
+
+      const exported = await ctx.getDrive().revisions.get({
+        fileId: data.fileId,
+        revisionId: data.revisionId,
+        alt: 'media',
+      }, { responseType: 'stream' as any }) as any;
+
+      const current = await ctx.getDrive().files.get({
+        fileId: data.fileId,
+        fields: 'name,mimeType',
+        supportsAllDrives: true,
+      });
+
+      await ctx.getDrive().files.update({
+        fileId: data.fileId,
+        media: {
+          mimeType: exportMimeType,
+          body: (exported as any).data,
+        },
+        supportsAllDrives: true,
+      });
+
+      const who = revision.data.lastModifyingUser?.displayName || revision.data.lastModifyingUser?.emailAddress || 'unknown';
+      return {
+        content: [{
+          type: 'text',
+          text: `Restored file ${data.fileId} (${current.data.name || 'unnamed'}) from revision ${data.revisionId} (${revision.data.modifiedTime || 'unknown-time'}, by ${who}).`,
+        }],
+        isError: false,
+      };
     }
 
     default:

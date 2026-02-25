@@ -58,6 +58,7 @@
         "google-auth-library": "^9.15.0",
         "googleapis": "^144.0.0",
         "open": "^10.2.0",
+        "pdf-lib": "^1.17.1",
         "punycode": "^2.3.1",
         "uuid": "^11.0.3",
         "zod": "^3.25.76"

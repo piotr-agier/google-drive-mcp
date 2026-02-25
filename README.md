@@ -413,14 +413,13 @@ Add the server to your Claude Desktop configuration:
   - `maxResults`: Maximum PDFs to process (optional, default: 100)
   - `continueOnError`: Continue processing after individual failures (optional, default: true)
 
-- **uploadPdfWithSplit** - Upload a local PDF with optional split planning metadata
+- **uploadPdfWithSplit** - Upload a local PDF, optionally split into chunked PDF parts before upload
   - `localPath`: Absolute local path to PDF
   - `split`: Enable split mode metadata output (optional, default: false)
   - `maxPagesPerChunk`: Advisory chunk size for split planning (optional)
   - `parentFolderId`: Optional destination folder
   - `namePrefix`: Optional uploaded file name prefix
 
-> Note: `uploadPdfWithSplit` currently uploads the PDF and records split-plan parameters; physical page-splitting execution is a follow-up enhancement.
 
 ### Folder Operations
 - **createFolder** - Create a new folder

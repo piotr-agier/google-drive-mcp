@@ -741,11 +741,16 @@ Add the server to your Claude Desktop configuration:
   - `insertionIndex`: Target insertion index
 
 - **replaceAllTextInSlides** - Replace text across a presentation
-- **exportSlideThumbnail** - Export a slide thumbnail URL (PNG/JPEG, SMALL/MEDIUM/LARGE)
   - `presentationId`: Presentation ID
   - `containsText`: Text to find
   - `replaceText`: Replacement text
   - `matchCase`: Match case (optional, default: `false`)
+
+- **exportSlideThumbnail** - Export a slide thumbnail URL (PNG/JPEG, SMALL/MEDIUM/LARGE)
+  - `presentationId`: Presentation ID
+  - `slideObjectId`: Slide object ID
+  - `mimeType`: `PNG` or `JPEG` (optional, default: `PNG`)
+  - `size`: `SMALL`, `MEDIUM`, or `LARGE` (optional, default: `LARGE`)
 
 ### Google Calendar
 - **listCalendars** - List all accessible Google Calendars

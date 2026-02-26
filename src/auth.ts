@@ -6,6 +6,7 @@ import { TokenManager } from './auth/tokenManager.js';
 export { TokenManager } from './auth/tokenManager.js';
 export { initializeOAuth2Client } from './auth/client.js';
 export { AuthServer } from './auth/server.js';
+export { SCOPE_ALIASES, SCOPE_PRESETS, DEFAULT_SCOPES, resolveOAuthScopes } from './auth/scopes.js';
 
 /**
  * Authenticate and return OAuth2 client

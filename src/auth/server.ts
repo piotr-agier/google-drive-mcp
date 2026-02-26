@@ -4,50 +4,7 @@ import { TokenManager } from './tokenManager.js';
 import http from 'http';
 import open from 'open';
 import { loadCredentials } from './client.js';
-
-// Default OAuth scopes for Google Drive, Docs, Sheets, Slides, and Calendar
-const DEFAULT_SCOPES = [
-  'https://www.googleapis.com/auth/drive',
-  'https://www.googleapis.com/auth/drive.file',
-  'https://www.googleapis.com/auth/drive.readonly',
-  'https://www.googleapis.com/auth/documents',
-  'https://www.googleapis.com/auth/spreadsheets',
-  'https://www.googleapis.com/auth/presentations',
-  'https://www.googleapis.com/auth/calendar',
-  'https://www.googleapis.com/auth/calendar.events'
-] as const;
-
-const SCOPE_ALIASES: Record<string, string> = {
-  drive: 'https://www.googleapis.com/auth/drive',
-  'drive.file': 'https://www.googleapis.com/auth/drive.file',
-  'drive.readonly': 'https://www.googleapis.com/auth/drive.readonly',
-  documents: 'https://www.googleapis.com/auth/documents',
-  spreadsheets: 'https://www.googleapis.com/auth/spreadsheets',
-  presentations: 'https://www.googleapis.com/auth/presentations',
-  calendar: 'https://www.googleapis.com/auth/calendar',
-  'calendar.events': 'https://www.googleapis.com/auth/calendar.events'
-};
-
-function resolveOAuthScopes(): string[] {
-  const raw = process.env.GOOGLE_DRIVE_MCP_SCOPES?.trim();
-  if (!raw) return [...DEFAULT_SCOPES];
-
-  const scopes = raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((s) => {
-      if (SCOPE_ALIASES[s]) return SCOPE_ALIASES[s];
-      if (s.startsWith('https://')) return s;
-      const known = Object.keys(SCOPE_ALIASES).join(', ');
-      throw new Error(
-        `Unknown OAuth scope alias "${s}". Use a full URL (https://...) or one of: ${known}`
-      );
-    });
-
-  if (scopes.length === 0) return [...DEFAULT_SCOPES];
-  return [...new Set(scopes)];
-}
+import { resolveOAuthScopes } from './scopes.js';
 
 const SCOPES = resolveOAuthScopes();
 

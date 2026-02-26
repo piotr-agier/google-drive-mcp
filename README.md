@@ -404,7 +404,7 @@ Add the server to your Claude Desktop configuration:
 - **auth_listScopes** - Show configured/requested scopes, granted scopes, missing scopes, and presets
 - **auth_testFileAccess** - Test Drive access (optionally against a specific `fileId`)
 - **auth_clearTokens** - Clear saved OAuth tokens (`confirm=true` required)
-- **auth_setScopePreset** - Select scope preset and get deterministic re-auth instructions
+- **auth_suggestScopePreset** - Get scope configuration instructions for a preset
   - `preset`: `readonly` | `content-editor` | `full`
   - `clearTokens`: optional best-effort token clear
 

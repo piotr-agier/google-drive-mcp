@@ -1003,7 +1003,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "readSmartChips",
-    description: "Read smart chip-like elements from a document",
+    description: "Read smart chip-like elements (person mentions, rich links, date chips) from the default tab of a document",
     inputSchema: {
       type: "object",
       properties: {
@@ -2301,7 +2301,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
       await docs.documents.batchUpdate({
         documentId: a.documentId,
-        requestBody: { requests: [{ createTab: { tabProperties: { title: a.title } } } as any] as any }
+        // createTab is not yet in the googleapis TypeScript types — cast required
+        requestBody: { requests: [{ createTab: { tabProperties: { title: a.title } } } as any] }
       });
 
       return { content: [{ type: 'text', text: `Requested creation of tab "${a.title}" in document ${a.documentId}.` }], isError: false };
@@ -2315,7 +2316,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
       await docs.documents.batchUpdate({
         documentId: a.documentId,
-        requestBody: { requests: [{ updateTabProperties: { tabId: a.tabId, tabProperties: { title: a.title }, fields: 'title' } } as any] as any }
+        // updateTabProperties is not yet in the googleapis TypeScript types — cast required
+        requestBody: { requests: [{ updateTabProperties: { tabId: a.tabId, tabProperties: { title: a.title }, fields: 'title' } } as any] }
       });
 
       return { content: [{ type: 'text', text: `Renamed tab ${a.tabId} to "${a.title}".` }], isError: false };
@@ -2335,6 +2337,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
               personProperties: { email: a.personEmail },
               location: { index: a.index },
             },
+          // insertPerson is not yet in the googleapis TypeScript types — cast required
           } as any],
         },
       });
@@ -2357,7 +2360,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           if (el?.person) hits.push(`person: ${el.person.personProperties?.email || 'unknown'}`);
         }
       }
-      return { content: [{ type: 'text', text: hits.length ? hits.join('\n') : 'No smart chips detected.' }], isError: false };
+      // Date chips appear as richLink elements in the Docs API model — already covered above.
+      return { content: [{ type: 'text', text: hits.length ? hits.join('\n') : 'No smart chips detected (note: only the default tab is scanned).' }], isError: false };
     }
 
     default:

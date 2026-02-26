@@ -420,7 +420,6 @@ Add the server to your Claude Desktop configuration:
   - `parentFolderId`: Optional destination folder
   - `namePrefix`: Optional uploaded file name prefix
 
-
 ### Folder Operations
 - **createFolder** - Create a new folder
   - `name`: Folder name
@@ -467,7 +466,7 @@ Add the server to your Claude Desktop configuration:
   - `chipType`: `person` (only supported type)
   - `personEmail`: Email address for the person mention
 
-- **readSmartChips** - Read smart chip-like elements from a document
+- **readSmartChips** - Read smart chip-like elements (person mentions, rich links, date chips) from the default tab of a document. Only the default tab is scanned; other tabs are not included.
   - `documentId`: Document ID
 
 - **listGoogleDocs** - List Google Documents with optional filtering

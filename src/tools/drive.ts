@@ -41,7 +41,8 @@ const BINARY_MIME_TYPES: Record<string, string> = {
 const SearchSchema = z.object({
   query: z.string().min(1, "Search query is required"),
   pageSize: z.number().int().min(1).max(100).optional(),
-  pageToken: z.string().optional()
+  pageToken: z.string().optional(),
+  rawQuery: z.boolean().optional(),
 });
 
 const CreateTextFileSchema = z.object({
@@ -217,13 +218,14 @@ function getGrantedScopesFromAuthClient(ctx: ToolContext): string[] {
 export const toolDefinitions: ToolDefinition[] = [
   {
     name: "search",
-    description: "Search for files in Google Drive",
+    description: "Search for files in Google Drive. Set rawQuery=true to pass a raw Google Drive API query supporting operators like modifiedTime, createdTime, mimeType, name contains, etc.",
     inputSchema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Search query" },
+        query: { type: "string", description: "Search query. When rawQuery=true, this is passed directly to the Google Drive API as the q parameter." },
         pageSize: { type: "number", description: "Results per page (default 50, max 100)" },
-        pageToken: { type: "string", description: "Token for next page of results" }
+        pageToken: { type: "string", description: "Token for next page of results" },
+        rawQuery: { type: "boolean", description: "If true, pass query directly to Google Drive API without wrapping in fullText contains. Enables date filters, mimeType filters, etc." },
       },
       required: ["query"],
     },
@@ -542,25 +544,41 @@ export async function handleTool(
       if (!validation.success) {
         return errorResponse(validation.error.errors[0].message);
       }
-      const { query: userQuery, pageSize, pageToken } = validation.data;
+      const { query: userQuery, pageSize, pageToken, rawQuery } = validation.data;
 
-      const escapedQuery = escapeDriveQuery(userQuery);
-      const formattedQuery = `fullText contains '${escapedQuery}' and trashed = false`;
+      let formattedQuery: string;
+      if (rawQuery) {
+        // Use query directly; auto-append trashed guard unless user already includes it
+        formattedQuery = /trashed\s*=/.test(userQuery)
+          ? userQuery
+          : `${userQuery} and trashed = false`;
+      } else {
+        const escapedQuery = escapeDriveQuery(userQuery);
+        formattedQuery = `fullText contains '${escapedQuery}' and trashed = false`;
+      }
 
       const res = await ctx.getDrive().files.list({
         q: formattedQuery,
         pageSize: Math.min(pageSize || 50, 100),
         pageToken: pageToken,
-        fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size)",
+        fields: "nextPageToken, files(id, name, mimeType, createdTime, modifiedTime, size)",
         corpora: "allDrives",
         includeItemsFromAllDrives: true,
         supportsAllDrives: true
       });
 
-      const fileList = res.data.files?.map((f: drive_v3.Schema$File) => `${f.name} (ID: ${f.id}, ${f.mimeType})`).join("\n") || '';
-      ctx.log('Search results', { query: userQuery, resultCount: res.data.files?.length });
+      const files = res.data.files || [];
+      const fileList = files.map((f: drive_v3.Schema$File) => {
+        let line = `${f.name} (ID: ${f.id}, ${f.mimeType})`;
+        if (rawQuery) {
+          line += ` [created: ${f.createdTime || 'N/A'}, modified: ${f.modifiedTime || 'N/A'}]`;
+        }
+        return line;
+      }).join("\n");
 
-      let response = `Found ${res.data.files?.length ?? 0} files:\n${fileList}`;
+      ctx.log('Search results', { query: userQuery, resultCount: files.length });
+
+      let response = `Found ${files.length} files:\n${fileList}`;
       if (res.data.nextPageToken) {
         response += `\n\nMore results available. Use pageToken: ${res.data.nextPageToken}`;
       }

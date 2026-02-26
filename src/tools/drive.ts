@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { drive_v3 } from 'googleapis';
 import { existsSync, statSync, createReadStream } from 'fs';
-import { mkdtemp, writeFile, rm } from 'fs/promises';
+import { mkdtemp, readFile, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { basename, extname, join } from 'path';
 import { PDFDocument } from 'pdf-lib';
@@ -160,7 +160,7 @@ const UploadPdfWithSplitSchema = z.object({
 });
 
 async function splitPdfIntoChunkFiles(localPath: string, maxPagesPerChunk: number): Promise<{ tempDir: string; files: string[] }> {
-  const sourceBytes = await import('fs/promises').then((m) => m.readFile(localPath));
+  const sourceBytes = await readFile(localPath);
   const source = await PDFDocument.load(sourceBytes);
   const pageCount = source.getPageCount();
 
@@ -1098,7 +1098,7 @@ export async function handleTool(
       const data = validation.data;
 
       const list = await ctx.getDrive().files.list({
-        q: `'${data.folderId}' in parents and mimeType='application/pdf' and trashed=false`,
+        q: `'${escapeDriveQuery(data.folderId)}' in parents and mimeType='application/pdf' and trashed=false`,
         pageSize: data.maxResults,
         fields: 'files(id,name,mimeType)',
         includeItemsFromAllDrives: true,
@@ -1108,6 +1108,7 @@ export async function handleTool(
       const files = list.data.files || [];
       const results: Array<{ id?: string; name?: string; docId?: string; ok: boolean; error?: string }> = [];
 
+      // Sequential processing is intentional — parallel copies trigger Google API rate limits.
       for (const f of files) {
         try {
           const converted = await ctx.getDrive().files.copy({

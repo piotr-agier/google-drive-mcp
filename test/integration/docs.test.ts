@@ -619,6 +619,14 @@ describe('Docs tools', () => {
       const res = await callTool(ctx.client, 'insertSmartChip', { documentId: 'doc-1', index: 1, chipType: 'person', personEmail: 'user@example.com' });
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('user@example.com'));
+
+      // Verify the batchUpdate request uses insertPerson (not insertInlineObject)
+      const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
+      const lastCall = calls[calls.length - 1];
+      const requests = lastCall?.args?.[0]?.requestBody?.requests;
+      assert.ok(requests?.length === 1);
+      assert.ok('insertPerson' in requests[0], 'request should use insertPerson');
+      assert.equal(requests[0].insertPerson.personProperties.email, 'user@example.com');
     });
 
     it('insertSmartChip rejects missing email', async () => {

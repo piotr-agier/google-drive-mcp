@@ -10,35 +10,13 @@ import { errorResponse } from '../types.js';
 import { escapeDriveQuery, getMimeTypeFromFilename, TEXT_MIME_TYPES } from '../utils.js';
 import { downloadDriveFile, GOOGLE_WORKSPACE_EXPORT_FORMATS } from '../download-file.js';
 import { getSecureTokenPath } from '../auth/utils.js';
+import { SCOPE_ALIASES, SCOPE_PRESETS, DEFAULT_SCOPES, resolveOAuthScopes } from '../auth/scopes.js';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
-
-const SCOPE_ALIASES: Record<string, string> = {
-  drive: 'https://www.googleapis.com/auth/drive',
-  'drive.file': 'https://www.googleapis.com/auth/drive.file',
-  'drive.readonly': 'https://www.googleapis.com/auth/drive.readonly',
-  documents: 'https://www.googleapis.com/auth/documents',
-  spreadsheets: 'https://www.googleapis.com/auth/spreadsheets',
-  presentations: 'https://www.googleapis.com/auth/presentations',
-  calendar: 'https://www.googleapis.com/auth/calendar',
-  'calendar.events': 'https://www.googleapis.com/auth/calendar.events'
-};
-
-const SCOPE_PRESETS: Record<string, string[]> = {
-  readonly: ['drive.readonly'],
-  'content-editor': ['drive.file', 'documents', 'spreadsheets', 'presentations'],
-  full: ['drive', 'documents', 'spreadsheets', 'presentations', 'calendar', 'calendar.events']
-};
-
-const DEFAULT_SCOPES = [
-  'drive', 'drive.file', 'drive.readonly',
-  'documents', 'spreadsheets', 'presentations',
-  'calendar', 'calendar.events'
-].map((s) => SCOPE_ALIASES[s]);
 
 // MIME types for binary file uploads (extension → MIME)
 const BINARY_MIME_TYPES: Record<string, string> = {
@@ -213,6 +191,7 @@ async function splitPdfIntoChunkFiles(localPath: string, maxPagesPerChunk: numbe
 const GetRevisionsSchema = z.object({
   fileId: z.string().min(1, "File ID is required"),
   pageSize: z.number().int().min(1).max(200).optional().default(50),
+  pageToken: z.string().optional(),
 });
 
 const RestoreRevisionSchema = z.object({
@@ -233,17 +212,6 @@ const AuthSetScopePresetSchema = z.object({
   preset: z.enum(['readonly', 'content-editor', 'full']),
   clearTokens: z.boolean().optional().default(false),
 });
-
-function getRequestedScopes(): string[] {
-  const raw = process.env.GOOGLE_DRIVE_MCP_SCOPES?.trim();
-  if (!raw) return [...DEFAULT_SCOPES];
-  const scopes = raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((s) => SCOPE_ALIASES[s] || s);
-  return [...new Set(scopes)];
-}
 
 function getGrantedScopesFromAuthClient(ctx: ToolContext): string[] {
   const scopeRaw = ctx.authClient?.credentials?.scope;
@@ -526,14 +494,15 @@ export const toolDefinitions: ToolDefinition[] = [
       type: "object",
       properties: {
         fileId: { type: "string", description: "Google Drive file ID" },
-        pageSize: { type: "number", description: "Max revisions to return (default 50, max 200)" }
+        pageSize: { type: "number", description: "Max revisions to return (default 50, max 200)" },
+        pageToken: { type: "string", description: "Page token for pagination" }
       },
       required: ["fileId"]
     }
   },
   {
     name: "restoreRevision",
-    description: "Restore a file to a selected revision (creates a new head revision)",
+    description: "Restore a file to a selected revision (creates a new head revision). Note: workspace files (Docs, Sheets, Slides) are restored via export/import and may lose some formatting.",
     inputSchema: {
       type: "object",
       properties: {
@@ -545,17 +514,17 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
   {
-    name: "auth_getStatus",
+    name: "authGetStatus",
     description: "Show authentication/token status and scope diagnostics",
     inputSchema: { type: "object", properties: {} }
   },
   {
-    name: "auth_listScopes",
+    name: "authListScopes",
     description: "List configured/requested scopes and currently granted scopes",
     inputSchema: { type: "object", properties: {} }
   },
   {
-    name: "auth_testFileAccess",
+    name: "authTestFileAccess",
     description: "Run auth diagnostics against Drive API/file access",
     inputSchema: {
       type: "object",
@@ -565,7 +534,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
   {
-    name: "auth_clearTokens",
+    name: "authClearTokens",
     description: "Clear saved OAuth tokens (requires confirm=true)",
     inputSchema: {
       type: "object",
@@ -575,7 +544,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
   {
-    name: "auth_suggestScopePreset",
+    name: "authSuggestScopePreset",
     description: "Get scope configuration instructions for a preset",
     inputSchema: {
       type: "object",
@@ -1339,21 +1308,27 @@ export async function handleTool(
       const response = await ctx.getDrive().revisions.list({
         fileId: data.fileId,
         pageSize: data.pageSize,
-        fields: 'revisions(id,modifiedTime,lastModifyingUser(displayName,emailAddress),keepForever,size,originalFilename)',
-      }) as any;
+        pageToken: data.pageToken,
+        fields: 'nextPageToken,revisions(id,modifiedTime,lastModifyingUser(displayName,emailAddress),keepForever,size,originalFilename)',
+      });
 
-      const revisions = response.data.revisions || [];
+      const revisions: drive_v3.Schema$Revision[] = response.data.revisions || [];
       if (revisions.length === 0) {
         return { content: [{ type: 'text', text: `No revisions found for file ${data.fileId}.` }], isError: false };
       }
 
-      const lines = revisions.map((r: any) => {
+      const lines = revisions.map((r: drive_v3.Schema$Revision) => {
         const who = r.lastModifyingUser?.displayName || r.lastModifyingUser?.emailAddress || 'unknown';
         return `- ${r.id}: ${r.modifiedTime || 'unknown-time'} by ${who}${r.keepForever ? ' [kept]' : ''}`;
       });
 
+      let text = `Revisions for file ${data.fileId}:\n${lines.join('\n')}`;
+      if (response.data.nextPageToken) {
+        text += `\n\nMore revisions available. Use pageToken="${response.data.nextPageToken}" to fetch the next page.`;
+      }
+
       return {
-        content: [{ type: 'text', text: `Revisions for file ${data.fileId}:\n${lines.join('\n')}` }],
+        content: [{ type: 'text', text }],
         isError: false,
       };
     }
@@ -1374,7 +1349,7 @@ export async function handleTool(
         supportsAllDrives: true,
       });
 
-      const fileMimeType = (current.data as { mimeType?: string }).mimeType || '';
+      const fileMimeType = current.data.mimeType || '';
       const isWorkspaceFile = fileMimeType.startsWith('application/vnd.google-apps.');
 
       let revisionBody: unknown;
@@ -1413,11 +1388,10 @@ export async function handleTool(
         revisionBody = exportResponse.data;
       } else {
         // For binary files, download the revision content directly
-        const revision = await ctx.getDrive().revisions.get({
-          fileId: data.fileId,
-          revisionId: data.revisionId,
-          alt: 'media',
-        });
+        const revision = await ctx.getDrive().revisions.get(
+          { fileId: data.fileId, revisionId: data.revisionId, alt: 'media' },
+          { responseType: 'stream' },
+        );
         revisionBody = revision.data;
         uploadMimeType = fileMimeType || 'application/octet-stream';
       }
@@ -1431,19 +1405,29 @@ export async function handleTool(
         supportsAllDrives: true,
       });
 
+      const restoreMsg = `Restored file ${data.fileId} (${current.data.name || 'unnamed'}) from revision ${data.revisionId}.`;
+      const workspaceWarning = isWorkspaceFile
+        ? '\n\nWarning: This workspace file was restored via export/import. Some formatting or features (e.g. comments, suggestions, version history metadata) may have been lost.'
+        : '';
+
       return {
         content: [{
           type: 'text',
-          text: `Restored file ${data.fileId} (${(current.data as { name?: string }).name || 'unnamed'}) from revision ${data.revisionId}.`,
+          text: restoreMsg + workspaceWarning,
         }],
         isError: false,
       };
     }
 
-    case "auth_getStatus": {
+    case "authGetStatus": {
       const tokenPath = getSecureTokenPath();
       const tokenFileExists = existsSync(tokenPath);
-      const requestedScopes = getRequestedScopes();
+      let requestedScopes: string[];
+      try {
+        requestedScopes = resolveOAuthScopes();
+      } catch (e: unknown) {
+        return errorResponse(`Invalid scope configuration: ${e instanceof Error ? e.message : String(e)}`);
+      }
       const grantedScopes = getGrantedScopesFromAuthClient(ctx);
       const missingScopes = requestedScopes.filter((s) => !grantedScopes.includes(s));
       const expiryDate = ctx.authClient?.credentials?.expiry_date as number | undefined;
@@ -1466,39 +1450,48 @@ export async function handleTool(
         missingScopes.length > 0 ? 'scope_mismatch' :
         'ok';
 
+      let text = `Auth status (${status}):\n${JSON.stringify(payload, null, 2)}\n\nSummary: token file ${tokenFileExists ? 'found' : 'missing'}, missing scopes=${missingScopes.length}.`;
+      if (grantedScopes.length === 0 && payload.hasAccessToken) {
+        text += '\nNote: granted scopes may appear empty when the token was loaded from disk. This does not necessarily indicate missing permissions.';
+      }
+
       return {
-        content: [{
-          type: 'text',
-          text: `Auth status (${status}):\n${JSON.stringify(payload, null, 2)}\n\nSummary: token file ${tokenFileExists ? 'found' : 'missing'}, missing scopes=${missingScopes.length}.`,
-        }],
+        content: [{ type: 'text', text }],
         isError: false,
       };
     }
 
-    case "auth_listScopes": {
-      const requestedScopes = getRequestedScopes();
+    case "authListScopes": {
+      let requestedScopes: string[];
+      try {
+        requestedScopes = resolveOAuthScopes();
+      } catch (e: unknown) {
+        return errorResponse(`Invalid scope configuration: ${e instanceof Error ? e.message : String(e)}`);
+      }
       const grantedScopes = getGrantedScopesFromAuthClient(ctx);
       const missingScopes = requestedScopes.filter((s) => !grantedScopes.includes(s));
       const presetsResolved = Object.fromEntries(
         Object.entries(SCOPE_PRESETS).map(([k, v]) => [k, v.map((s) => SCOPE_ALIASES[s])]),
       );
 
+      let text = `Scopes:\n${JSON.stringify({ requestedScopes, grantedScopes, missingScopes, presets: presetsResolved }, null, 2)}`;
+      if (grantedScopes.length === 0 && !!ctx.authClient?.credentials?.access_token) {
+        text += '\nNote: granted scopes may appear empty when the token was loaded from disk. This does not necessarily indicate missing permissions.';
+      }
+
       return {
-        content: [{
-          type: 'text',
-          text: `Scopes:\n${JSON.stringify({ requestedScopes, grantedScopes, missingScopes, presets: presetsResolved }, null, 2)}`,
-        }],
+        content: [{ type: 'text', text }],
         isError: false,
       };
     }
 
-    case "auth_testFileAccess": {
+    case "authTestFileAccess": {
       const validation = AuthTestFileAccessSchema.safeParse(args);
       if (!validation.success) return errorResponse(validation.error.errors[0].message);
       const data = validation.data;
 
       try {
-        let check: any;
+        let check: { mode: string; [key: string]: unknown };
         if (data.fileId) {
           const file = await ctx.getDrive().files.get({
             fileId: data.fileId,
@@ -1520,15 +1513,16 @@ export async function handleTool(
           content: [{ type: 'text', text: `Auth access check OK:\n${JSON.stringify(check, null, 2)}` }],
           isError: false,
         };
-      } catch (e: any) {
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : String(e);
         return {
-          content: [{ type: 'text', text: `Auth access check failed:\n${JSON.stringify({ message: e?.message || String(e) }, null, 2)}` }],
+          content: [{ type: 'text', text: `Auth access check failed:\n${JSON.stringify({ message }, null, 2)}` }],
           isError: true,
         };
       }
     }
 
-    case "auth_clearTokens": {
+    case "authClearTokens": {
       const validation = AuthClearTokensSchema.safeParse(args);
       if (!validation.success) return errorResponse(validation.error.errors[0].message);
       const data = validation.data;
@@ -1552,7 +1546,7 @@ export async function handleTool(
       };
     }
 
-    case "auth_suggestScopePreset": {
+    case "authSuggestScopePreset": {
       const validation = AuthSetScopePresetSchema.safeParse(args);
       if (!validation.success) return errorResponse(validation.error.errors[0].message);
       const data = validation.data;

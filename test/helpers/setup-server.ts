@@ -38,7 +38,9 @@ export async function setupTestServer(): Promise<TestContext> {
   }
 
   // Inject fake auth client to bypass authenticate()
-  _serverModule._setAuthClientForTesting({});
+  _serverModule._setAuthClientForTesting({
+    request: async () => ({ data: 'mock-auth-request-response' }),
+  });
 
   const server = _serverModule.server;
 

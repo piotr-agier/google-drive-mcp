@@ -21,7 +21,7 @@ const EXPECTED_TOOLS = [
   'styleGoogleSlidesShape', 'setGoogleSlidesBackground',
   'createGoogleSlidesTextBox', 'createGoogleSlidesShape',
   'getGoogleSlidesSpeakerNotes', 'updateGoogleSlidesSpeakerNotes', 'deleteGoogleSlide', 'duplicateSlide', 'reorderSlides', 'replaceAllTextInSlides', 'exportSlideThumbnail',
-  'uploadFile', 'downloadFile', 'listPermissions', 'addPermission', 'updatePermission', 'removePermission', 'shareFile', 'getRevisions', 'restoreRevision', 'auth_getStatus', 'auth_listScopes', 'auth_testFileAccess', 'auth_clearTokens', 'auth_setScopePreset',
+  'uploadFile', 'downloadFile', 'listPermissions', 'addPermission', 'updatePermission', 'removePermission', 'shareFile', 'getRevisions', 'restoreRevision', 'auth_getStatus', 'auth_listScopes', 'auth_testFileAccess', 'auth_clearTokens', 'auth_suggestScopePreset',
   'listCalendars', 'getCalendarEvents', 'getCalendarEvent',
   'createCalendarEvent', 'updateCalendarEvent', 'deleteCalendarEvent',
   'insertTable', 'editTableCell', 'insertImageFromUrl', 'insertLocalImage',

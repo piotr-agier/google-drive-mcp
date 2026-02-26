@@ -1,14 +1,14 @@
 import { z } from 'zod';
 import type { drive_v3 } from 'googleapis';
 import { existsSync, statSync, createReadStream } from 'fs';
-import { mkdtemp, readFile, writeFile, rm } from 'fs/promises';
+import { mkdtemp, readFile, writeFile, rm, unlink } from 'fs/promises';
 import { tmpdir } from 'os';
 import { basename, extname, join } from 'path';
 import { PDFDocument } from 'pdf-lib';
 import type { ToolDefinition, ToolContext, ToolResult } from '../types.js';
 import { errorResponse } from '../types.js';
 import { escapeDriveQuery, getMimeTypeFromFilename, TEXT_MIME_TYPES } from '../utils.js';
-import { downloadDriveFile } from '../download-file.js';
+import { downloadDriveFile, GOOGLE_WORKSPACE_EXPORT_FORMATS } from '../download-file.js';
 import { getSecureTokenPath } from '../auth/utils.js';
 
 // ---------------------------------------------------------------------------
@@ -575,8 +575,8 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
   {
-    name: "auth_setScopePreset",
-    description: "Select scope preset and receive deterministic re-auth instructions",
+    name: "auth_suggestScopePreset",
+    description: "Get scope configuration instructions for a preset",
     inputSchema: {
       type: "object",
       properties: {
@@ -1366,47 +1366,74 @@ export async function handleTool(
         return errorResponse('Refusing restore: set confirm=true to restore a revision.');
       }
 
-      const revision = await ctx.getDrive().revisions.get({
-        fileId: data.fileId,
-        revisionId: data.revisionId,
-        fields: 'id,modifiedTime,lastModifyingUser(displayName,emailAddress),exportLinks',
-      }) as any;
-
-      const exportLinks = revision.data.exportLinks || {};
-      const exportMimeType =
-        Object.keys(exportLinks).find((m) => m === 'application/pdf') ||
-        Object.keys(exportLinks)[0];
-
-      if (!exportMimeType || !exportLinks[exportMimeType]) {
-        return errorResponse('Selected revision cannot be restored via export/import with available export links.');
-      }
-
-      const exported = await ctx.getDrive().revisions.get({
-        fileId: data.fileId,
-        revisionId: data.revisionId,
-        alt: 'media',
-      }, { responseType: 'stream' as any }) as any;
-
+      // Get current file metadata to determine restore strategy
       const current = await ctx.getDrive().files.get({
         fileId: data.fileId,
         fields: 'name,mimeType',
         supportsAllDrives: true,
       });
 
+      const fileMimeType = (current.data as { mimeType?: string }).mimeType || '';
+      const isWorkspaceFile = fileMimeType.startsWith('application/vnd.google-apps.');
+
+      let revisionBody: unknown;
+      let uploadMimeType: string;
+
+      if (isWorkspaceFile) {
+        // Workspace files don't support revisions.get with alt=media.
+        // Use the revision's exportLinks to fetch content in an editable format.
+        const revision = await ctx.getDrive().revisions.get({
+          fileId: data.fileId,
+          revisionId: data.revisionId,
+          fields: 'id,exportLinks',
+        });
+
+        const exportLinks = (revision.data.exportLinks as Record<string, string> | null) || {};
+
+        // Build preference list: editable formats from GOOGLE_WORKSPACE_EXPORT_FORMATS, excluding pdf
+        const formatMap = GOOGLE_WORKSPACE_EXPORT_FORMATS[fileMimeType];
+        const editableMimes = formatMap
+          ? Object.entries(formatMap).filter(([ext]) => ext !== 'pdf').map(([, mime]) => mime)
+          : [];
+
+        // Pick the first editable MIME type available in exportLinks
+        const selectedMime = editableMimes.find((m) => exportLinks[m])
+          || Object.keys(exportLinks).find((m) => m !== 'application/pdf')
+          || Object.keys(exportLinks)[0];
+
+        if (!selectedMime || !exportLinks[selectedMime]) {
+          return errorResponse('Selected revision has no usable export links for restore.');
+        }
+
+        uploadMimeType = selectedMime;
+
+        // Fetch revision content from the export link using authenticated request
+        const exportResponse = await ctx.authClient.request({ url: exportLinks[selectedMime] });
+        revisionBody = exportResponse.data;
+      } else {
+        // For binary files, download the revision content directly
+        const revision = await ctx.getDrive().revisions.get({
+          fileId: data.fileId,
+          revisionId: data.revisionId,
+          alt: 'media',
+        });
+        revisionBody = revision.data;
+        uploadMimeType = fileMimeType || 'application/octet-stream';
+      }
+
       await ctx.getDrive().files.update({
         fileId: data.fileId,
         media: {
-          mimeType: exportMimeType,
-          body: (exported as any).data,
+          mimeType: uploadMimeType,
+          body: revisionBody,
         },
         supportsAllDrives: true,
       });
 
-      const who = revision.data.lastModifyingUser?.displayName || revision.data.lastModifyingUser?.emailAddress || 'unknown';
       return {
         content: [{
           type: 'text',
-          text: `Restored file ${data.fileId} (${current.data.name || 'unnamed'}) from revision ${data.revisionId} (${revision.data.modifiedTime || 'unknown-time'}, by ${who}).`,
+          text: `Restored file ${data.fileId} (${(current.data as { name?: string }).name || 'unnamed'}) from revision ${data.revisionId}.`,
         }],
         isError: false,
       };
@@ -1508,25 +1535,23 @@ export async function handleTool(
 
       const tokenPath = getSecureTokenPath();
       const existed = existsSync(tokenPath);
+
       if (existed) {
         try {
-          await readFile(tokenPath); // sanity check readable before clear response
-        } catch {}
+          await unlink(tokenPath);
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return errorResponse(`Failed to remove token file at ${tokenPath}: ${msg}`);
+        }
       }
 
-      // best-effort remove via drive-independent auth module behavior not exposed here, so unlink directly
-      try {
-        const fs = await import('fs/promises');
-        await fs.unlink(tokenPath);
-      } catch {}
-
       return {
-        content: [{ type: 'text', text: `Tokens cleared (best-effort). File previously ${existed ? 'existed' : 'did not exist'} at ${tokenPath}. Re-run auth flow before next privileged operation.` }],
+        content: [{ type: 'text', text: `Tokens cleared. File previously ${existed ? 'existed' : 'did not exist'} at ${tokenPath}. Re-run auth flow before next privileged operation.` }],
         isError: false,
       };
     }
 
-    case "auth_setScopePreset": {
+    case "auth_suggestScopePreset": {
       const validation = AuthSetScopePresetSchema.safeParse(args);
       if (!validation.success) return errorResponse(validation.error.errors[0].message);
       const data = validation.data;
@@ -1539,8 +1564,7 @@ export async function handleTool(
       if (data.clearTokens) {
         const tokenPath = getSecureTokenPath();
         try {
-          const fs = await import('fs/promises');
-          await fs.unlink(tokenPath);
+          await unlink(tokenPath);
           clearMessage = `\nTokens cleared at ${tokenPath}.`;
         } catch {
           clearMessage = `\nTokens clear requested, but no token file removed.`;

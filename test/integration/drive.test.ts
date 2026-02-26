@@ -310,8 +310,8 @@ describe('Drive tools', () => {
       assert.ok(res.content[0].text.includes('confirm=true'));
     });
 
-    it('auth_setScopePreset returns deterministic instructions', async () => {
-      const res = await callTool(ctx.client, 'auth_setScopePreset', { preset: 'readonly' });
+    it('auth_suggestScopePreset returns deterministic instructions', async () => {
+      const res = await callTool(ctx.client, 'auth_suggestScopePreset', { preset: 'readonly' });
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('GOOGLE_DRIVE_MCP_SCOPES=drive.readonly'));
     });
@@ -331,23 +331,26 @@ describe('Drive tools', () => {
       assert.ok(res.content[0].text.includes('confirm=true'));
     });
 
-    it('restoreRevision happy path', async () => {
-      ctx.mocks.drive.service.revisions.get._setImpl(async (params: any) => {
-        if (params?.alt === 'media') return { data: 'mock-stream' };
-        return {
-          data: {
-            id: '1',
-            modifiedTime: '2026-01-01T10:00:00Z',
-            lastModifyingUser: { displayName: 'Tester' },
-            exportLinks: { 'application/pdf': 'https://example.com/export.pdf' },
-          },
-        };
-      });
+    it('restoreRevision happy path (workspace file)', async () => {
       ctx.mocks.drive.service.files.get._setImpl(async () => ({ data: { name: 'Doc', mimeType: 'application/vnd.google-apps.document' } }));
+      ctx.mocks.drive.service.revisions.get._setImpl(async () => ({
+        data: {
+          id: '1',
+          exportLinks: {
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'https://example.com/export.docx',
+            'application/pdf': 'https://example.com/export.pdf',
+          },
+        },
+      }));
+      ctx.mocks.drive.service.files.update._setImpl(async () => ({ data: { id: 'file-1', name: 'Doc' } }));
 
       const res = await callTool(ctx.client, 'restoreRevision', { fileId: 'file-1', revisionId: '1', confirm: true });
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('Restored file file-1'));
+
+      // Should use revisions.get for exportLinks, not files.export
+      const revGetCalls = ctx.mocks.drive.tracker.getCalls('revisions.get');
+      assert.ok(revGetCalls.length >= 1, 'Should use revisions.get to fetch exportLinks');
     });
   });
 

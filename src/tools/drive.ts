@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { drive_v3 } from 'googleapis';
 import { existsSync, statSync, createReadStream } from 'fs';
-import { mkdtemp, readFile, writeFile, rm, unlink } from 'fs/promises';
+import { mkdtemp, readFile, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { basename, extname, join } from 'path';
 import { PDFDocument } from 'pdf-lib';
@@ -202,15 +202,6 @@ const RestoreRevisionSchema = z.object({
 
 const AuthTestFileAccessSchema = z.object({
   fileId: z.string().optional(),
-});
-
-const AuthClearTokensSchema = z.object({
-  confirm: z.boolean().optional().default(false),
-});
-
-const AuthSetScopePresetSchema = z.object({
-  preset: z.enum(['readonly', 'content-editor', 'full']),
-  clearTokens: z.boolean().optional().default(false),
 });
 
 function getGrantedScopesFromAuthClient(ctx: ToolContext): string[] {
@@ -531,28 +522,6 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         fileId: { type: "string", description: "Optional file ID for targeted access check" }
       }
-    }
-  },
-  {
-    name: "authClearTokens",
-    description: "Clear saved OAuth tokens (requires confirm=true)",
-    inputSchema: {
-      type: "object",
-      properties: {
-        confirm: { type: "boolean", description: "Must be true to clear tokens" }
-      }
-    }
-  },
-  {
-    name: "authSuggestScopePreset",
-    description: "Get scope configuration instructions for a preset",
-    inputSchema: {
-      type: "object",
-      properties: {
-        preset: { type: "string", enum: ["readonly", "content-editor", "full"], description: "Scope preset" },
-        clearTokens: { type: "boolean", description: "Also clear saved tokens now" }
-      },
-      required: ["preset"]
     }
   },
 ];
@@ -1524,59 +1493,6 @@ export async function handleTool(
           isError: true,
         };
       }
-    }
-
-    case "authClearTokens": {
-      const validation = AuthClearTokensSchema.safeParse(args);
-      if (!validation.success) return errorResponse(validation.error.errors[0].message);
-      const data = validation.data;
-      if (!data.confirm) return errorResponse('Refusing token clear: set confirm=true.');
-
-      const tokenPath = getSecureTokenPath();
-      const existed = existsSync(tokenPath);
-
-      if (existed) {
-        try {
-          await unlink(tokenPath);
-        } catch (e: unknown) {
-          const msg = e instanceof Error ? e.message : String(e);
-          return errorResponse(`Failed to remove token file at ${tokenPath}: ${msg}`);
-        }
-      }
-
-      return {
-        content: [{ type: 'text', text: `Tokens cleared. File previously ${existed ? 'existed' : 'did not exist'} at ${tokenPath}. Re-run auth flow before next privileged operation.` }],
-        isError: false,
-      };
-    }
-
-    case "authSuggestScopePreset": {
-      const validation = AuthSetScopePresetSchema.safeParse(args);
-      if (!validation.success) return errorResponse(validation.error.errors[0].message);
-      const data = validation.data;
-
-      const aliases = SCOPE_PRESETS[data.preset];
-      const resolved = aliases.map((a) => SCOPE_ALIASES[a]);
-      const envValue = aliases.join(',');
-
-      let clearMessage = '';
-      if (data.clearTokens) {
-        const tokenPath = getSecureTokenPath();
-        try {
-          await unlink(tokenPath);
-          clearMessage = `\nTokens cleared at ${tokenPath}.`;
-        } catch (_e) {
-          clearMessage = `\nTokens clear requested, but no token file removed.`;
-        }
-      }
-
-      return {
-        content: [{
-          type: 'text',
-          text: `Scope preset selected: ${data.preset}\nRequested scopes: ${JSON.stringify(resolved, null, 2)}\n\nNext steps:\n1) Export scope env:\n   GOOGLE_DRIVE_MCP_SCOPES=${envValue}\n2) Restart MCP server\n3) Run auth flow to refresh consent (if prompted)\n\nThis tool does not mutate process env automatically.${clearMessage}`,
-        }],
-        isError: false,
-      };
     }
 
     default:

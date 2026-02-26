@@ -108,6 +108,64 @@ describe('Drive tools', () => {
       const args = listCalls[listCalls.length - 1].args[0];
       assert.equal(args.q, "fullText contains 'report' and trashed = false");
     });
+
+    // --- Folder path resolution tests (PR #30) ---
+
+    it('resolves folder paths in search results', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: {
+          files: [{ id: 'f1', name: 'Doc.txt', mimeType: 'text/plain', parents: ['folder-2'] }],
+        },
+      }));
+      ctx.mocks.drive.service.files.get._setImpl(async (params: any) => {
+        if (params.fileId === 'folder-2') {
+          return { data: { name: 'SubFolder', parents: ['folder-1'] } };
+        }
+        if (params.fileId === 'folder-1') {
+          return { data: { name: 'RootFolder', parents: [] } };
+        }
+        return { data: { name: 'Unknown' } };
+      });
+      const res = await callTool(ctx.client, 'search', { query: 'doc' });
+      assert.ok(res.content[0].text.includes('path: RootFolder/SubFolder'));
+      ctx.mocks.drive.service.files.list._resetImpl();
+      ctx.mocks.drive.service.files.get._resetImpl();
+    });
+
+    it('caches folder paths (no duplicate API calls)', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: {
+          files: [
+            { id: 'f1', name: 'A.txt', mimeType: 'text/plain', parents: ['shared-parent'] },
+            { id: 'f2', name: 'B.txt', mimeType: 'text/plain', parents: ['shared-parent'] },
+          ],
+        },
+      }));
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({
+        data: { name: 'SharedFolder', parents: [] },
+      }));
+      await callTool(ctx.client, 'search', { query: 'test' });
+      const getCalls = ctx.mocks.drive.tracker.getCalls('files.get');
+      const parentLookups = getCalls.filter((c: any) => c.args[0].fileId === 'shared-parent');
+      assert.equal(parentLookups.length, 1, 'Should only call files.get once for the same parent');
+      ctx.mocks.drive.service.files.list._resetImpl();
+      ctx.mocks.drive.service.files.get._resetImpl();
+    });
+
+    it('falls back to folder ID on resolution error', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: {
+          files: [{ id: 'f1', name: 'Doc.txt', mimeType: 'text/plain', parents: ['bad-folder'] }],
+        },
+      }));
+      ctx.mocks.drive.service.files.get._setImpl(async () => {
+        throw new Error('Not found');
+      });
+      const res = await callTool(ctx.client, 'search', { query: 'doc' });
+      assert.ok(res.content[0].text.includes('path: bad-folder'));
+      ctx.mocks.drive.service.files.list._resetImpl();
+      ctx.mocks.drive.service.files.get._resetImpl();
+    });
   });
 
   // --- createTextFile ---

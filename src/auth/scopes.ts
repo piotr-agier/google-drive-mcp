@@ -19,7 +19,7 @@ export const SCOPE_PRESETS: Record<string, string[]> = {
   full: ['drive', 'documents', 'spreadsheets', 'presentations', 'calendar', 'calendar.events'],
 };
 
-export const DEFAULT_SCOPES: string[] = [
+export const DEFAULT_SCOPES: readonly string[] = [
   'drive', 'drive.file', 'drive.readonly',
   'documents', 'spreadsheets', 'presentations',
   'calendar', 'calendar.events',

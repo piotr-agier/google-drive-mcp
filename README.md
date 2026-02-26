@@ -400,11 +400,11 @@ Add the server to your Claude Desktop configuration:
   - `confirm`: Must be `true` to execute restore
 
 #### Auth Diagnostics & Scope Presets
-- **auth_getStatus** - Show token/scopes/auth health diagnostics (machine + human readable)
-- **auth_listScopes** - Show configured/requested scopes, granted scopes, missing scopes, and presets
-- **auth_testFileAccess** - Test Drive access (optionally against a specific `fileId`)
-- **auth_clearTokens** - Clear saved OAuth tokens (`confirm=true` required)
-- **auth_suggestScopePreset** - Get scope configuration instructions for a preset
+- **authGetStatus** - Show token/scopes/auth health diagnostics (machine + human readable)
+- **authListScopes** - Show configured/requested scopes, granted scopes, missing scopes, and presets
+- **authTestFileAccess** - Test Drive access (optionally against a specific `fileId`)
+- **authClearTokens** - Clear saved OAuth tokens (`confirm=true` required)
+- **authSuggestScopePreset** - Get scope configuration instructions for a preset
   - `preset`: `readonly` | `content-editor` | `full`
   - `clearTokens`: optional best-effort token clear
 

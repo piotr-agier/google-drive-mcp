@@ -1342,81 +1342,85 @@ export async function handleTool(
         return errorResponse('Refusing restore: set confirm=true to restore a revision.');
       }
 
-      // Get current file metadata to determine restore strategy
-      const current = await ctx.getDrive().files.get({
-        fileId: data.fileId,
-        fields: 'name,mimeType',
-        supportsAllDrives: true,
-      });
-
-      const fileMimeType = current.data.mimeType || '';
-      const isWorkspaceFile = fileMimeType.startsWith('application/vnd.google-apps.');
-
-      let revisionBody: unknown;
-      let uploadMimeType: string;
-
-      if (isWorkspaceFile) {
-        // Workspace files don't support revisions.get with alt=media.
-        // Use the revision's exportLinks to fetch content in an editable format.
-        const revision = await ctx.getDrive().revisions.get({
+      try {
+        // Get current file metadata to determine restore strategy
+        const current = await ctx.getDrive().files.get({
           fileId: data.fileId,
-          revisionId: data.revisionId,
-          fields: 'id,exportLinks',
+          fields: 'name,mimeType',
+          supportsAllDrives: true,
         });
 
-        const exportLinks = (revision.data.exportLinks as Record<string, string> | null) || {};
+        const fileMimeType = current.data.mimeType || '';
+        const isWorkspaceFile = fileMimeType.startsWith('application/vnd.google-apps.');
 
-        // Build preference list: editable formats from GOOGLE_WORKSPACE_EXPORT_FORMATS, excluding pdf
-        const formatMap = GOOGLE_WORKSPACE_EXPORT_FORMATS[fileMimeType];
-        const editableMimes = formatMap
-          ? Object.entries(formatMap).filter(([ext]) => ext !== 'pdf').map(([, mime]) => mime)
-          : [];
+        let revisionBody: unknown;
+        let uploadMimeType: string;
 
-        // Pick the first editable MIME type available in exportLinks
-        const selectedMime = editableMimes.find((m) => exportLinks[m])
-          || Object.keys(exportLinks).find((m) => m !== 'application/pdf')
-          || Object.keys(exportLinks)[0];
+        if (isWorkspaceFile) {
+          // Workspace files don't support revisions.get with alt=media.
+          // Use the revision's exportLinks to fetch content in an editable format.
+          const revision = await ctx.getDrive().revisions.get({
+            fileId: data.fileId,
+            revisionId: data.revisionId,
+            fields: 'id,exportLinks',
+          });
 
-        if (!selectedMime || !exportLinks[selectedMime]) {
-          return errorResponse('Selected revision has no usable export links for restore.');
+          const exportLinks = (revision.data.exportLinks as Record<string, string> | null) || {};
+
+          // Build preference list: editable formats from GOOGLE_WORKSPACE_EXPORT_FORMATS, excluding pdf
+          const formatMap = GOOGLE_WORKSPACE_EXPORT_FORMATS[fileMimeType];
+          const editableMimes = formatMap
+            ? Object.entries(formatMap).filter(([ext]) => ext !== 'pdf').map(([, mime]) => mime)
+            : [];
+
+          // Pick the first editable MIME type available in exportLinks
+          const selectedMime = editableMimes.find((m) => exportLinks[m])
+            || Object.keys(exportLinks).find((m) => m !== 'application/pdf')
+            || Object.keys(exportLinks)[0];
+
+          if (!selectedMime || !exportLinks[selectedMime]) {
+            return errorResponse('Selected revision has no usable export links for restore.');
+          }
+
+          uploadMimeType = selectedMime;
+
+          // Fetch revision content from the export link using authenticated request
+          const exportResponse = await ctx.authClient.request({ url: exportLinks[selectedMime], responseType: 'stream' });
+          revisionBody = exportResponse.data;
+        } else {
+          // For binary files, download the revision content directly
+          const revision = await ctx.getDrive().revisions.get(
+            { fileId: data.fileId, revisionId: data.revisionId, alt: 'media' },
+            { responseType: 'stream' },
+          );
+          revisionBody = revision.data;
+          uploadMimeType = fileMimeType || 'application/octet-stream';
         }
 
-        uploadMimeType = selectedMime;
+        await ctx.getDrive().files.update({
+          fileId: data.fileId,
+          media: {
+            mimeType: uploadMimeType,
+            body: revisionBody,
+          },
+          supportsAllDrives: true,
+        });
 
-        // Fetch revision content from the export link using authenticated request
-        const exportResponse = await ctx.authClient.request({ url: exportLinks[selectedMime] });
-        revisionBody = exportResponse.data;
-      } else {
-        // For binary files, download the revision content directly
-        const revision = await ctx.getDrive().revisions.get(
-          { fileId: data.fileId, revisionId: data.revisionId, alt: 'media' },
-          { responseType: 'stream' },
-        );
-        revisionBody = revision.data;
-        uploadMimeType = fileMimeType || 'application/octet-stream';
+        const restoreMsg = `Restored file ${data.fileId} (${current.data.name || 'unnamed'}) from revision ${data.revisionId}.`;
+        const workspaceWarning = isWorkspaceFile
+          ? '\n\nWarning: This workspace file was restored via export/import. Some formatting or features (e.g. comments, suggestions, version history metadata) may have been lost.'
+          : '';
+
+        return {
+          content: [{
+            type: 'text',
+            text: restoreMsg + workspaceWarning,
+          }],
+          isError: false,
+        };
+      } catch (err: unknown) {
+        return errorResponse(`Failed to restore revision: ${err instanceof Error ? err.message : String(err)}`);
       }
-
-      await ctx.getDrive().files.update({
-        fileId: data.fileId,
-        media: {
-          mimeType: uploadMimeType,
-          body: revisionBody,
-        },
-        supportsAllDrives: true,
-      });
-
-      const restoreMsg = `Restored file ${data.fileId} (${current.data.name || 'unnamed'}) from revision ${data.revisionId}.`;
-      const workspaceWarning = isWorkspaceFile
-        ? '\n\nWarning: This workspace file was restored via export/import. Some formatting or features (e.g. comments, suggestions, version history metadata) may have been lost.'
-        : '';
-
-      return {
-        content: [{
-          type: 'text',
-          text: restoreMsg + workspaceWarning,
-        }],
-        isError: false,
-      };
     }
 
     case "authGetStatus": {
@@ -1561,7 +1565,7 @@ export async function handleTool(
         try {
           await unlink(tokenPath);
           clearMessage = `\nTokens cleared at ${tokenPath}.`;
-        } catch {
+        } catch (_e) {
           clearMessage = `\nTokens clear requested, but no token file removed.`;
         }
       }

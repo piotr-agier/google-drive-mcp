@@ -286,32 +286,47 @@ describe('Drive tools', () => {
 
   // --- auth diagnostics ---
   describe('auth diagnostics', () => {
-    it('auth_getStatus returns status payload', async () => {
-      const res = await callTool(ctx.client, 'auth_getStatus', {});
+    it('authGetStatus returns status payload', async () => {
+      const res = await callTool(ctx.client, 'authGetStatus', {});
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('Auth status'));
     });
 
-    it('auth_listScopes returns scopes payload', async () => {
-      const res = await callTool(ctx.client, 'auth_listScopes', {});
+    it('authListScopes returns scopes payload', async () => {
+      const res = await callTool(ctx.client, 'authListScopes', {});
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('requestedScopes'));
     });
 
-    it('auth_testFileAccess works without fileId', async () => {
-      const res = await callTool(ctx.client, 'auth_testFileAccess', {});
+    it('authTestFileAccess works without fileId', async () => {
+      const res = await callTool(ctx.client, 'authTestFileAccess', {});
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('Auth access check OK'));
     });
 
-    it('auth_clearTokens requires confirmation', async () => {
-      const res = await callTool(ctx.client, 'auth_clearTokens', {});
+    it('authClearTokens requires confirmation', async () => {
+      const res = await callTool(ctx.client, 'authClearTokens', {});
       assert.equal(res.isError, true);
       assert.ok(res.content[0].text.includes('confirm=true'));
     });
 
-    it('auth_suggestScopePreset returns deterministic instructions', async () => {
-      const res = await callTool(ctx.client, 'auth_suggestScopePreset', { preset: 'readonly' });
+    it('authTestFileAccess with specific fileId', async () => {
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({
+        data: { id: 'file-1', name: 'TestDoc', mimeType: 'application/vnd.google-apps.document' },
+      }));
+      const res = await callTool(ctx.client, 'authTestFileAccess', { fileId: 'file-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('"mode":"file"') || res.content[0].text.includes('"mode": "file"'));
+    });
+
+    it('authClearTokens with confirm=true clears tokens', async () => {
+      const res = await callTool(ctx.client, 'authClearTokens', { confirm: true });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Tokens cleared'));
+    });
+
+    it('authSuggestScopePreset returns deterministic instructions', async () => {
+      const res = await callTool(ctx.client, 'authSuggestScopePreset', { preset: 'readonly' });
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('GOOGLE_DRIVE_MCP_SCOPES=drive.readonly'));
     });
@@ -331,7 +346,7 @@ describe('Drive tools', () => {
       assert.ok(res.content[0].text.includes('confirm=true'));
     });
 
-    it('restoreRevision happy path (workspace file)', async () => {
+    it('restoreRevision happy path (workspace file) includes formatting warning', async () => {
       ctx.mocks.drive.service.files.get._setImpl(async () => ({ data: { name: 'Doc', mimeType: 'application/vnd.google-apps.document' } }));
       ctx.mocks.drive.service.revisions.get._setImpl(async () => ({
         data: {
@@ -347,10 +362,25 @@ describe('Drive tools', () => {
       const res = await callTool(ctx.client, 'restoreRevision', { fileId: 'file-1', revisionId: '1', confirm: true });
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('Restored file file-1'));
+      assert.ok(res.content[0].text.includes('restored via export/import'), 'Should include workspace formatting warning');
 
       // Should use revisions.get for exportLinks, not files.export
       const revGetCalls = ctx.mocks.drive.tracker.getCalls('revisions.get');
       assert.ok(revGetCalls.length >= 1, 'Should use revisions.get to fetch exportLinks');
+    });
+
+    it('restoreRevision happy path (binary file) without workspace warning', async () => {
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({ data: { name: 'photo.jpg', mimeType: 'image/jpeg' } }));
+      ctx.mocks.drive.service.revisions.get._setImpl(async () => ({ data: Buffer.from('binary-content') }));
+      ctx.mocks.drive.service.files.update._setImpl(async () => ({ data: { id: 'file-1', name: 'photo.jpg' } }));
+
+      const res = await callTool(ctx.client, 'restoreRevision', { fileId: 'file-1', revisionId: '2', confirm: true });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Restored file file-1'));
+      assert.ok(!res.content[0].text.includes('export/import'), 'Should NOT include workspace warning for binary files');
+
+      const revGetCalls = ctx.mocks.drive.tracker.getCalls('revisions.get');
+      assert.ok(revGetCalls.length >= 1, 'Should use revisions.get for binary download');
     });
   });
 

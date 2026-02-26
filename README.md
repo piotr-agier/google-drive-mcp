@@ -400,14 +400,10 @@ Add the server to your Claude Desktop configuration:
   - `revisionId`: Revision ID to restore
   - `confirm`: Must be `true` to execute restore
 
-#### Auth Diagnostics & Scope Presets (v1.7.0)
+#### Auth Diagnostics (v1.7.0)
 - **authGetStatus** - Show token/scopes/auth health diagnostics (machine + human readable)
 - **authListScopes** - Show configured/requested scopes, granted scopes, missing scopes, and presets
 - **authTestFileAccess** - Test Drive access (optionally against a specific `fileId`)
-- **authClearTokens** - Clear saved OAuth tokens (`confirm=true` required)
-- **authSuggestScopePreset** - Get scope configuration instructions for a preset
-  - `preset`: `readonly` | `content-editor` | `full`
-  - `clearTokens`: optional best-effort token clear
 
 - **uploadFile** - Upload a local file (any type: image, audio, video, PDF, etc.) to Google Drive
   - `localPath`: Absolute path to the local file

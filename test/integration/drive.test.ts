@@ -318,12 +318,6 @@ describe('Drive tools', () => {
       assert.ok(res.content[0].text.includes('Auth access check OK'));
     });
 
-    it('authClearTokens requires confirmation', async () => {
-      const res = await callTool(ctx.client, 'authClearTokens', {});
-      assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('confirm=true'));
-    });
-
     it('authTestFileAccess with specific fileId', async () => {
       ctx.mocks.drive.service.files.get._setImpl(async () => ({
         data: { id: 'file-1', name: 'TestDoc', mimeType: 'application/vnd.google-apps.document' },
@@ -333,17 +327,6 @@ describe('Drive tools', () => {
       assert.ok(res.content[0].text.includes('"mode":"file"') || res.content[0].text.includes('"mode": "file"'));
     });
 
-    it('authClearTokens with confirm=true clears tokens', async () => {
-      const res = await callTool(ctx.client, 'authClearTokens', { confirm: true });
-      assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Tokens cleared'));
-    });
-
-    it('authSuggestScopePreset returns deterministic instructions', async () => {
-      const res = await callTool(ctx.client, 'authSuggestScopePreset', { preset: 'readonly' });
-      assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('GOOGLE_DRIVE_MCP_SCOPES=drive.readonly'));
-    });
   });
 
   // --- revisions ---

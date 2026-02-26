@@ -482,6 +482,7 @@ export async function handleTool(
         pageSize: Math.min(pageSize || 50, 100),
         pageToken: pageToken,
         fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size)",
+        corpora: "allDrives",
         includeItemsFromAllDrives: true,
         supportsAllDrives: true
       });

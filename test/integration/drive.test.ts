@@ -31,6 +31,20 @@ describe('Drive tools', () => {
       assert.equal(res.isError, true);
     });
 
+    it('passes corpora=allDrives to include shared drives', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: { files: [{ id: 'f1', name: 'SharedFile.txt', mimeType: 'text/plain' }] },
+      }));
+      await callTool(ctx.client, 'search', { query: 'shared' });
+
+      const listCalls = ctx.mocks.drive.tracker.getCalls('files.list');
+      assert.ok(listCalls.length >= 1);
+      const args = listCalls[listCalls.length - 1].args[0];
+      assert.equal(args.corpora, 'allDrives');
+      assert.equal(args.includeItemsFromAllDrives, true);
+      assert.equal(args.supportsAllDrives, true);
+    });
+
     it('propagates API error', async () => {
       ctx.mocks.drive.service.files.list._setImpl(async () => { throw new Error('API quota exceeded'); });
       const res = await callTool(ctx.client, 'search', { query: 'test' });

@@ -561,24 +561,56 @@ export async function handleTool(
         q: formattedQuery,
         pageSize: Math.min(pageSize || 50, 100),
         pageToken: pageToken,
-        fields: "nextPageToken, files(id, name, mimeType, createdTime, modifiedTime, size)",
+        fields: "nextPageToken, files(id, name, mimeType, createdTime, modifiedTime, size, parents)",
         corpora: "allDrives",
         includeItemsFromAllDrives: true,
         supportsAllDrives: true
       });
 
+      // Resolve folder paths from parent IDs (with dedup for concurrent lookups)
+      const pathCache: Record<string, Promise<string>> = {};
+      function resolveParentPath(folderId: string): Promise<string> {
+        if (folderId in pathCache) return pathCache[folderId];
+        const promise = (async () => {
+          try {
+            const folderRes = await ctx.getDrive().files.get({
+              fileId: folderId,
+              fields: "name, parents",
+              supportsAllDrives: true,
+            });
+            const name = folderRes.data.name || folderId;
+            const parents = folderRes.data.parents;
+            if (parents && parents.length > 0 && parents[0] !== folderId) {
+              const parentPath = await resolveParentPath(parents[0]);
+              return `${parentPath}/${name}`;
+            }
+            return name;
+          } catch {
+            return folderId;
+          }
+        })();
+        pathCache[folderId] = promise;
+        return promise;
+      }
+
       const files = res.data.files || [];
-      const fileList = files.map((f: drive_v3.Schema$File) => {
-        let line = `${f.name} (ID: ${f.id}, ${f.mimeType})`;
-        if (rawQuery) {
-          line += ` [created: ${f.createdTime || 'N/A'}, modified: ${f.modifiedTime || 'N/A'}]`;
-        }
-        return line;
-      }).join("\n");
+      const fileLines = await Promise.all(
+        files.map(async (f: drive_v3.Schema$File) => {
+          let folderPath = '';
+          if (f.parents && f.parents.length > 0) {
+            folderPath = await resolveParentPath(f.parents[0]);
+          }
+          let line = `${f.name} (${f.mimeType}) [id: ${f.id}, path: ${folderPath || '/'}]`;
+          if (rawQuery) {
+            line += ` [created: ${f.createdTime || 'N/A'}, modified: ${f.modifiedTime || 'N/A'}]`;
+          }
+          return line;
+        }),
+      );
 
       ctx.log('Search results', { query: userQuery, resultCount: files.length });
 
-      let response = `Found ${files.length} files:\n${fileList}`;
+      let response = `Found ${files.length} files:\n${fileLines.join("\n")}`;
       if (res.data.nextPageToken) {
         response += `\n\nMore results available. Use pageToken: ${res.data.nextPageToken}`;
       }

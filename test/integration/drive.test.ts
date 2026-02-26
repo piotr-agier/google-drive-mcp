@@ -52,6 +52,62 @@ describe('Drive tools', () => {
       assert.ok(res.content[0].text.includes('API quota exceeded'));
       ctx.mocks.drive.service.files.list._resetImpl();
     });
+
+    // --- rawQuery tests (PR #25) ---
+
+    it('rawQuery passes query directly to Drive API', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: { files: [] },
+      }));
+      await callTool(ctx.client, 'search', {
+        query: "mimeType = 'application/pdf'",
+        rawQuery: true,
+      });
+      const listCalls = ctx.mocks.drive.tracker.getCalls('files.list');
+      const args = listCalls[listCalls.length - 1].args[0];
+      assert.equal(args.q, "mimeType = 'application/pdf' and trashed = false");
+    });
+
+    it('rawQuery preserves user trashed clause', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: { files: [] },
+      }));
+      await callTool(ctx.client, 'search', {
+        query: "name contains 'test' and trashed = true",
+        rawQuery: true,
+      });
+      const listCalls = ctx.mocks.drive.tracker.getCalls('files.list');
+      const args = listCalls[listCalls.length - 1].args[0];
+      assert.equal(args.q, "name contains 'test' and trashed = true");
+    });
+
+    it('rawQuery shows created/modified dates in output', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: {
+          files: [{
+            id: 'f1', name: 'Report.pdf', mimeType: 'application/pdf',
+            createdTime: '2025-06-01T00:00:00Z', modifiedTime: '2025-06-15T00:00:00Z',
+          }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'search', {
+        query: "mimeType = 'application/pdf'",
+        rawQuery: true,
+      });
+      assert.ok(res.content[0].text.includes('created: 2025-06-01T00:00:00Z'));
+      assert.ok(res.content[0].text.includes('modified: 2025-06-15T00:00:00Z'));
+      ctx.mocks.drive.service.files.list._resetImpl();
+    });
+
+    it('default search wraps in fullText contains', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: { files: [] },
+      }));
+      await callTool(ctx.client, 'search', { query: 'report' });
+      const listCalls = ctx.mocks.drive.tracker.getCalls('files.list');
+      const args = listCalls[listCalls.length - 1].args[0];
+      assert.equal(args.q, "fullText contains 'report' and trashed = false");
+    });
   });
 
   // --- createTextFile ---

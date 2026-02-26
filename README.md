@@ -390,6 +390,7 @@ Add the server to your Claude Desktop configuration:
   - `role`: Role (`reader`, `commenter`, `writer`)
   - `sendNotificationEmail`: Send notification email (optional)
 
+#### File Revisions (v1.7.0)
 - **getRevisions** - List revisions for a file
   - `fileId`: File ID
   - `pageSize`: Max revisions to return (optional)
@@ -399,7 +400,7 @@ Add the server to your Claude Desktop configuration:
   - `revisionId`: Revision ID to restore
   - `confirm`: Must be `true` to execute restore
 
-#### Auth Diagnostics & Scope Presets
+#### Auth Diagnostics & Scope Presets (v1.7.0)
 - **authGetStatus** - Show token/scopes/auth health diagnostics (machine + human readable)
 - **authListScopes** - Show configured/requested scopes, granted scopes, missing scopes, and presets
 - **authTestFileAccess** - Test Drive access (optionally against a specific `fileId`)

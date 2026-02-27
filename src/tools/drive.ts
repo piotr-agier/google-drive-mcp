@@ -549,7 +549,7 @@ export async function handleTool(
       let formattedQuery: string;
       if (rawQuery) {
         // Use query directly; auto-append trashed guard unless user already includes it
-        formattedQuery = /trashed\s*=/.test(userQuery)
+        formattedQuery = /\btrashed\s*=/.test(userQuery)
           ? userQuery
           : `${userQuery} and trashed = false`;
       } else {
@@ -569,7 +569,8 @@ export async function handleTool(
 
       // Resolve folder paths from parent IDs (with dedup for concurrent lookups)
       const pathCache: Record<string, Promise<string>> = {};
-      function resolveParentPath(folderId: string): Promise<string> {
+      function resolveParentPath(folderId: string, depth = 0): Promise<string> {
+        if (depth >= 10) return Promise.resolve(folderId);
         if (folderId in pathCache) return pathCache[folderId];
         const promise = (async () => {
           try {
@@ -581,7 +582,7 @@ export async function handleTool(
             const name = folderRes.data.name || folderId;
             const parents = folderRes.data.parents;
             if (parents && parents.length > 0 && parents[0] !== folderId) {
-              const parentPath = await resolveParentPath(parents[0]);
+              const parentPath = await resolveParentPath(parents[0], depth + 1);
               return `${parentPath}/${name}`;
             }
             return name;
@@ -600,15 +601,11 @@ export async function handleTool(
           if (f.parents && f.parents.length > 0) {
             folderPath = await resolveParentPath(f.parents[0]);
           }
-          let line = `${f.name} (${f.mimeType}) [id: ${f.id}, path: ${folderPath || '/'}]`;
-          if (rawQuery) {
-            line += ` [created: ${f.createdTime || 'N/A'}, modified: ${f.modifiedTime || 'N/A'}]`;
-          }
-          return line;
+          return `${f.name} (${f.mimeType}) [id: ${f.id}, path: ${folderPath || '/'}] [created: ${f.createdTime || 'N/A'}, modified: ${f.modifiedTime || 'N/A'}]`;
         }),
       );
 
-      ctx.log('Search results', { query: userQuery, resultCount: files.length });
+      ctx.log('Search results', { query: userQuery, rawQuery: !!rawQuery, resultCount: files.length });
 
       let response = `Found ${files.length} files:\n${fileLines.join("\n")}`;
       if (res.data.nextPageToken) {

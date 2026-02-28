@@ -90,7 +90,8 @@ const UploadFileSchema = z.object({
   localPath: z.string().min(1, "Local file path is required"),
   name: z.string().optional(),
   parentFolderId: z.string().optional(),
-  mimeType: z.string().optional()
+  mimeType: z.string().optional(),
+  convertToGoogleFormat: z.boolean().optional()
 });
 
 const DownloadFileSchema = z.object({
@@ -271,7 +272,8 @@ export const toolDefinitions: ToolDefinition[] = [
         localPath: { type: "string", description: "Absolute path to the local file to upload" },
         name: { type: "string", description: "File name in Drive (defaults to local filename)" },
         parentFolderId: { type: "string", description: "Parent folder ID or path (e.g., '/Work/Projects'). Creates folders if needed. Defaults to root." },
-        mimeType: { type: "string", description: "MIME type (auto-detected from extension if omitted)" }
+        mimeType: { type: "string", description: "MIME type (auto-detected from extension if omitted)" },
+        convertToGoogleFormat: { type: "boolean", description: "Convert uploaded file to Google Workspace format (e.g., .docx to Google Doc, .xlsx to Google Sheet, .pptx to Google Slides). Defaults to false." }
       },
       required: ["localPath"]
     }
@@ -760,13 +762,31 @@ export async function handleTool(
       const detectedMime = data.mimeType || BINARY_MIME_TYPES[ext] || 'application/octet-stream';
       const parentId = await ctx.resolveFolderId(data.parentFolderId);
 
-      ctx.log('Uploading file', { localPath: data.localPath, name: fileName, mimeType: detectedMime, size: stats.size });
+      // Google Workspace conversion mapping
+      const GOOGLE_FORMAT_MAP: Record<string, string> = {
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'application/vnd.google-apps.document',
+        'application/msword': 'application/vnd.google-apps.document',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'application/vnd.google-apps.spreadsheet',
+        'application/vnd.ms-excel': 'application/vnd.google-apps.spreadsheet',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'application/vnd.google-apps.presentation',
+        'application/vnd.ms-powerpoint': 'application/vnd.google-apps.presentation',
+      };
+
+      const targetMimeType = data.convertToGoogleFormat ? GOOGLE_FORMAT_MAP[detectedMime] : undefined;
+      const uploadName = targetMimeType ? fileName.replace(/\.[^.]+$/, '') : fileName;
+
+      ctx.log('Uploading file', { localPath: data.localPath, name: uploadName, mimeType: detectedMime, convertToGoogle: !!targetMimeType, size: stats.size });
+
+      const requestBody: any = {
+        name: uploadName,
+        parents: [parentId]
+      };
+      if (targetMimeType) {
+        requestBody.mimeType = targetMimeType;
+      }
 
       const file = await ctx.getDrive().files.create({
-        requestBody: {
-          name: fileName,
-          parents: [parentId]
-        },
+        requestBody,
         media: {
           mimeType: detectedMime,
           body: createReadStream(data.localPath)
@@ -774,6 +794,7 @@ export async function handleTool(
         fields: 'id, name, size, mimeType, webViewLink',
         supportsAllDrives: true
       });
+
 
       ctx.log('File uploaded successfully', { fileId: file.data?.id });
       return {

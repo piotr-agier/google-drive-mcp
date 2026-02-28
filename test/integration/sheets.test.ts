@@ -231,6 +231,89 @@ describe('Sheets tools', () => {
     });
   });
 
+  // --- addSheet (alias) ---
+  describe('addSheet', () => {
+    it('happy path', async () => {
+      ctx.mocks.sheets.service.spreadsheets.batchUpdate._setImpl(async () => ({
+        data: { replies: [{ addSheet: { properties: { title: 'AliasSheet', sheetId: 7 } } }] },
+      }));
+      const res = await callTool(ctx.client, 'addSheet', {
+        spreadsheetId: 'sheet-1', title: 'AliasSheet',
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('AliasSheet'));
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'addSheet', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- listSheets / renameSheet / deleteSheet ---
+  describe('sheet lifecycle tools', () => {
+    it('listSheets happy path', async () => {
+      setupSheetsMock();
+      const res = await callTool(ctx.client, 'listSheets', { spreadsheetId: 'sheet-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Sheet1'));
+    });
+
+    it('renameSheet happy path', async () => {
+      const res = await callTool(ctx.client, 'renameSheet', { spreadsheetId: 'sheet-1', sheetId: 0, newTitle: 'Renamed' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Renamed'));
+    });
+
+    it('deleteSheet happy path', async () => {
+      const res = await callTool(ctx.client, 'deleteSheet', { spreadsheetId: 'sheet-1', sheetId: 0 });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Deleted sheet'));
+    });
+
+    it('deleteSheet validation error', async () => {
+      const res = await callTool(ctx.client, 'deleteSheet', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- governance helpers ---
+  describe('validation/protection/named-range tools', () => {
+    it('addDataValidation happy path', async () => {
+      setupSheetsMock();
+      const res = await callTool(ctx.client, 'addDataValidation', {
+        spreadsheetId: 'sheet-1', range: 'Sheet1!A1:A10', conditionType: 'ONE_OF_LIST', values: ['A', 'B'],
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Added data validation'));
+    });
+
+    it('addDataValidation requires values', async () => {
+      const res = await callTool(ctx.client, 'addDataValidation', {
+        spreadsheetId: 'sheet-1', range: 'Sheet1!A1:A10', conditionType: 'NUMBER_GREATER',
+      });
+      assert.equal(res.isError, true);
+    });
+
+    it('protectRange happy path', async () => {
+      setupSheetsMock();
+      const res = await callTool(ctx.client, 'protectRange', {
+        spreadsheetId: 'sheet-1', range: 'Sheet1!A1:B10', description: 'Lock critical',
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Protected range'));
+    });
+
+    it('addNamedRange happy path', async () => {
+      setupSheetsMock();
+      const res = await callTool(ctx.client, 'addNamedRange', {
+        spreadsheetId: 'sheet-1', name: 'InputRange', range: 'Sheet1!A1:B10',
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Added named range'));
+    });
+  });
+
   // --- listGoogleSheets ---
   describe('listGoogleSheets', () => {
     it('happy path', async () => {

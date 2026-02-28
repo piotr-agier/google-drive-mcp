@@ -207,6 +207,60 @@ describe('Slides tools', () => {
     });
   });
 
+  // --- slide lifecycle helpers ---
+  describe('slide lifecycle helpers', () => {
+    it('deleteGoogleSlide happy path', async () => {
+      const res = await callTool(ctx.client, 'deleteGoogleSlide', {
+        presentationId: 'pres-1', slideObjectId: 'slide-1',
+      });
+      assert.equal(res.isError, false);
+    });
+
+    it('deleteGoogleSlide validation error', async () => {
+      const res = await callTool(ctx.client, 'deleteGoogleSlide', {});
+      assert.equal(res.isError, true);
+    });
+
+    it('duplicateSlide happy path', async () => {
+      const res = await callTool(ctx.client, 'duplicateSlide', {
+        presentationId: 'pres-1', slideObjectId: 'slide-1',
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Duplicated'));
+    });
+
+    it('reorderSlides happy path', async () => {
+      const res = await callTool(ctx.client, 'reorderSlides', {
+        presentationId: 'pres-1', slideObjectIds: ['slide-1'], insertionIndex: 0,
+      });
+      assert.equal(res.isError, false);
+    });
+
+    it('replaceAllTextInSlides happy path', async () => {
+      const res = await callTool(ctx.client, 'replaceAllTextInSlides', {
+        presentationId: 'pres-1', containsText: 'Old', replaceText: 'New',
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Replaced'));
+    });
+  });
+
+  // --- exportSlideThumbnail ---
+  describe('exportSlideThumbnail', () => {
+    it('happy path', async () => {
+      const res = await callTool(ctx.client, 'exportSlideThumbnail', {
+        presentationId: 'pres-1', slideObjectId: 'slide-1', mimeType: 'PNG', size: 'LARGE',
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('thumbnail URL'));
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'exportSlideThumbnail', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
   // --- getGoogleSlidesSpeakerNotes ---
   describe('getGoogleSlidesSpeakerNotes', () => {
     it('happy path', async () => {

@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it, before, after, beforeEach } from 'node:test';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PDFDocument } from 'pdf-lib';
 import { setupTestServer, callTool, type TestContext } from '../helpers/setup-server.js';
 
 describe('Drive tools', () => {
@@ -27,12 +31,140 @@ describe('Drive tools', () => {
       assert.equal(res.isError, true);
     });
 
+    it('passes corpora=allDrives to include shared drives', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: { files: [{ id: 'f1', name: 'SharedFile.txt', mimeType: 'text/plain' }] },
+      }));
+      await callTool(ctx.client, 'search', { query: 'shared' });
+
+      const listCalls = ctx.mocks.drive.tracker.getCalls('files.list');
+      assert.ok(listCalls.length >= 1);
+      const args = listCalls[listCalls.length - 1].args[0];
+      assert.equal(args.corpora, 'allDrives');
+      assert.equal(args.includeItemsFromAllDrives, true);
+      assert.equal(args.supportsAllDrives, true);
+    });
+
     it('propagates API error', async () => {
       ctx.mocks.drive.service.files.list._setImpl(async () => { throw new Error('API quota exceeded'); });
       const res = await callTool(ctx.client, 'search', { query: 'test' });
       assert.equal(res.isError, true);
       assert.ok(res.content[0].text.includes('API quota exceeded'));
       ctx.mocks.drive.service.files.list._resetImpl();
+    });
+
+    // --- rawQuery tests (PR #25) ---
+
+    it('rawQuery passes query directly to Drive API', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: { files: [] },
+      }));
+      await callTool(ctx.client, 'search', {
+        query: "mimeType = 'application/pdf'",
+        rawQuery: true,
+      });
+      const listCalls = ctx.mocks.drive.tracker.getCalls('files.list');
+      const args = listCalls[listCalls.length - 1].args[0];
+      assert.equal(args.q, "mimeType = 'application/pdf' and trashed = false");
+    });
+
+    it('rawQuery preserves user trashed clause', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: { files: [] },
+      }));
+      await callTool(ctx.client, 'search', {
+        query: "name contains 'test' and trashed = true",
+        rawQuery: true,
+      });
+      const listCalls = ctx.mocks.drive.tracker.getCalls('files.list');
+      const args = listCalls[listCalls.length - 1].args[0];
+      assert.equal(args.q, "name contains 'test' and trashed = true");
+    });
+
+    it('rawQuery shows created/modified dates in output', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: {
+          files: [{
+            id: 'f1', name: 'Report.pdf', mimeType: 'application/pdf',
+            createdTime: '2025-06-01T00:00:00Z', modifiedTime: '2025-06-15T00:00:00Z',
+          }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'search', {
+        query: "mimeType = 'application/pdf'",
+        rawQuery: true,
+      });
+      assert.ok(res.content[0].text.includes('created: 2025-06-01T00:00:00Z'));
+      assert.ok(res.content[0].text.includes('modified: 2025-06-15T00:00:00Z'));
+      ctx.mocks.drive.service.files.list._resetImpl();
+    });
+
+    it('default search wraps in fullText contains', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: { files: [] },
+      }));
+      await callTool(ctx.client, 'search', { query: 'report' });
+      const listCalls = ctx.mocks.drive.tracker.getCalls('files.list');
+      const args = listCalls[listCalls.length - 1].args[0];
+      assert.equal(args.q, "fullText contains 'report' and trashed = false");
+    });
+
+    // --- Folder path resolution tests (PR #30) ---
+
+    it('resolves folder paths in search results', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: {
+          files: [{ id: 'f1', name: 'Doc.txt', mimeType: 'text/plain', parents: ['folder-2'] }],
+        },
+      }));
+      ctx.mocks.drive.service.files.get._setImpl(async (params: any) => {
+        if (params.fileId === 'folder-2') {
+          return { data: { name: 'SubFolder', parents: ['folder-1'] } };
+        }
+        if (params.fileId === 'folder-1') {
+          return { data: { name: 'RootFolder', parents: [] } };
+        }
+        return { data: { name: 'Unknown' } };
+      });
+      const res = await callTool(ctx.client, 'search', { query: 'doc' });
+      assert.ok(res.content[0].text.includes('path: RootFolder/SubFolder'));
+      ctx.mocks.drive.service.files.list._resetImpl();
+      ctx.mocks.drive.service.files.get._resetImpl();
+    });
+
+    it('caches folder paths (no duplicate API calls)', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: {
+          files: [
+            { id: 'f1', name: 'A.txt', mimeType: 'text/plain', parents: ['shared-parent'] },
+            { id: 'f2', name: 'B.txt', mimeType: 'text/plain', parents: ['shared-parent'] },
+          ],
+        },
+      }));
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({
+        data: { name: 'SharedFolder', parents: [] },
+      }));
+      await callTool(ctx.client, 'search', { query: 'test' });
+      const getCalls = ctx.mocks.drive.tracker.getCalls('files.get');
+      const parentLookups = getCalls.filter((c: any) => c.args[0].fileId === 'shared-parent');
+      assert.equal(parentLookups.length, 1, 'Should only call files.get once for the same parent');
+      ctx.mocks.drive.service.files.list._resetImpl();
+      ctx.mocks.drive.service.files.get._resetImpl();
+    });
+
+    it('falls back to folder ID on resolution error', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: {
+          files: [{ id: 'f1', name: 'Doc.txt', mimeType: 'text/plain', parents: ['bad-folder'] }],
+        },
+      }));
+      ctx.mocks.drive.service.files.get._setImpl(async () => {
+        throw new Error('Not found');
+      });
+      const res = await callTool(ctx.client, 'search', { query: 'doc' });
+      assert.ok(res.content[0].text.includes('path: bad-folder'));
+      ctx.mocks.drive.service.files.list._resetImpl();
+      ctx.mocks.drive.service.files.get._resetImpl();
     });
   });
 
@@ -280,6 +412,89 @@ describe('Drive tools', () => {
     });
   });
 
+  // --- auth diagnostics ---
+  describe('auth diagnostics', () => {
+    it('authGetStatus returns status payload', async () => {
+      const res = await callTool(ctx.client, 'authGetStatus', {});
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Auth status'));
+    });
+
+    it('authListScopes returns scopes payload', async () => {
+      const res = await callTool(ctx.client, 'authListScopes', {});
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('requestedScopes'));
+    });
+
+    it('authTestFileAccess works without fileId', async () => {
+      const res = await callTool(ctx.client, 'authTestFileAccess', {});
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Auth access check OK'));
+    });
+
+    it('authTestFileAccess with specific fileId', async () => {
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({
+        data: { id: 'file-1', name: 'TestDoc', mimeType: 'application/vnd.google-apps.document' },
+      }));
+      const res = await callTool(ctx.client, 'authTestFileAccess', { fileId: 'file-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('"mode":"file"') || res.content[0].text.includes('"mode": "file"'));
+    });
+
+  });
+
+  // --- revisions ---
+  describe('revisions', () => {
+    it('getRevisions happy path', async () => {
+      const res = await callTool(ctx.client, 'getRevisions', { fileId: 'file-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Revisions for file file-1'));
+    });
+
+    it('restoreRevision requires confirmation', async () => {
+      const res = await callTool(ctx.client, 'restoreRevision', { fileId: 'file-1', revisionId: '1' });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.includes('confirm=true'));
+    });
+
+    it('restoreRevision happy path (workspace file) includes formatting warning', async () => {
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({ data: { name: 'Doc', mimeType: 'application/vnd.google-apps.document' } }));
+      ctx.mocks.drive.service.revisions.get._setImpl(async () => ({
+        data: {
+          id: '1',
+          exportLinks: {
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'https://example.com/export.docx',
+            'application/pdf': 'https://example.com/export.pdf',
+          },
+        },
+      }));
+      ctx.mocks.drive.service.files.update._setImpl(async () => ({ data: { id: 'file-1', name: 'Doc' } }));
+
+      const res = await callTool(ctx.client, 'restoreRevision', { fileId: 'file-1', revisionId: '1', confirm: true });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Restored file file-1'));
+      assert.ok(res.content[0].text.includes('restored via export/import'), 'Should include workspace formatting warning');
+
+      // Should use revisions.get for exportLinks, not files.export
+      const revGetCalls = ctx.mocks.drive.tracker.getCalls('revisions.get');
+      assert.ok(revGetCalls.length >= 1, 'Should use revisions.get to fetch exportLinks');
+    });
+
+    it('restoreRevision happy path (binary file) without workspace warning', async () => {
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({ data: { name: 'photo.jpg', mimeType: 'image/jpeg' } }));
+      ctx.mocks.drive.service.revisions.get._setImpl(async () => ({ data: Buffer.from('binary-content') }));
+      ctx.mocks.drive.service.files.update._setImpl(async () => ({ data: { id: 'file-1', name: 'photo.jpg' } }));
+
+      const res = await callTool(ctx.client, 'restoreRevision', { fileId: 'file-1', revisionId: '2', confirm: true });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Restored file file-1'));
+      assert.ok(!res.content[0].text.includes('export/import'), 'Should NOT include workspace warning for binary files');
+
+      const revGetCalls = ctx.mocks.drive.tracker.getCalls('revisions.get');
+      assert.ok(revGetCalls.length >= 1, 'Should use revisions.get for binary download');
+    });
+  });
+
   // --- moveItem ---
   describe('moveItem', () => {
     it('happy path', async () => {
@@ -296,6 +511,59 @@ describe('Drive tools', () => {
     it('validation error', async () => {
       const res = await callTool(ctx.client, 'moveItem', {});
       assert.equal(res.isError, true);
+    });
+  });
+
+  describe('v1.6.0 pdf conversion tools', () => {
+    it('convertPdfToGoogleDoc happy path', async () => {
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({ data: { id: 'pdf-1', name: 'A.pdf', mimeType: 'application/pdf', parents: ['root'] } }));
+      ctx.mocks.drive.service.files.copy._setImpl(async () => ({ data: { id: 'doc-1', name: 'A (Doc)', webViewLink: 'https://doc' } }));
+      const res = await callTool(ctx.client, 'convertPdfToGoogleDoc', { fileId: 'pdf-1' });
+      assert.equal(res.isError, false);
+    });
+
+    it('bulkConvertFolderPdfs happy path', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({ data: { files: [{ id: 'p1', name: 'X.pdf' }] } }));
+      ctx.mocks.drive.service.files.copy._setImpl(async () => ({ data: { id: 'd1', name: 'X (Doc)' } }));
+      const res = await callTool(ctx.client, 'bulkConvertFolderPdfs', { folderId: 'folder-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Success=1'));
+    });
+
+    it('uploadPdfWithSplit performs real split uploads', async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), 'gdrive-mcp-test-'));
+      try {
+        const pdfPath = join(tempDir, 'source.pdf');
+        const pdf = await PDFDocument.create();
+        pdf.addPage();
+        pdf.addPage();
+        pdf.addPage();
+        const bytes = await pdf.save();
+        await writeFile(pdfPath, bytes);
+
+        let counter = 0;
+        ctx.mocks.drive.service.files.create._setImpl(async ({ requestBody }: any) => {
+          counter += 1;
+          return { data: { id: `part-${counter}`, name: requestBody?.name } };
+        });
+
+        const res = await callTool(ctx.client, 'uploadPdfWithSplit', {
+          localPath: pdfPath,
+          split: true,
+          maxPagesPerChunk: 2,
+          namePrefix: 'invoice',
+        });
+
+        assert.equal(res.isError, false);
+        assert.ok(res.content[0].text.includes('Uploaded split PDF into 2 part(s)'));
+        assert.ok(res.content[0].text.includes('invoice-part-1.pdf'));
+        assert.ok(res.content[0].text.includes('invoice-part-2.pdf'));
+
+        const createCalls = ctx.mocks.drive.tracker.getCalls('files.create');
+        assert.equal(createCalls.length, 2);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
     });
   });
 });

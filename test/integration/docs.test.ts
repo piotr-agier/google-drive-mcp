@@ -603,4 +603,40 @@ describe('Docs tools', () => {
       assert.equal(res.isError, true);
     });
   });
+
+  describe('v1.6.0 docs tab/chip tools', () => {
+    it('addDocumentTab happy path', async () => {
+      const res = await callTool(ctx.client, 'addDocumentTab', { documentId: 'doc-1', title: 'New Tab' });
+      assert.equal(res.isError, false);
+    });
+
+    it('renameDocumentTab happy path', async () => {
+      const res = await callTool(ctx.client, 'renameDocumentTab', { documentId: 'doc-1', tabId: 'tab-1', title: 'Renamed' });
+      assert.equal(res.isError, false);
+    });
+
+    it('insertSmartChip happy path', async () => {
+      const res = await callTool(ctx.client, 'insertSmartChip', { documentId: 'doc-1', index: 1, chipType: 'person', personEmail: 'user@example.com' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('user@example.com'));
+
+      // Verify the batchUpdate request uses insertPerson (not insertInlineObject)
+      const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
+      const lastCall = calls[calls.length - 1];
+      const requests = lastCall?.args?.[0]?.requestBody?.requests;
+      assert.ok(requests?.length === 1);
+      assert.ok('insertPerson' in requests[0], 'request should use insertPerson');
+      assert.equal(requests[0].insertPerson.personProperties.email, 'user@example.com');
+    });
+
+    it('insertSmartChip rejects missing email', async () => {
+      const res = await callTool(ctx.client, 'insertSmartChip', { documentId: 'doc-1', index: 1, chipType: 'person' });
+      assert.equal(res.isError, true);
+    });
+
+    it('readSmartChips happy path', async () => {
+      const res = await callTool(ctx.client, 'readSmartChips', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+    });
+  });
 });

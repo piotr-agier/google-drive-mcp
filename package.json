@@ -1,6 +1,6 @@
 {
     "name": "@piotr-agier/google-drive-mcp",
-    "version": "1.4.0",
+    "version": "1.7.1",
     "description": "Google Drive MCP Server - Model Context Protocol server providing secure access to Google Drive, Docs, Sheets, and Slides through MCP clients e.g. Claude Desktop",
     "license": "MIT",
     "author": "Piotr Agier <piotr.agier@gmail.com>",
@@ -58,6 +58,7 @@
         "google-auth-library": "^9.15.0",
         "googleapis": "^144.0.0",
         "open": "^10.2.0",
+        "pdf-lib": "^1.17.1",
         "punycode": "^2.3.1",
         "uuid": "^11.0.3",
         "zod": "^3.25.76"

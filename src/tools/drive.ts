@@ -1,10 +1,16 @@
 import { z } from 'zod';
 import type { drive_v3 } from 'googleapis';
 import { existsSync, statSync, createReadStream } from 'fs';
+import { mkdtemp, readFile, writeFile, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { basename, extname, join } from 'path';
+import { PDFDocument } from 'pdf-lib';
 import type { ToolDefinition, ToolContext, ToolResult } from '../types.js';
 import { errorResponse } from '../types.js';
 import { escapeDriveQuery, getMimeTypeFromFilename, TEXT_MIME_TYPES } from '../utils.js';
-import { downloadDriveFile } from '../download-file.js';
+import { downloadDriveFile, GOOGLE_WORKSPACE_EXPORT_FORMATS } from '../download-file.js';
+import { getSecureTokenPath } from '../auth/utils.js';
+import { SCOPE_ALIASES, SCOPE_PRESETS, DEFAULT_SCOPES, resolveOAuthScopes } from '../auth/scopes.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -35,7 +41,8 @@ const BINARY_MIME_TYPES: Record<string, string> = {
 const SearchSchema = z.object({
   query: z.string().min(1, "Search query is required"),
   pageSize: z.number().int().min(1).max(100).optional(),
-  pageToken: z.string().optional()
+  pageToken: z.string().optional(),
+  rawQuery: z.boolean().optional(),
 });
 
 const CreateTextFileSchema = z.object({
@@ -136,6 +143,75 @@ const ShareFileSchema = z.object({
   sendNotificationEmail: z.boolean().optional().default(true),
 });
 
+const ConvertPdfToGoogleDocSchema = z.object({
+  fileId: z.string().min(1, "File ID is required"),
+  newName: z.string().optional(),
+  parentFolderId: z.string().optional(),
+});
+
+const BulkConvertFolderPdfsSchema = z.object({
+  folderId: z.string().min(1, "Folder ID is required"),
+  maxResults: z.number().int().min(1).max(200).optional().default(100),
+  continueOnError: z.boolean().optional().default(true),
+});
+
+const UploadPdfWithSplitSchema = z.object({
+  localPath: z.string().min(1, "Local file path is required"),
+  split: z.boolean().optional().default(false),
+  maxPagesPerChunk: z.number().int().min(1).max(500).optional(),
+  parentFolderId: z.string().optional(),
+  namePrefix: z.string().optional(),
+});
+
+async function splitPdfIntoChunkFiles(localPath: string, maxPagesPerChunk: number): Promise<{ tempDir: string; files: string[] }> {
+  const sourceBytes = await readFile(localPath);
+  const source = await PDFDocument.load(sourceBytes);
+  const pageCount = source.getPageCount();
+
+  if (pageCount === 0) {
+    throw new Error('PDF contains no pages.');
+  }
+
+  const tempDir = await mkdtemp(join(tmpdir(), 'gdrive-mcp-split-'));
+  const files: string[] = [];
+
+  for (let start = 0, part = 1; start < pageCount; start += maxPagesPerChunk, part++) {
+    const end = Math.min(start + maxPagesPerChunk, pageCount);
+    const chunkDoc = await PDFDocument.create();
+    const pages = await chunkDoc.copyPages(source, Array.from({ length: end - start }, (_, i) => start + i));
+    for (const page of pages) chunkDoc.addPage(page);
+
+    const chunkBytes = await chunkDoc.save();
+    const chunkPath = join(tempDir, `part-${part}.pdf`);
+    await writeFile(chunkPath, chunkBytes);
+    files.push(chunkPath);
+  }
+
+  return { tempDir, files };
+}
+
+const GetRevisionsSchema = z.object({
+  fileId: z.string().min(1, "File ID is required"),
+  pageSize: z.number().int().min(1).max(200).optional().default(50),
+  pageToken: z.string().optional(),
+});
+
+const RestoreRevisionSchema = z.object({
+  fileId: z.string().min(1, "File ID is required"),
+  revisionId: z.string().min(1, "Revision ID is required"),
+  confirm: z.boolean().optional().default(false),
+});
+
+const AuthTestFileAccessSchema = z.object({
+  fileId: z.string().optional(),
+});
+
+function getGrantedScopesFromAuthClient(ctx: ToolContext): string[] {
+  const scopeRaw = ctx.authClient?.credentials?.scope;
+  if (!scopeRaw || typeof scopeRaw !== 'string') return [];
+  return [...new Set(scopeRaw.split(' ').map((s: string) => s.trim()).filter(Boolean))];
+}
+
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
@@ -143,13 +219,14 @@ const ShareFileSchema = z.object({
 export const toolDefinitions: ToolDefinition[] = [
   {
     name: "search",
-    description: "Search for files in Google Drive",
+    description: "Search for files in Google Drive. Set rawQuery=true to pass a raw Google Drive API query supporting operators like modifiedTime, createdTime, mimeType, name contains, etc.",
     inputSchema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Search query" },
+        query: { type: "string", description: "Search query. When rawQuery=true, this is passed directly to the Google Drive API as the q parameter." },
         pageSize: { type: "number", description: "Results per page (default 50, max 100)" },
-        pageToken: { type: "string", description: "Token for next page of results" }
+        pageToken: { type: "string", description: "Token for next page of results" },
+        rawQuery: { type: "boolean", description: "If true, pass query directly to Google Drive API without wrapping in fullText contains. Enables date filters, mimeType filters, etc." },
       },
       required: ["query"],
     },
@@ -364,6 +441,93 @@ export const toolDefinitions: ToolDefinition[] = [
       required: ["fileId", "emailAddress"]
     }
   },
+  {
+    name: "convertPdfToGoogleDoc",
+    description: "Convert an existing PDF in Drive into an editable Google Doc",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "PDF file ID in Google Drive" },
+        newName: { type: "string", description: "Optional name for converted Doc" },
+        parentFolderId: { type: "string", description: "Optional destination folder ID" }
+      },
+      required: ["fileId"]
+    }
+  },
+  {
+    name: "bulkConvertFolderPdfs",
+    description: "Convert all PDFs in a folder into Google Docs and return per-file results",
+    inputSchema: {
+      type: "object",
+      properties: {
+        folderId: { type: "string", description: "Folder ID containing PDFs" },
+        maxResults: { type: "number", description: "Maximum PDFs to process (1-200, default: 100)" },
+        continueOnError: { type: "boolean", description: "Continue conversion when one file fails (default: true)" }
+      },
+      required: ["folderId"]
+    }
+  },
+  {
+    name: "uploadPdfWithSplit",
+    description: "Upload PDF and optionally split into chunked parts (metadata split plan for now)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        localPath: { type: "string", description: "Absolute path to local PDF" },
+        split: { type: "boolean", description: "Enable split mode" },
+        maxPagesPerChunk: { type: "number", description: "Target max pages per chunk (advisory metadata)" },
+        parentFolderId: { type: "string", description: "Optional destination folder ID" },
+        namePrefix: { type: "string", description: "Optional output name prefix" }
+      },
+      required: ["localPath"]
+    }
+  },
+  {
+    name: "getRevisions",
+    description: "List revisions for a file",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "Google Drive file ID" },
+        pageSize: { type: "number", description: "Max revisions to return (default 50, max 200)" },
+        pageToken: { type: "string", description: "Page token for pagination" }
+      },
+      required: ["fileId"]
+    }
+  },
+  {
+    name: "restoreRevision",
+    description: "Restore a file to a selected revision (creates a new head revision). Note: workspace files (Docs, Sheets, Slides) are restored via export/import and may lose some formatting.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "Google Drive file ID" },
+        revisionId: { type: "string", description: "Revision ID to restore" },
+        confirm: { type: "boolean", description: "Safety flag. Must be true to execute restore." }
+      },
+      required: ["fileId", "revisionId"]
+    }
+  },
+  {
+    name: "authGetStatus",
+    description: "Show authentication/token status and scope diagnostics",
+    inputSchema: { type: "object", properties: {} }
+  },
+  {
+    name: "authListScopes",
+    description: "List configured/requested scopes and currently granted scopes",
+    inputSchema: { type: "object", properties: {} }
+  },
+  {
+    name: "authTestFileAccess",
+    description: "Run auth diagnostics against Drive API/file access",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "Optional file ID for targeted access check" }
+      }
+    }
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -382,24 +546,70 @@ export async function handleTool(
       if (!validation.success) {
         return errorResponse(validation.error.errors[0].message);
       }
-      const { query: userQuery, pageSize, pageToken } = validation.data;
+      const { query: userQuery, pageSize, pageToken, rawQuery } = validation.data;
 
-      const escapedQuery = escapeDriveQuery(userQuery);
-      const formattedQuery = `fullText contains '${escapedQuery}' and trashed = false`;
+      let formattedQuery: string;
+      if (rawQuery) {
+        // Use query directly; auto-append trashed guard unless user already includes it
+        formattedQuery = /\btrashed\s*=/.test(userQuery)
+          ? userQuery
+          : `${userQuery} and trashed = false`;
+      } else {
+        const escapedQuery = escapeDriveQuery(userQuery);
+        formattedQuery = `fullText contains '${escapedQuery}' and trashed = false`;
+      }
 
       const res = await ctx.getDrive().files.list({
         q: formattedQuery,
         pageSize: Math.min(pageSize || 50, 100),
         pageToken: pageToken,
-        fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size)",
+        fields: "nextPageToken, files(id, name, mimeType, createdTime, modifiedTime, size, parents)",
+        corpora: "allDrives",
         includeItemsFromAllDrives: true,
         supportsAllDrives: true
       });
 
-      const fileList = res.data.files?.map((f: drive_v3.Schema$File) => `${f.name} (ID: ${f.id}, ${f.mimeType})`).join("\n") || '';
-      ctx.log('Search results', { query: userQuery, resultCount: res.data.files?.length });
+      // Resolve folder paths from parent IDs (with dedup for concurrent lookups)
+      const pathCache: Record<string, Promise<string>> = {};
+      function resolveParentPath(folderId: string, depth = 0): Promise<string> {
+        if (depth >= 10) return Promise.resolve(folderId);
+        if (folderId in pathCache) return pathCache[folderId];
+        const promise = (async () => {
+          try {
+            const folderRes = await ctx.getDrive().files.get({
+              fileId: folderId,
+              fields: "name, parents",
+              supportsAllDrives: true,
+            });
+            const name = folderRes.data.name || folderId;
+            const parents = folderRes.data.parents;
+            if (parents && parents.length > 0 && parents[0] !== folderId) {
+              const parentPath = await resolveParentPath(parents[0], depth + 1);
+              return `${parentPath}/${name}`;
+            }
+            return name;
+          } catch {
+            return folderId;
+          }
+        })();
+        pathCache[folderId] = promise;
+        return promise;
+      }
 
-      let response = `Found ${res.data.files?.length ?? 0} files:\n${fileList}`;
+      const files = res.data.files || [];
+      const fileLines = await Promise.all(
+        files.map(async (f: drive_v3.Schema$File) => {
+          let folderPath = '';
+          if (f.parents && f.parents.length > 0) {
+            folderPath = await resolveParentPath(f.parents[0]);
+          }
+          return `${f.name} (${f.mimeType}) [id: ${f.id}, path: ${folderPath || '/'}] [created: ${f.createdTime || 'N/A'}, modified: ${f.modifiedTime || 'N/A'}]`;
+        }),
+      );
+
+      ctx.log('Search results', { query: userQuery, rawQuery: !!rawQuery, resultCount: files.length });
+
+      let response = `Found ${files.length} files:\n${fileLines.join("\n")}`;
       if (res.data.nextPageToken) {
         response += `\n\nMore results available. Use pageToken: ${res.data.nextPageToken}`;
       }
@@ -988,6 +1198,368 @@ export async function handleTool(
         content: [{ type: 'text', text: `Shared file with ${response.data.emailAddress || data.emailAddress} as ${response.data.role}. Permission ID: ${response.data.id}` }],
         isError: false,
       };
+    }
+
+    case "convertPdfToGoogleDoc": {
+      const validation = ConvertPdfToGoogleDocSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      const source = await ctx.getDrive().files.get({
+        fileId: data.fileId,
+        fields: 'id,name,mimeType,parents',
+        supportsAllDrives: true,
+      });
+
+      if (source.data.mimeType !== 'application/pdf') {
+        return errorResponse(`File ${data.fileId} is not a PDF (mimeType=${source.data.mimeType || 'unknown'})`);
+      }
+
+      const parentId = data.parentFolderId || source.data.parents?.[0];
+      const converted = await ctx.getDrive().files.copy({
+        fileId: data.fileId,
+        requestBody: {
+          name: data.newName || `${source.data.name || 'Converted PDF'} (Doc)`,
+          mimeType: 'application/vnd.google-apps.document',
+          ...(parentId ? { parents: [parentId] } : {}),
+        },
+        fields: 'id,name,webViewLink,mimeType',
+        supportsAllDrives: true,
+      });
+
+      return { content: [{ type: 'text', text: `Converted PDF to Google Doc: ${converted.data.name}\nID: ${converted.data.id}\nLink: ${converted.data.webViewLink}` }], isError: false };
+    }
+
+    case "bulkConvertFolderPdfs": {
+      const validation = BulkConvertFolderPdfsSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      const list = await ctx.getDrive().files.list({
+        q: `'${escapeDriveQuery(data.folderId)}' in parents and mimeType='application/pdf' and trashed=false`,
+        pageSize: data.maxResults,
+        fields: 'files(id,name,mimeType)',
+        includeItemsFromAllDrives: true,
+        supportsAllDrives: true,
+      });
+
+      const files = list.data.files || [];
+      const results: Array<{ id?: string; name?: string; docId?: string; ok: boolean; error?: string }> = [];
+
+      // Sequential processing is intentional — parallel copies trigger Google API rate limits.
+      for (const f of files) {
+        try {
+          const converted = await ctx.getDrive().files.copy({
+            fileId: f.id!,
+            requestBody: {
+              name: `${f.name || 'Converted PDF'} (Doc)`,
+              mimeType: 'application/vnd.google-apps.document',
+              parents: [data.folderId],
+            },
+            fields: 'id,name',
+            supportsAllDrives: true,
+          });
+          results.push({ id: f.id || undefined, name: f.name || undefined, docId: converted.data.id || undefined, ok: true });
+        } catch (err: any) {
+          const message = err?.message || 'Unknown conversion error';
+          results.push({ id: f.id || undefined, name: f.name || undefined, ok: false, error: message });
+          if (!data.continueOnError) break;
+        }
+      }
+
+      const ok = results.filter(r => r.ok).length;
+      const fail = results.length - ok;
+      return {
+        content: [{ type: 'text', text: `Bulk PDF conversion finished. Processed=${results.length}, Success=${ok}, Failed=${fail}\n\n${results.map(r => r.ok ? `✅ ${r.name} -> ${r.docId}` : `❌ ${r.name}: ${r.error}`).join('\n')}` }],
+        isError: false,
+      };
+    }
+
+    case "uploadPdfWithSplit": {
+      const validation = UploadPdfWithSplitSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      if (!existsSync(data.localPath)) return errorResponse(`File not found: ${data.localPath}`);
+      const parentId = await ctx.resolveFolderId(data.parentFolderId);
+
+      if (!data.split) {
+        const fileName = data.namePrefix || data.localPath.split(/[\\/]/).pop() || 'upload.pdf';
+        const uploaded = await ctx.getDrive().files.create({
+          requestBody: { name: fileName, parents: [parentId] },
+          media: { mimeType: 'application/pdf', body: createReadStream(data.localPath) },
+          fields: 'id,name,webViewLink',
+          supportsAllDrives: true,
+        });
+
+        return {
+          content: [{ type: 'text', text: `Uploaded PDF without split: ${uploaded.data.name}\nID: ${uploaded.data.id}` }],
+          isError: false,
+        };
+      }
+
+      const maxPagesPerChunk = data.maxPagesPerChunk ?? 25;
+      const baseName = data.namePrefix || basename(data.localPath, extname(data.localPath));
+
+      let tempDir: string | undefined;
+      try {
+        const splitResult = await splitPdfIntoChunkFiles(data.localPath, maxPagesPerChunk);
+        tempDir = splitResult.tempDir;
+
+        const uploadedParts: Array<{ id?: string | null; name?: string | null }> = [];
+        for (let i = 0; i < splitResult.files.length; i++) {
+          const partPath = splitResult.files[i];
+          const partName = `${baseName}-part-${i + 1}.pdf`;
+
+          const uploaded = await ctx.getDrive().files.create({
+            requestBody: { name: partName, parents: [parentId] },
+            media: { mimeType: 'application/pdf', body: createReadStream(partPath) },
+            fields: 'id,name,webViewLink',
+            supportsAllDrives: true,
+          });
+
+          uploadedParts.push({ id: uploaded.data.id, name: uploaded.data.name });
+        }
+
+        const lines = uploadedParts.map((p, idx) => `- part ${idx + 1}: ${p.name} (ID: ${p.id})`);
+        return {
+          content: [{
+            type: 'text',
+            text: `Uploaded split PDF into ${uploadedParts.length} part(s) using maxPagesPerChunk=${maxPagesPerChunk}\n${lines.join('\n')}`,
+          }],
+          isError: false,
+        };
+      } finally {
+        if (tempDir) {
+          await rm(tempDir, { recursive: true, force: true });
+        }
+      }
+    }
+
+    case "getRevisions": {
+      const validation = GetRevisionsSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      const response = await ctx.getDrive().revisions.list({
+        fileId: data.fileId,
+        pageSize: data.pageSize,
+        pageToken: data.pageToken,
+        fields: 'nextPageToken,revisions(id,modifiedTime,lastModifyingUser(displayName,emailAddress),keepForever,size,originalFilename)',
+      });
+
+      const revisions: drive_v3.Schema$Revision[] = response.data.revisions || [];
+      if (revisions.length === 0) {
+        return { content: [{ type: 'text', text: `No revisions found for file ${data.fileId}.` }], isError: false };
+      }
+
+      const lines = revisions.map((r: drive_v3.Schema$Revision) => {
+        const who = r.lastModifyingUser?.displayName || r.lastModifyingUser?.emailAddress || 'unknown';
+        return `- ${r.id}: ${r.modifiedTime || 'unknown-time'} by ${who}${r.keepForever ? ' [kept]' : ''}`;
+      });
+
+      let text = `Revisions for file ${data.fileId}:\n${lines.join('\n')}`;
+      if (response.data.nextPageToken) {
+        text += `\n\nMore revisions available. Use pageToken="${response.data.nextPageToken}" to fetch the next page.`;
+      }
+
+      return {
+        content: [{ type: 'text', text }],
+        isError: false,
+      };
+    }
+
+    case "restoreRevision": {
+      const validation = RestoreRevisionSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      if (!data.confirm) {
+        return errorResponse('Refusing restore: set confirm=true to restore a revision.');
+      }
+
+      try {
+        // Get current file metadata to determine restore strategy
+        const current = await ctx.getDrive().files.get({
+          fileId: data.fileId,
+          fields: 'name,mimeType',
+          supportsAllDrives: true,
+        });
+
+        const fileMimeType = current.data.mimeType || '';
+        const isWorkspaceFile = fileMimeType.startsWith('application/vnd.google-apps.');
+
+        let revisionBody: unknown;
+        let uploadMimeType: string;
+
+        if (isWorkspaceFile) {
+          // Workspace files don't support revisions.get with alt=media.
+          // Use the revision's exportLinks to fetch content in an editable format.
+          const revision = await ctx.getDrive().revisions.get({
+            fileId: data.fileId,
+            revisionId: data.revisionId,
+            fields: 'id,exportLinks',
+          });
+
+          const exportLinks = (revision.data.exportLinks as Record<string, string> | null) || {};
+
+          // Build preference list: editable formats from GOOGLE_WORKSPACE_EXPORT_FORMATS, excluding pdf
+          const formatMap = GOOGLE_WORKSPACE_EXPORT_FORMATS[fileMimeType];
+          const editableMimes = formatMap
+            ? Object.entries(formatMap).filter(([ext]) => ext !== 'pdf').map(([, mime]) => mime)
+            : [];
+
+          // Pick the first editable MIME type available in exportLinks
+          const selectedMime = editableMimes.find((m) => exportLinks[m])
+            || Object.keys(exportLinks).find((m) => m !== 'application/pdf')
+            || Object.keys(exportLinks)[0];
+
+          if (!selectedMime || !exportLinks[selectedMime]) {
+            return errorResponse('Selected revision has no usable export links for restore.');
+          }
+
+          uploadMimeType = selectedMime;
+
+          // Fetch revision content from the export link using authenticated request
+          const exportResponse = await ctx.authClient.request({ url: exportLinks[selectedMime], responseType: 'stream' });
+          revisionBody = exportResponse.data;
+        } else {
+          // For binary files, download the revision content directly
+          const revision = await ctx.getDrive().revisions.get(
+            { fileId: data.fileId, revisionId: data.revisionId, alt: 'media' },
+            { responseType: 'stream' },
+          );
+          revisionBody = revision.data;
+          uploadMimeType = fileMimeType || 'application/octet-stream';
+        }
+
+        await ctx.getDrive().files.update({
+          fileId: data.fileId,
+          media: {
+            mimeType: uploadMimeType,
+            body: revisionBody,
+          },
+          supportsAllDrives: true,
+        });
+
+        const restoreMsg = `Restored file ${data.fileId} (${current.data.name || 'unnamed'}) from revision ${data.revisionId}.`;
+        const workspaceWarning = isWorkspaceFile
+          ? '\n\nWarning: This workspace file was restored via export/import. Some formatting or features (e.g. comments, suggestions, version history metadata) may have been lost.'
+          : '';
+
+        return {
+          content: [{
+            type: 'text',
+            text: restoreMsg + workspaceWarning,
+          }],
+          isError: false,
+        };
+      } catch (err: unknown) {
+        return errorResponse(`Failed to restore revision: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    case "authGetStatus": {
+      const tokenPath = getSecureTokenPath();
+      const tokenFileExists = existsSync(tokenPath);
+      let requestedScopes: string[];
+      try {
+        requestedScopes = resolveOAuthScopes();
+      } catch (e: unknown) {
+        return errorResponse(`Invalid scope configuration: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      const grantedScopes = getGrantedScopesFromAuthClient(ctx);
+      const missingScopes = requestedScopes.filter((s) => !grantedScopes.includes(s));
+      const expiryDate = ctx.authClient?.credentials?.expiry_date as number | undefined;
+      const expiresInSec = expiryDate ? Math.floor((expiryDate - Date.now()) / 1000) : null;
+
+      const payload = {
+        tokenFilePath: tokenPath,
+        tokenFileExists,
+        hasAccessToken: !!ctx.authClient?.credentials?.access_token,
+        hasRefreshToken: !!ctx.authClient?.credentials?.refresh_token,
+        expiryDate: expiryDate || null,
+        expiresInSec,
+        requestedScopes,
+        grantedScopes,
+        missingScopes,
+      };
+
+      const status =
+        !tokenFileExists || !payload.hasRefreshToken ? 'needs_reauth' :
+        missingScopes.length > 0 ? 'scope_mismatch' :
+        'ok';
+
+      let text = `Auth status (${status}):\n${JSON.stringify(payload, null, 2)}\n\nSummary: token file ${tokenFileExists ? 'found' : 'missing'}, missing scopes=${missingScopes.length}.`;
+      if (grantedScopes.length === 0 && payload.hasAccessToken) {
+        text += '\nNote: granted scopes may appear empty when the token was loaded from disk. This does not necessarily indicate missing permissions.';
+      }
+
+      return {
+        content: [{ type: 'text', text }],
+        isError: false,
+      };
+    }
+
+    case "authListScopes": {
+      let requestedScopes: string[];
+      try {
+        requestedScopes = resolveOAuthScopes();
+      } catch (e: unknown) {
+        return errorResponse(`Invalid scope configuration: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      const grantedScopes = getGrantedScopesFromAuthClient(ctx);
+      const missingScopes = requestedScopes.filter((s) => !grantedScopes.includes(s));
+      const presetsResolved = Object.fromEntries(
+        Object.entries(SCOPE_PRESETS).map(([k, v]) => [k, v.map((s) => SCOPE_ALIASES[s])]),
+      );
+
+      let text = `Scopes:\n${JSON.stringify({ requestedScopes, grantedScopes, missingScopes, presets: presetsResolved }, null, 2)}`;
+      if (grantedScopes.length === 0 && !!ctx.authClient?.credentials?.access_token) {
+        text += '\nNote: granted scopes may appear empty when the token was loaded from disk. This does not necessarily indicate missing permissions.';
+      }
+
+      return {
+        content: [{ type: 'text', text }],
+        isError: false,
+      };
+    }
+
+    case "authTestFileAccess": {
+      const validation = AuthTestFileAccessSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const data = validation.data;
+
+      try {
+        let check: { mode: string; [key: string]: unknown };
+        if (data.fileId) {
+          const file = await ctx.getDrive().files.get({
+            fileId: data.fileId,
+            fields: 'id,name,mimeType,permissions',
+            supportsAllDrives: true,
+          });
+          check = { mode: 'file', fileId: file.data.id, name: file.data.name, mimeType: file.data.mimeType };
+        } else {
+          const list = await ctx.getDrive().files.list({
+            pageSize: 1,
+            fields: 'files(id,name,mimeType)',
+            includeItemsFromAllDrives: true,
+            supportsAllDrives: true,
+          });
+          check = { mode: 'list', visibleCount: list.data.files?.length || 0, sample: list.data.files?.[0] || null };
+        }
+
+        return {
+          content: [{ type: 'text', text: `Auth access check OK:\n${JSON.stringify(check, null, 2)}` }],
+          isError: false,
+        };
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : String(e);
+        return {
+          content: [{ type: 'text', text: `Auth access check failed:\n${JSON.stringify({ message }, null, 2)}` }],
+          isError: true,
+        };
+      }
     }
 
     default:

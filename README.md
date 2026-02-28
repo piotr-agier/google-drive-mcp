@@ -398,6 +398,21 @@ Add the server to your Claude Desktop configuration:
   - `role`: Role (`reader`, `commenter`, `writer`)
   - `sendNotificationEmail`: Send notification email (optional)
 
+#### File Revisions (v1.7.0)
+- **getRevisions** - List revisions for a file
+  - `fileId`: File ID
+  - `pageSize`: Max revisions to return (optional)
+
+- **restoreRevision** - Restore a file from a selected revision (safety-confirmed)
+  - `fileId`: File ID
+  - `revisionId`: Revision ID to restore
+  - `confirm`: Must be `true` to execute restore
+
+#### Auth Diagnostics (v1.7.0)
+- **authGetStatus** - Show token/scopes/auth health diagnostics (machine + human readable)
+- **authListScopes** - Show configured/requested scopes, granted scopes, missing scopes, and presets
+- **authTestFileAccess** - Test Drive access (optionally against a specific `fileId`)
+
 - **uploadFile** - Upload a local file (any type: image, audio, video, PDF, etc.) to Google Drive
   - `localPath`: Absolute path to the local file
   - `name`: File name in Drive (optional, defaults to local filename)
@@ -414,6 +429,24 @@ Add the server to your Claude Desktop configuration:
   - `localPath`: Absolute local path to save the file (can be a directory or full file path)
   - `exportMimeType`: For Google Workspace files, MIME type to export as (optional, e.g., 'application/pdf', 'text/csv')
   - `overwrite`: Whether to overwrite existing files (optional, default: false)
+
+#### PDF Ingestion and Conversion (v1.6.0)
+- **convertPdfToGoogleDoc** - Convert a PDF already stored in Drive into an editable Google Doc
+  - `fileId`: Source PDF file ID
+  - `newName`: Optional destination doc name
+  - `parentFolderId`: Optional destination folder
+
+- **bulkConvertFolderPdfs** - Convert all PDFs in a folder and return per-file success/failure summary
+  - `folderId`: Source folder ID
+  - `maxResults`: Maximum PDFs to process (optional, default: 100)
+  - `continueOnError`: Continue processing after individual failures (optional, default: true)
+
+- **uploadPdfWithSplit** - Upload a local PDF, optionally split into chunked PDF parts before upload
+  - `localPath`: Absolute local path to PDF
+  - `split`: Enable split mode metadata output (optional, default: false)
+  - `maxPagesPerChunk`: Advisory chunk size for split planning (optional)
+  - `parentFolderId`: Optional destination folder
+  - `namePrefix`: Optional uploaded file name prefix
 
 ### Folder Operations
 - **createFolder** - Create a new folder
@@ -445,6 +478,24 @@ Add the server to your Claude Desktop configuration:
 - **listDocumentTabs** - List all tabs in a Google Doc with their IDs and hierarchy
   - `documentId`: Document ID
   - `includeContent`: Include content summary (character count) for each tab (optional)
+
+- **addDocumentTab** - Add a new tab in a Google Doc
+  - `documentId`: Document ID
+  - `title`: Tab title
+
+- **renameDocumentTab** - Rename an existing tab in a Google Doc
+  - `documentId`: Document ID
+  - `tabId`: Tab ID
+  - `title`: New tab title
+
+- **insertSmartChip** - Insert a person smart chip (mention) at a document index. Only person chips are supported by the Docs API; date and file chips are read-only.
+  - `documentId`: Document ID
+  - `index`: Insertion index (1-based)
+  - `chipType`: `person` (only supported type)
+  - `personEmail`: Email address for the person mention
+
+- **readSmartChips** - Read smart chip-like elements (person mentions, rich links, date chips) from the default tab of a document. Only the default tab is scanned; other tabs are not included.
+  - `documentId`: Document ID
 
 - **listGoogleDocs** - List Google Documents with optional filtering
   - `query`: Search query to filter by name or content (optional)
@@ -592,8 +643,40 @@ Add the server to your Claude Desktop configuration:
   - `valueInputOption`: `RAW` or `USER_ENTERED` (optional, default: USER_ENTERED)
 
 - **addSpreadsheetSheet** - Add a new sheet/tab to an existing spreadsheet
+- **addSheet** - Alias for `addSpreadsheetSheet`
   - `spreadsheetId`: Spreadsheet ID
   - `sheetTitle`: Title for the new sheet
+
+- **listSheets** - List tabs/sheets in a spreadsheet
+  - `spreadsheetId`: Spreadsheet ID
+
+- **renameSheet** - Rename a sheet/tab by `sheetId`
+  - `spreadsheetId`: Spreadsheet ID
+  - `sheetId`: Sheet ID
+  - `newTitle`: New title
+
+- **deleteSheet** - Delete a sheet/tab by `sheetId`
+  - `spreadsheetId`: Spreadsheet ID
+  - `sheetId`: Sheet ID
+
+- **addDataValidation** - Add data validation rules to a range
+  - `spreadsheetId`: Spreadsheet ID
+  - `range`: A1 range (e.g., `Sheet1!A1:A10`)
+  - `conditionType`: `ONE_OF_LIST`, `NUMBER_GREATER`, `NUMBER_LESS`, or `TEXT_CONTAINS`
+  - `values`: Condition values (e.g. list items, threshold)
+  - `strict`: Reject invalid values (optional, default: `true`)
+  - `showCustomUi`: Show dropdown/custom UI (optional, default: `true`)
+
+- **protectRange** - Protect a range in a spreadsheet
+  - `spreadsheetId`: Spreadsheet ID
+  - `range`: A1 range
+  - `description`: Protection description (optional)
+  - `warningOnly`: Warn instead of enforce (optional, default: `false`)
+
+- **addNamedRange** - Create a named range
+  - `spreadsheetId`: Spreadsheet ID
+  - `name`: Named range name
+  - `range`: A1 range
 
 - **listGoogleSheets** - List Google Spreadsheets with optional filtering
   - `query`: Search query to filter by name or content (optional)
@@ -716,6 +799,32 @@ Add the server to your Claude Desktop configuration:
   - `presentationId`: Presentation ID
   - `slideIndex`: Slide index (0-based)
   - `notes`: The speaker notes content to set
+
+#### Slide Operations and Templating
+- **deleteGoogleSlide** - Delete a slide by object ID
+  - `presentationId`: Presentation ID
+  - `slideObjectId`: Slide object ID
+
+- **duplicateSlide** - Duplicate a slide by object ID
+  - `presentationId`: Presentation ID
+  - `slideObjectId`: Slide object ID
+
+- **reorderSlides** - Reorder slides by object IDs and insertion index
+  - `presentationId`: Presentation ID
+  - `slideObjectIds`: Array of slide object IDs to move
+  - `insertionIndex`: Target insertion index
+
+- **replaceAllTextInSlides** - Replace text across a presentation
+  - `presentationId`: Presentation ID
+  - `containsText`: Text to find
+  - `replaceText`: Replacement text
+  - `matchCase`: Match case (optional, default: `false`)
+
+- **exportSlideThumbnail** - Export a slide thumbnail URL (PNG/JPEG, SMALL/MEDIUM/LARGE)
+  - `presentationId`: Presentation ID
+  - `slideObjectId`: Slide object ID
+  - `mimeType`: `PNG` or `JPEG` (optional, default: `PNG`)
+  - `size`: `SMALL`, `MEDIUM`, or `LARGE` (optional, default: `LARGE`)
 
 ### Google Calendar
 - **listCalendars** - List all accessible Google Calendars

@@ -608,6 +608,28 @@ const FindAndReplaceInDocSchema = z.object({
   dryRun: z.boolean().optional().default(false),
 });
 
+const AddDocumentTabSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  title: z.string().min(1, "Tab title is required"),
+});
+
+const RenameDocumentTabSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  tabId: z.string().min(1, "Tab ID is required"),
+  title: z.string().min(1, "Tab title is required"),
+});
+
+const InsertSmartChipSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  index: z.number().int().min(1, "Index must be at least 1"),
+  chipType: z.enum(["person"]),
+  personEmail: z.string().email("Valid email is required for person chip"),
+});
+
+const ReadSmartChipsSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+});
+
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
@@ -978,6 +1000,56 @@ export const toolDefinitions: ToolDefinition[] = [
       type: "object",
       properties: {
         documentId: { type: "string", description: "The ID of the Google Document (from the URL)." }
+      },
+      required: ["documentId"]
+    }
+  },
+  {
+    name: "addDocumentTab",
+    description: "Add a new tab in a Google Doc",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentId: { type: "string", description: "Document ID" },
+        title: { type: "string", description: "Tab title" }
+      },
+      required: ["documentId", "title"]
+    }
+  },
+  {
+    name: "renameDocumentTab",
+    description: "Rename an existing Google Doc tab",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentId: { type: "string", description: "Document ID" },
+        tabId: { type: "string", description: "Tab ID" },
+        title: { type: "string", description: "New tab title" }
+      },
+      required: ["documentId", "tabId", "title"]
+    }
+  },
+  {
+    name: "insertSmartChip",
+    description: "Insert a person smart chip (mention) at a document index. Only person chips are supported by the Docs API; date and file chips are read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentId: { type: "string", description: "Document ID" },
+        index: { type: "number", description: "Insertion index (1-based)" },
+        chipType: { type: "string", enum: ["person"], description: "Smart chip type (only 'person' is supported)" },
+        personEmail: { type: "string", description: "Email address for the person mention" }
+      },
+      required: ["documentId", "index", "chipType", "personEmail"]
+    }
+  },
+  {
+    name: "readSmartChips",
+    description: "Read smart chip-like elements (person mentions, rich links, date chips) from the default tab of a document",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentId: { type: "string", description: "Document ID" }
       },
       required: ["documentId"]
     }
@@ -2334,6 +2406,77 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       result += `**View Link:** ${file.webViewLink}\n`;
 
       return { content: [{ type: "text", text: result }], isError: false };
+    }
+
+    case "addDocumentTab": {
+      const validation = AddDocumentTabSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+      await docs.documents.batchUpdate({
+        documentId: a.documentId,
+        // createTab is not yet in the googleapis TypeScript types — cast required
+        requestBody: { requests: [{ createTab: { tabProperties: { title: a.title } } } as any] }
+      });
+
+      return { content: [{ type: 'text', text: `Requested creation of tab "${a.title}" in document ${a.documentId}.` }], isError: false };
+    }
+
+    case "renameDocumentTab": {
+      const validation = RenameDocumentTabSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+      await docs.documents.batchUpdate({
+        documentId: a.documentId,
+        // updateTabProperties is not yet in the googleapis TypeScript types — cast required
+        requestBody: { requests: [{ updateTabProperties: { tabId: a.tabId, tabProperties: { title: a.title }, fields: 'title' } } as any] }
+      });
+
+      return { content: [{ type: 'text', text: `Renamed tab ${a.tabId} to "${a.title}".` }], isError: false };
+    }
+
+    case "insertSmartChip": {
+      const validation = InsertSmartChipSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+      await docs.documents.batchUpdate({
+        documentId: a.documentId,
+        requestBody: {
+          requests: [{
+            insertPerson: {
+              personProperties: { email: a.personEmail },
+              location: { index: a.index },
+            },
+          // insertPerson is not yet in the googleapis TypeScript types — cast required
+          } as any],
+        },
+      });
+
+      return { content: [{ type: 'text', text: `Inserted person smart chip for ${a.personEmail} at index ${a.index}.` }], isError: false };
+    }
+
+    case "readSmartChips": {
+      const validation = ReadSmartChipsSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+      const doc = await docs.documents.get({ documentId: a.documentId });
+      const body = (doc.data as any).body?.content || [];
+      const hits: string[] = [];
+      for (const block of body) {
+        for (const el of block?.paragraph?.elements || []) {
+          if (el?.richLink) hits.push(`richLink: ${el.richLink.richLinkProperties?.uri || 'unknown'}`);
+          if (el?.person) hits.push(`person: ${el.person.personProperties?.email || 'unknown'}`);
+        }
+      }
+      // Date chips appear as richLink elements in the Docs API model — already covered above.
+      return { content: [{ type: 'text', text: hits.length ? hits.join('\n') : 'No smart chips detected (note: only the default tab is scanned).' }], isError: false };
     }
 
     default:

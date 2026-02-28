@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { ToolDefinition, ToolResult, ToolContext } from '../types.js';
 import { errorResponse } from '../types.js';
-import { parseA1Range, convertA1ToGridRange, escapeDriveQuery } from '../utils.js';
+import { parseA1Range, convertA1ToGridRange, escapeDriveQuery, type GridRange } from '../utils.js';
 
 // ---------------------------------------------------------------------------
 // Zod Schemas
@@ -124,6 +124,48 @@ const AppendSpreadsheetRowsSchema = z.object({
 const AddSpreadsheetSheetSchema = z.object({
   spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
   sheetTitle: z.string().min(1, "Sheet title is required")
+});
+
+const AddSheetSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  title: z.string().min(1, "Sheet title is required")
+});
+
+const ListSheetsSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required")
+});
+
+const RenameSheetSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  sheetId: z.number().int(),
+  newTitle: z.string().min(1, "New title is required")
+});
+
+const DeleteSheetSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  sheetId: z.number().int()
+});
+
+const AddDataValidationSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  range: z.string().min(1, "Range is required"),
+  conditionType: z.enum(["ONE_OF_LIST", "NUMBER_GREATER", "NUMBER_LESS", "TEXT_CONTAINS"]),
+  values: z.array(z.string()).min(1, "At least one value is required"),
+  strict: z.boolean().optional().default(true),
+  showCustomUi: z.boolean().optional().default(true)
+});
+
+const ProtectRangeSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  range: z.string().min(1, "Range is required"),
+  description: z.string().optional(),
+  warningOnly: z.boolean().optional().default(false)
+});
+
+const AddNamedRangeSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  name: z.string().min(1, "Name is required"),
+  range: z.string().min(1, "Range is required")
 });
 
 const ListGoogleSheetsSchema = z.object({
@@ -417,6 +459,97 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
   {
+    name: "addSheet",
+    description: "Alias for addSpreadsheetSheet (adds a new sheet/tab)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        title: { type: "string", description: "Title for the new sheet/tab" }
+      },
+      required: ["spreadsheetId", "title"]
+    }
+  },
+  {
+    name: "listSheets",
+    description: "List tabs/sheets in a Google Spreadsheet",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" }
+      },
+      required: ["spreadsheetId"]
+    }
+  },
+  {
+    name: "renameSheet",
+    description: "Rename a sheet/tab by sheetId",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        sheetId: { type: "number", description: "Sheet ID" },
+        newTitle: { type: "string", description: "New title" }
+      },
+      required: ["spreadsheetId", "sheetId", "newTitle"]
+    }
+  },
+  {
+    name: "deleteSheet",
+    description: "Delete a sheet/tab by sheetId",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        sheetId: { type: "number", description: "Sheet ID" }
+      },
+      required: ["spreadsheetId", "sheetId"]
+    }
+  },
+  {
+    name: "addDataValidation",
+    description: "Add data validation rules to a sheet range",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        range: { type: "string", description: "A1 range" },
+        conditionType: { type: "string", enum: ["ONE_OF_LIST", "NUMBER_GREATER", "NUMBER_LESS", "TEXT_CONTAINS"], description: "Validation condition type" },
+        values: { type: "array", items: { type: "string" }, description: "Condition values (e.g. list items, threshold)" },
+        strict: { type: "boolean", description: "Reject invalid values" },
+        showCustomUi: { type: "boolean", description: "Show dropdown/custom UI" }
+      },
+      required: ["spreadsheetId", "range", "conditionType", "values"]
+    }
+  },
+  {
+    name: "protectRange",
+    description: "Protect a range in a spreadsheet",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        range: { type: "string", description: "A1 range" },
+        description: { type: "string", description: "Protection description" },
+        warningOnly: { type: "boolean", description: "Warn instead of enforce" }
+      },
+      required: ["spreadsheetId", "range"]
+    }
+  },
+  {
+    name: "addNamedRange",
+    description: "Create a named range",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        name: { type: "string", description: "Named range name" },
+        range: { type: "string", description: "A1 range" }
+      },
+      required: ["spreadsheetId", "name", "range"]
+    }
+  },
+  {
     name: "listGoogleSheets",
     description: "Lists Google Spreadsheets from your Google Drive with optional filtering",
     inputSchema: {
@@ -430,6 +563,28 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   }
 ];
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+async function resolveGridRange(
+  sheetsService: ReturnType<ToolContext['google']['sheets']>,
+  spreadsheetId: string,
+  range: string
+): Promise<GridRange | string> {
+  const rangeData = await sheetsService.spreadsheets.get({
+    spreadsheetId,
+    ranges: [range],
+    fields: 'sheets(properties(sheetId,title))'
+  });
+  const { sheetName, cellRange: a1Range } = parseA1Range(range);
+  const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
+  if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
+    return `Sheet "${sheetName}" not found`;
+  }
+  return convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
+}
 
 // ---------------------------------------------------------------------------
 // Handler
@@ -1006,21 +1161,25 @@ export async function handleTool(
       };
     }
 
-    case "addSpreadsheetSheet": {
-      const validation = AddSpreadsheetSheetSchema.safeParse(args);
+    case "addSpreadsheetSheet":
+    case "addSheet": {
+      const isAlias = toolName === 'addSheet';
+      const validation = isAlias ? AddSheetSchema.safeParse(args) : AddSpreadsheetSheetSchema.safeParse(args);
       if (!validation.success) {
         return errorResponse(validation.error.errors[0].message);
       }
-      const a = validation.data;
+
+      const spreadsheetId = validation.data.spreadsheetId;
+      const sheetTitle = isAlias ? (validation.data as z.infer<typeof AddSheetSchema>).title : (validation.data as z.infer<typeof AddSpreadsheetSheetSchema>).sheetTitle;
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
       const response = await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: a.spreadsheetId,
+        spreadsheetId,
         requestBody: {
           requests: [{
             addSheet: {
               properties: {
-                title: a.sheetTitle
+                title: sheetTitle
               }
             }
           }]
@@ -1036,6 +1195,153 @@ export async function handleTool(
         content: [{ type: "text", text: `Successfully added sheet "${addedSheet.title}" (Sheet ID: ${addedSheet.sheetId}) to spreadsheet.` }],
         isError: false
       };
+    }
+
+    case "listSheets": {
+      const validation = ListSheetsSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      const response = await sheets.spreadsheets.get({
+        spreadsheetId: a.spreadsheetId,
+        fields: 'sheets.properties(sheetId,title,index,hidden)'
+      });
+
+      const tabs = response.data.sheets || [];
+      if (tabs.length === 0) {
+        return { content: [{ type: 'text', text: 'No sheets found.' }], isError: false };
+      }
+
+      const lines = tabs.map((s) => `- ${s.properties?.title} (id: ${s.properties?.sheetId}, index: ${s.properties?.index}${s.properties?.hidden ? ', hidden' : ''})`);
+      return { content: [{ type: 'text', text: `Sheets in spreadsheet ${a.spreadsheetId}:\n${lines.join('\n')}` }], isError: false };
+    }
+
+    case "renameSheet": {
+      const validation = RenameSheetSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: a.spreadsheetId,
+        requestBody: {
+          requests: [{
+            updateSheetProperties: {
+              properties: { sheetId: a.sheetId, title: a.newTitle },
+              fields: 'title'
+            }
+          }]
+        }
+      });
+
+      return { content: [{ type: 'text', text: `Renamed sheet ${a.sheetId} to "${a.newTitle}".` }], isError: false };
+    }
+
+    case "deleteSheet": {
+      const validation = DeleteSheetSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: a.spreadsheetId,
+        requestBody: {
+          requests: [{
+            deleteSheet: { sheetId: a.sheetId }
+          }]
+        }
+      });
+
+      return { content: [{ type: 'text', text: `Deleted sheet ${a.sheetId}.` }], isError: false };
+    }
+
+    case "addDataValidation": {
+      const validation = AddDataValidationSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      const gridRange = await resolveGridRange(sheets, a.spreadsheetId, a.range);
+      if (typeof gridRange === 'string') return errorResponse(gridRange);
+
+      const conditionValues = a.values.map(v => ({ userEnteredValue: v }));
+
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: a.spreadsheetId,
+        requestBody: {
+          requests: [{
+            setDataValidation: {
+              range: gridRange,
+              rule: {
+                condition: {
+                  type: a.conditionType,
+                  values: conditionValues,
+                },
+                strict: a.strict,
+                showCustomUi: a.showCustomUi,
+              },
+            },
+          }],
+        },
+      });
+
+      return { content: [{ type: 'text', text: `Added data validation (${a.conditionType}) to ${a.range}.` }], isError: false };
+    }
+
+    case "protectRange": {
+      const validation = ProtectRangeSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      const gridRange = await resolveGridRange(sheets, a.spreadsheetId, a.range);
+      if (typeof gridRange === 'string') return errorResponse(gridRange);
+
+      const response = await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: a.spreadsheetId,
+        requestBody: {
+          requests: [{
+            addProtectedRange: {
+              protectedRange: {
+                range: gridRange,
+                description: a.description,
+                warningOnly: a.warningOnly,
+              },
+            },
+          }],
+        },
+      });
+
+      const protectedRangeId = response.data.replies?.[0]?.addProtectedRange?.protectedRange?.protectedRangeId;
+      return { content: [{ type: 'text', text: `Protected range ${a.range}${protectedRangeId ? ` (id: ${protectedRangeId})` : ''}.` }], isError: false };
+    }
+
+    case "addNamedRange": {
+      const validation = AddNamedRangeSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      const gridRange = await resolveGridRange(sheets, a.spreadsheetId, a.range);
+      if (typeof gridRange === 'string') return errorResponse(gridRange);
+
+      const response = await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: a.spreadsheetId,
+        requestBody: {
+          requests: [{
+            addNamedRange: {
+              namedRange: {
+                name: a.name,
+                range: gridRange,
+              },
+            },
+          }],
+        },
+      });
+
+      const namedRangeId = response.data.replies?.[0]?.addNamedRange?.namedRange?.namedRangeId;
+      return { content: [{ type: 'text', text: `Added named range "${a.name}" for ${a.range}${namedRangeId ? ` (id: ${namedRangeId})` : ''}.` }], isError: false };
     }
 
     case "listGoogleSheets": {

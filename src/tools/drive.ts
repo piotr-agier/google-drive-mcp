@@ -795,7 +795,6 @@ export async function handleTool(
         supportsAllDrives: true
       });
 
-
       ctx.log('File uploaded successfully', { fileId: file.data?.id });
       return {
         content: [{

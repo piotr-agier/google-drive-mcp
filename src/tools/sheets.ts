@@ -440,7 +440,21 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         spreadsheetId: { type: "string", description: "The ID of the Google Spreadsheet (from the URL)" },
         range: { type: "string", description: "A1 notation range indicating where to append (e.g., 'A1' or 'Sheet1!A1'). Data will be appended starting from this range." },
-        values: { type: "array", description: "2D array of values to append. Each inner array represents a row.", items: { type: "array" } },
+        values: {
+          type: "array",
+          description: "2D array of values to append. Each inner array represents a row.",
+          items: {
+            type: "array",
+            items: {
+              anyOf: [
+                { type: "string" },
+                { type: "number" },
+                { type: "boolean" },
+                { type: "null" }
+              ]
+            }
+          }
+        },
         valueInputOption: { type: "string", description: "How input data should be interpreted (RAW or USER_ENTERED)", enum: ["RAW", "USER_ENTERED"], default: "USER_ENTERED" }
       },
       required: ["spreadsheetId", "range", "values"]

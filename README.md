@@ -2,14 +2,6 @@
 
 A Model Context Protocol (MCP) server that provides secure integration with Google Drive, Docs, Sheets, Slides, and Calendar. It allows Claude Desktop and other MCP clients to manage files in Google Drive and calendar events through a standardized interface.
 
-## Fork Enhancements
-
-This fork adds several improvements over the upstream project:
-
-- **Upload with Google Format Conversion** — `uploadFile` now supports a `convertToGoogleFormat` option that automatically converts Office files (.docx, .xlsx, .pptx) to native Google Docs, Sheets, and Slides on upload
-- **Bullet Points & Numbered Lists** — New `createParagraphBullets` tool for adding or removing bullet points and numbered lists on Google Doc paragraphs, with 13 style presets
-- **Comment Thread Resolution** — `replyToComment` now accepts a `resolve` parameter to resolve a comment thread in a single step
-
 ## Features
 
 - **Multi-format Support**: Work with Google Docs, Sheets, Slides, Calendar, and regular files

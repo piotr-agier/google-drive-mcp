@@ -322,9 +322,10 @@ Add the server to your Claude Desktop configuration:
 
 ### Search and Navigation
 - **search** - Search for files across Google Drive
-  - `query`: Search terms
+  - `query`: Search terms (or raw Drive API query when `rawQuery=true`)
   - `pageSize`: Number of results per page (optional, default 50, max 100)
   - `pageToken`: Pagination token for next page (optional)
+  - `rawQuery`: Pass `query` directly to the Drive API — enables operators like `modifiedTime`, `createdTime`, `mimeType`, `name contains`, etc. (optional)
 
 - **listFolder** - List contents of a folder
   - `folderId`: Folder ID (optional, defaults to root)

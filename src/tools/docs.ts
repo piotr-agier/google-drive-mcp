@@ -1807,12 +1807,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         if (!range) {
           return errorResponse(`Text "${a.textToFind}" not found in document`);
         }
-        const paraRange = await getParagraphRange(ctx, a.documentId, range.startIndex);
-        if (!paraRange) {
-          return errorResponse("Could not determine paragraph boundaries");
-        }
-        startIndex = paraRange.startIndex;
-        endIndex = paraRange.endIndex;
+        startIndex = range.startIndex;
+        endIndex = range.endIndex;
       } else {
         return errorResponse("Must provide either startIndex+endIndex or textToFind");
       }

@@ -983,6 +983,14 @@ export async function handleTool(
       };
 
       const targetMimeType = data.convertToGoogleFormat ? GOOGLE_FORMAT_MAP[detectedMime] : undefined;
+
+      if (data.convertToGoogleFormat && !targetMimeType) {
+        return errorResponse(
+          `Cannot convert MIME type "${detectedMime}" to a Google Workspace format. ` +
+          `Supported: .docx, .doc, .xlsx, .xls, .pptx, .ppt`
+        );
+      }
+
       const uploadName = targetMimeType ? fileName.replace(/\.[^.]+$/, '') : fileName;
 
       ctx.log('Uploading file', { localPath: data.localPath, name: uploadName, mimeType: detectedMime, convertToGoogle: !!targetMimeType, size: stats.size });

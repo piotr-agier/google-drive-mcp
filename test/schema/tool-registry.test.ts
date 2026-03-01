@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import { describe, it, before, after } from 'node:test';
 import { setupTestServer, type TestContext } from '../helpers/setup-server.js';
 
-const EXPECTED_TOOL_COUNT = 94;
+const EXPECTED_TOOL_COUNT = 95;
 
 const EXPECTED_TOOLS = [
   'search', 'createTextFile', 'updateTextFile', 'createFolder', 'listFolder', 'listSharedDrives',
   'deleteItem', 'renameItem', 'moveItem',
   'createGoogleDoc', 'updateGoogleDoc', 'insertText', 'deleteRange',
-  'readGoogleDoc', 'listDocumentTabs', 'applyTextStyle', 'applyParagraphStyle', 'formatGoogleDocText', 'formatGoogleDocParagraph', 'findAndReplaceInDoc',
+  'readGoogleDoc', 'listDocumentTabs', 'applyTextStyle', 'applyParagraphStyle', 'formatGoogleDocText', 'formatGoogleDocParagraph', 'createParagraphBullets', 'findAndReplaceInDoc',
   'listComments', 'getComment', 'addComment', 'replyToComment', 'deleteComment',
   'createGoogleSheet', 'updateGoogleSheet', 'getGoogleSheetContent',
   'formatGoogleSheetCells', 'formatGoogleSheetText', 'formatGoogleSheetNumbers',

@@ -145,7 +145,7 @@ npx @piotr-agier/google-drive-mcp auth
    ```bash
    # Copy the example file
    cp gcp-oauth.keys.example.json gcp-oauth.keys.json
-   
+
    # Edit gcp-oauth.keys.json with your OAuth client ID
    ```
 
@@ -153,7 +153,7 @@ npx @piotr-agier/google-drive-mcp auth
    ```bash
    npm run auth
    ```
-   
+
    Note: Authentication happens automatically on first run of an MCP client if you skip this step.
 
 ## Docker Usage
@@ -164,7 +164,7 @@ npx @piotr-agier/google-drive-mcp auth
    ```bash
    # Using npx
    npx @piotr-agier/google-drive-mcp auth
-   
+
    # Or using local installation
    npm run auth
    ```
@@ -322,9 +322,10 @@ Add the server to your Claude Desktop configuration:
 
 ### Search and Navigation
 - **search** - Search for files across Google Drive
-  - `query`: Search terms
+  - `query`: Search terms (or raw Drive API query when `rawQuery=true`)
   - `pageSize`: Number of results per page (optional, default 50, max 100)
   - `pageToken`: Pagination token for next page (optional)
+  - `rawQuery`: Pass `query` directly to the Drive API — enables operators like `modifiedTime`, `createdTime`, `mimeType`, `name contains`, etc. (optional)
 
 - **listFolder** - List contents of a folder
   - `folderId`: Folder ID (optional, defaults to root)
@@ -410,6 +411,11 @@ Add the server to your Claude Desktop configuration:
   - `name`: File name in Drive (optional, defaults to local filename)
   - `parentFolderId`: Parent folder ID or path (optional, e.g., '/Work/Projects')
   - `mimeType`: MIME type (optional, auto-detected from extension)
+  - `convertToGoogleFormat`: Convert uploaded file to native Google Workspace format (optional, default: false). When enabled, Office files are automatically converted:
+    - `.docx` / `.doc` → Google Doc
+    - `.xlsx` / `.xls` → Google Sheet
+    - `.pptx` / `.ppt` → Google Slides
+    - File extension is stripped from the name automatically (e.g., `report.docx` becomes `report`)
 
 - **downloadFile** - Download a Google Drive file to a local path
   - `fileId`: Google Drive file ID
@@ -529,6 +535,15 @@ Add the server to your Claude Desktop configuration:
 - **formatGoogleDocParagraph** - Alias for `applyParagraphStyle` (compatibility helper)
   - Same parameters as `applyParagraphStyle`
 
+#### Bullet Points and Lists
+- **createParagraphBullets** - Add or remove bullet points / numbered lists on paragraphs
+  - `documentId`: Document ID
+  - Target (use one): `startIndex`+`endIndex` OR `textToFind`+`matchInstance`
+  - `bulletPreset`: Bullet style preset (optional, default: `BULLET_DISC_CIRCLE_SQUARE`). Available presets:
+    - **Bullet styles**: `BULLET_DISC_CIRCLE_SQUARE`, `BULLET_DIAMONDX_ARROW3D_SQUARE`, `BULLET_CHECKBOX`, `BULLET_ARROW_DIAMOND_DISC`, `BULLET_STAR_CIRCLE_SQUARE`, `BULLET_ARROW3D_CIRCLE_SQUARE`, `BULLET_LEFTTRIANGLE_DIAMOND_DISC`
+    - **Numbered styles**: `NUMBERED_DECIMAL_ALPHA_ROMAN`, `NUMBERED_DECIMAL_ALPHA_ROMAN_PARENS`, `NUMBERED_DECIMAL_NESTED`, `NUMBERED_UPPERALPHA_ALPHA_ROMAN`, `NUMBERED_UPPERROMAN_UPPERALPHA_DECIMAL`, `NUMBERED_ZERODECIMAL_ALPHA_ROMAN`
+    - **Remove bullets**: `NONE` — removes existing bullets/numbering from the targeted paragraphs
+
 - **findAndReplaceInDoc** - Find and replace text across a Google Doc
   - `documentId`: Document ID
   - `findText`: Text to find
@@ -585,6 +600,7 @@ Add the server to your Claude Desktop configuration:
   - `documentId`: Document ID
   - `commentId`: Comment ID to reply to
   - `replyText`: The reply content
+  - `resolve`: Set to `true` to resolve the comment thread after replying (optional, default: false)
 
 - **deleteComment** - Delete a comment from the document
   - `documentId`: Document ID
@@ -978,7 +994,7 @@ npx @piotr-agier/google-drive-mcp auth
 
 **Solution:**
 1. Go to [Google Account Permissions](https://myaccount.google.com/permissions)
-2. Find and remove access for "Google Drive MCP" 
+2. Find and remove access for "Google Drive MCP"
 3. Clear local tokens: `rm ~/.config/google-drive-mcp/tokens.json`
 4. Re-authenticate to grant all required scopes
 5. Verify the consent screen shows ALL scopes including full Drive access

@@ -498,6 +498,30 @@ const ApplyParagraphStyleSchema = z.object({
   keepWithNext: z.boolean().optional()
 });
 
+const CreateParagraphBulletsSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  startIndex: z.number().int().min(1).optional(),
+  endIndex: z.number().int().min(1).optional(),
+  textToFind: z.string().min(1).optional(),
+  matchInstance: z.number().int().min(1).optional().default(1),
+  bulletPreset: z.enum([
+    'BULLET_DISC_CIRCLE_SQUARE',
+    'BULLET_DIAMONDX_ARROW3D_SQUARE',
+    'BULLET_CHECKBOX',
+    'BULLET_ARROW_DIAMOND_DISC',
+    'BULLET_STAR_CIRCLE_SQUARE',
+    'BULLET_ARROW3D_CIRCLE_SQUARE',
+    'BULLET_LEFTTRIANGLE_DIAMOND_DISC',
+    'NUMBERED_DECIMAL_ALPHA_ROMAN',
+    'NUMBERED_DECIMAL_ALPHA_ROMAN_PARENS',
+    'NUMBERED_DECIMAL_NESTED',
+    'NUMBERED_UPPERALPHA_ALPHA_ROMAN',
+    'NUMBERED_UPPERROMAN_UPPERALPHA_DECIMAL',
+    'NUMBERED_ZERODECIMAL_ALPHA_ROMAN',
+    'NONE'
+  ]).default('BULLET_DISC_CIRCLE_SQUARE')
+});
+
 const ListCommentsSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
   includeDeleted: z.boolean().optional(),
@@ -520,7 +544,8 @@ const AddCommentSchema = z.object({
 const ReplyToCommentSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
   commentId: z.string().min(1, "Comment ID is required"),
-  replyText: z.string().min(1, "Reply text is required")
+  replyText: z.string().min(1, "Reply text is required"),
+  resolve: z.boolean().optional().describe("Set to true to resolve the comment thread after replying")
 });
 
 const DeleteCommentSchema = z.object({
@@ -782,6 +807,22 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
   {
+    name: "createParagraphBullets",
+    description: "Add or remove bullet points / numbered lists on paragraphs in a Google Doc. Target paragraphs by startIndex+endIndex or textToFind. Use bulletPreset='NONE' to remove bullets.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentId: { type: "string", description: "The document ID" },
+        startIndex: { type: "number", description: "Start index (1-based) - use with endIndex" },
+        endIndex: { type: "number", description: "End index (exclusive) - use with startIndex" },
+        textToFind: { type: "string", description: "Text within the target paragraph(s) to bulletize" },
+        matchInstance: { type: "number", description: "Which instance of textToFind (default: 1)" },
+        bulletPreset: { type: "string", enum: ["BULLET_DISC_CIRCLE_SQUARE", "BULLET_DIAMONDX_ARROW3D_SQUARE", "BULLET_CHECKBOX", "BULLET_ARROW_DIAMOND_DISC", "BULLET_STAR_CIRCLE_SQUARE", "BULLET_ARROW3D_CIRCLE_SQUARE", "BULLET_LEFTTRIANGLE_DIAMOND_DISC", "NUMBERED_DECIMAL_ALPHA_ROMAN", "NUMBERED_DECIMAL_ALPHA_ROMAN_PARENS", "NUMBERED_DECIMAL_NESTED", "NUMBERED_UPPERALPHA_ALPHA_ROMAN", "NUMBERED_UPPERROMAN_UPPERALPHA_DECIMAL", "NUMBERED_ZERODECIMAL_ALPHA_ROMAN", "NONE"], description: "Bullet style preset. Use NONE to remove bullets. Default: BULLET_DISC_CIRCLE_SQUARE" }
+      },
+      required: ["documentId"]
+    }
+  },
+  {
     name: "findAndReplaceInDoc",
     description: "Find and replace text across a Google Document. Dry-run mode counts matches from paragraph text only (may differ from actual replacements which cover tables, headers, footers, etc.)",
     inputSchema: {
@@ -844,7 +885,8 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         documentId: { type: "string", description: "The document ID" },
         commentId: { type: "string", description: "The comment ID to reply to" },
-        replyText: { type: "string", description: "The reply content" }
+        replyText: { type: "string", description: "The reply content" },
+        resolve: { type: "boolean", description: "Set to true to resolve the comment thread after replying (default: false)" }
       },
       required: ["documentId", "commentId", "replyText"]
     }
@@ -1741,6 +1783,73 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       };
     }
 
+
+    case "createParagraphBullets": {
+      const validation = CreateParagraphBulletsSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const a = validation.data;
+
+      let startIndex: number;
+      let endIndex: number;
+
+      if (a.startIndex !== undefined && a.endIndex !== undefined) {
+        startIndex = a.startIndex;
+        endIndex = a.endIndex;
+      } else if (a.textToFind !== undefined) {
+        const range = await findTextRange(
+          ctx,
+          a.documentId,
+          a.textToFind,
+          a.matchInstance || 1
+        );
+        if (!range) {
+          return errorResponse(`Text "${a.textToFind}" not found in document`);
+        }
+        startIndex = range.startIndex;
+        endIndex = range.endIndex;
+      } else {
+        return errorResponse("Must provide either startIndex+endIndex or textToFind");
+      }
+
+      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+
+      if (a.bulletPreset === 'NONE') {
+        await docs.documents.batchUpdate({
+          documentId: a.documentId,
+          requestBody: {
+            requests: [{
+              deleteParagraphBullets: {
+                range: { startIndex, endIndex }
+              }
+            }]
+          }
+        });
+        return {
+          content: [{ type: "text", text: `Removed bullets from range ${startIndex}-${endIndex}` }],
+          isError: false
+        };
+      }
+
+      await docs.documents.batchUpdate({
+        documentId: a.documentId,
+        requestBody: {
+          requests: [{
+            createParagraphBullets: {
+              range: { startIndex, endIndex },
+              bulletPreset: a.bulletPreset
+            }
+          }]
+        }
+      });
+
+      return {
+        content: [{ type: "text", text: `Applied ${a.bulletPreset} bullets to range ${startIndex}-${endIndex}` }],
+        isError: false
+      };
+    }
+
     case "findAndReplaceInDoc": {
       const validation = FindAndReplaceInDocSchema.safeParse(args);
       if (!validation.success) {
@@ -1971,12 +2080,14 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         commentId: a.commentId,
         fields: 'id,content,author,createdTime',
         requestBody: {
-          content: a.replyText
+          content: a.replyText,
+          ...(a.resolve && { action: "resolve" })
         }
       });
 
+      const resolveNote = a.resolve ? ' Comment thread resolved.' : '';
       return {
-        content: [{ type: "text", text: `Reply added successfully. Reply ID: ${response.data.id}` }],
+        content: [{ type: "text", text: `Reply added successfully. Reply ID: ${response.data.id}${resolveNote}` }],
         isError: false
       };
     }

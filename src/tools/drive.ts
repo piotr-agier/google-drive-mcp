@@ -10,7 +10,7 @@ import { errorResponse } from '../types.js';
 import { escapeDriveQuery, getMimeTypeFromFilename, TEXT_MIME_TYPES } from '../utils.js';
 import { downloadDriveFile, GOOGLE_WORKSPACE_EXPORT_FORMATS } from '../download-file.js';
 import { getSecureTokenPath } from '../auth/utils.js';
-import { SCOPE_ALIASES, SCOPE_PRESETS, DEFAULT_SCOPES, resolveOAuthScopes } from '../auth/scopes.js';
+import { SCOPE_ALIASES, SCOPE_PRESETS, resolveOAuthScopes } from '../auth/scopes.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -210,6 +210,13 @@ function getGrantedScopesFromAuthClient(ctx: ToolContext): string[] {
   const scopeRaw = ctx.authClient?.credentials?.scope;
   if (!scopeRaw || typeof scopeRaw !== 'string') return [];
   return [...new Set(scopeRaw.split(' ').map((s: string) => s.trim()).filter(Boolean))];
+}
+
+function resolveScopeStatus(ctx: ToolContext): { requestedScopes: string[]; grantedScopes: string[]; missingScopes: string[] } {
+  const requestedScopes = resolveOAuthScopes();
+  const grantedScopes = getGrantedScopesFromAuthClient(ctx);
+  const missingScopes = requestedScopes.filter((s) => !grantedScopes.includes(s));
+  return { requestedScopes, grantedScopes, missingScopes };
 }
 
 // ---------------------------------------------------------------------------
@@ -1244,7 +1251,7 @@ export async function handleTool(
       const data = validation.data;
 
       const list = await ctx.getDrive().files.list({
-        q: `'${escapeDriveQuery(data.folderId)}' in parents and mimeType='application/pdf' and trashed=false`,
+        q: `'${data.folderId}' in parents and mimeType='application/pdf' and trashed=false`,
         pageSize: data.maxResults,
         fields: 'files(id,name,mimeType)',
         includeItemsFromAllDrives: true,
@@ -1267,10 +1274,10 @@ export async function handleTool(
             fields: 'id,name',
             supportsAllDrives: true,
           });
-          results.push({ id: f.id || undefined, name: f.name || undefined, docId: converted.data.id || undefined, ok: true });
+          results.push({ id: f.id ?? undefined, name: f.name ?? undefined, docId: converted.data.id ?? undefined, ok: true });
         } catch (err: any) {
           const message = err?.message || 'Unknown conversion error';
-          results.push({ id: f.id || undefined, name: f.name || undefined, ok: false, error: message });
+          results.push({ id: f.id ?? undefined, name: f.name ?? undefined, ok: false, error: message });
           if (!data.continueOnError) break;
         }
       }
@@ -1292,7 +1299,7 @@ export async function handleTool(
       const parentId = await ctx.resolveFolderId(data.parentFolderId);
 
       if (!data.split) {
-        const fileName = data.namePrefix || data.localPath.split(/[\\/]/).pop() || 'upload.pdf';
+        const fileName = data.namePrefix || basename(data.localPath) || 'upload.pdf';
         const uploaded = await ctx.getDrive().files.create({
           requestBody: { name: fileName, parents: [parentId] },
           media: { mimeType: 'application/pdf', body: createReadStream(data.localPath) },
@@ -1470,14 +1477,13 @@ export async function handleTool(
     case "authGetStatus": {
       const tokenPath = getSecureTokenPath();
       const tokenFileExists = existsSync(tokenPath);
-      let requestedScopes: string[];
+      let scopeStatus: ReturnType<typeof resolveScopeStatus>;
       try {
-        requestedScopes = resolveOAuthScopes();
+        scopeStatus = resolveScopeStatus(ctx);
       } catch (e: unknown) {
         return errorResponse(`Invalid scope configuration: ${e instanceof Error ? e.message : String(e)}`);
       }
-      const grantedScopes = getGrantedScopesFromAuthClient(ctx);
-      const missingScopes = requestedScopes.filter((s) => !grantedScopes.includes(s));
+      const { requestedScopes, grantedScopes, missingScopes } = scopeStatus;
       const expiryDate = ctx.authClient?.credentials?.expiry_date as number | undefined;
       const expiresInSec = expiryDate ? Math.floor((expiryDate - Date.now()) / 1000) : null;
 
@@ -1510,16 +1516,15 @@ export async function handleTool(
     }
 
     case "authListScopes": {
-      let requestedScopes: string[];
+      let scopeStatus: ReturnType<typeof resolveScopeStatus>;
       try {
-        requestedScopes = resolveOAuthScopes();
+        scopeStatus = resolveScopeStatus(ctx);
       } catch (e: unknown) {
         return errorResponse(`Invalid scope configuration: ${e instanceof Error ? e.message : String(e)}`);
       }
-      const grantedScopes = getGrantedScopesFromAuthClient(ctx);
-      const missingScopes = requestedScopes.filter((s) => !grantedScopes.includes(s));
+      const { requestedScopes, grantedScopes, missingScopes } = scopeStatus;
       const presetsResolved = Object.fromEntries(
-        Object.entries(SCOPE_PRESETS).map(([k, v]) => [k, v.map((s) => SCOPE_ALIASES[s])]),
+        Object.entries(SCOPE_PRESETS).map(([k, v]) => [k, v.map((s) => SCOPE_ALIASES[s] || s)]),
       );
 
       let text = `Scopes:\n${JSON.stringify({ requestedScopes, grantedScopes, missingScopes, presets: presetsResolved }, null, 2)}`;

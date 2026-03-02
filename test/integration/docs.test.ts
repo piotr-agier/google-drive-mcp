@@ -2,6 +2,114 @@ import assert from 'node:assert/strict';
 import { describe, it, before, after, beforeEach } from 'node:test';
 import { setupTestServer, callTool, type TestContext } from '../helpers/setup-server.js';
 
+const mockDocs = {
+  // Simple single-tab document
+  singleTab: (content = 'Hello World\n') => ({
+    documentId: 'doc-1',
+    title: 'My Doc',
+    body: {
+      content: [{ paragraph: { elements: [{ textRun: { content } }] } }],
+    },
+  }),
+
+  // Multi-tab document
+  multiTab: () => ({
+    documentId: 'doc-1',
+    title: 'Multi-Tab Doc',
+    tabs: [
+      {
+        tabProperties: { tabId: 'tab-1', title: 'Tab1' },
+        documentTab: {
+          body: { content: [{ paragraph: { elements: [{ textRun: { content: 'First tab\n' }, startIndex: 1, endIndex: 11 }] } }] },
+        },
+      },
+      {
+        tabProperties: { tabId: 'tab-2', title: 'Tab2' },
+        documentTab: {
+          body: { content: [{ paragraph: { elements: [{ textRun: { content: 'Second tab\n' }, startIndex: 1, endIndex: 12 }] } }] },
+        },
+      },
+    ],
+  }),
+
+  // Fully nested document (all 3 levels)
+  fullyNested: () => ({
+    documentId: 'doc-1',
+    title: 'Nested Tab Doc',
+    tabs: [
+      {
+        tabProperties: { tabId: 'tab-1', title: 'Tab1' },
+        documentTab: {
+          body: { content: [{ paragraph: { elements: [{ textRun: { content: 'First tab\n' }, startIndex: 1, endIndex: 11 }] } }] },
+        },
+        childTabs: [
+          {
+            tabProperties: { tabId: 'tab-1-1', title: 'Tab1.1' },
+            documentTab: {
+              body: { content: [{ paragraph: { elements: [{ textRun: { content: 'First child\n' }, startIndex: 1, endIndex: 13 }] } }] },
+            },
+          },
+          {
+            tabProperties: { tabId: 'tab-1-2', title: 'Tab1.2' },
+            documentTab: {
+              body: { content: [{ paragraph: { elements: [{ textRun: { content: 'Second child\n' }, startIndex: 1, endIndex: 14 }] } }] },
+            },
+            childTabs: [
+              {
+                tabProperties: { tabId: 'tab-1-2-1', title: 'Tab1.2.1' },
+                documentTab: {
+                  body: { content: [{ paragraph: { elements: [{ textRun: { content: 'First grandchild\n' }, startIndex: 1, endIndex: 18 }] } }] },
+                },
+              },
+            ],
+          },
+        ],
+      },
+      {
+        tabProperties: { tabId: 'tab-2', title: 'Tab2' },
+        documentTab: {
+          body: { content: [{ paragraph: { elements: [{ textRun: { content: 'Second tab\n' }, startIndex: 1, endIndex: 12 }] } }] },
+        },
+      },
+    ],
+  }),
+
+  // Single parent with nested children (for edge case testing)
+  singleParentNested: () => ({
+    documentId: 'doc-1', title: 'Nested Tab Doc',
+    tabs: [
+      {
+        tabProperties: { tabId: 'tab-1', title: 'Tab1' },
+        documentTab: {
+          body: { content: [{ paragraph: { elements: [{ textRun: { content: 'First tab\n' }, startIndex: 1, endIndex: 11 }] } }] },
+        },
+        childTabs: [
+          {
+            tabProperties: { tabId: 'tab-1-1', title: 'Tab1.1' },
+            documentTab: {
+              body: { content: [{ paragraph: { elements: [{ textRun: { content: 'First child\n' }, startIndex: 1, endIndex: 13 }] } }] },
+            },
+          },
+          {
+            tabProperties: { tabId: 'tab-1-2', title: 'Tab1.2' },
+            documentTab: {
+              body: { content: [{ paragraph: { elements: [{ textRun: { content: 'Second child\n' }, startIndex: 1, endIndex: 14 }] } }] },
+            },
+            childTabs: [
+              {
+                tabProperties: { tabId: 'tab-1-2-1', title: 'Tab1.2.1' },
+                documentTab: {
+                  body: { content: [{ paragraph: { elements: [{ textRun: { content: 'First grandchild\n' }, startIndex: 1, endIndex: 18 }] } }] },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  }),
+};
+
 describe('Docs tools', () => {
   let ctx: TestContext;
 
@@ -150,6 +258,80 @@ describe('Docs tools', () => {
       assert.equal(res.isError, false);
       assert.ok(!res.content[0].text.includes('First tab'));
       assert.ok(res.content[0].text.includes('Second tab'));
+    });
+
+    it('reads specific nested tab by tabId', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: mockDocs.fullyNested(),
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', tabId: 'tab-1-2' });
+      assert.equal(res.isError, false);
+      assert.ok(!res.content[0].text.includes('First tab'));
+      assert.ok(!res.content[0].text.includes('First child'));
+      assert.ok(res.content[0].text.includes('Second child'));
+      assert.ok(!res.content[0].text.includes('Second tab'));
+    });
+    
+    it('reads specific nested tab by tabId when the document has only one tab with child tabs', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: mockDocs.singleParentNested(),
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', tabId: 'tab-1-2' });
+      assert.equal(res.isError, false);
+      assert.ok(!res.content[0].text.includes('First tab'));
+      assert.ok(!res.content[0].text.includes('First child'));
+      assert.ok(res.content[0].text.includes('Second child'));
+      assert.ok(!res.content[0].text.includes('Second tab'));
+    });
+
+    it('reads deeply nested grandchild tab by tabId', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: mockDocs.fullyNested(),
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', tabId: 'tab-1-2-1' });
+      assert.equal(res.isError, false);
+      assert.ok(!res.content[0].text.includes('First tab'));
+      assert.ok(!res.content[0].text.includes('First child'));
+      assert.ok(res.content[0].text.includes('First grandchild'));
+    });
+
+    it('reads all tabs including nested when no tabId specified', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: mockDocs.fullyNested(),
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      // Should include all tabs with proper hierarchy
+      assert.ok(res.content[0].text.includes('=== Tab: Tab1 ==='));
+      assert.ok(res.content[0].text.includes('First tab'));
+      assert.ok(res.content[0].text.includes('=== Tab: Tab1.1 ==='));
+      assert.ok(res.content[0].text.includes('First child'));
+      assert.ok(res.content[0].text.includes('=== Tab: Tab1.2 ==='));
+      assert.ok(res.content[0].text.includes('Second child'));
+      assert.ok(res.content[0].text.includes('=== Tab: Tab1.2.1 ==='));
+      assert.ok(res.content[0].text.includes('First grandchild'));
+      assert.ok(res.content[0].text.includes('=== Tab: Tab2 ==='));
+      assert.ok(res.content[0].text.includes('Second tab'));
+    });
+    
+    it('reads all tabs including nested when no tabId specified and the document has only one tab with child tabs ', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: mockDocs.singleParentNested(),
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      // Print out res.content[0].text
+      console.log('Document content:\n', res.content[0].text);
+
+      // Should include all tabs with proper hierarchy
+      assert.ok(res.content[0].text.includes('=== Tab: Tab1 ==='));
+      assert.ok(res.content[0].text.includes('First tab'));
+      assert.ok(res.content[0].text.includes('=== Tab: Tab1.1 ==='));
+      assert.ok(res.content[0].text.includes('First child'));
+      assert.ok(res.content[0].text.includes('=== Tab: Tab1.2 ==='));
+      assert.ok(res.content[0].text.includes('Second child'));
+      assert.ok(res.content[0].text.includes('=== Tab: Tab1.2.1 ==='));
+      assert.ok(res.content[0].text.includes('First grandchild'));
     });
 
     it('returns error for unknown tabId', async () => {
@@ -385,28 +567,7 @@ describe('Docs tools', () => {
   describe('getGoogleDocContent', () => {
     it('reads multi-tab document', async () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({
-        data: {
-          documentId: 'doc-1',
-          title: 'Multi-Tab Doc',
-          tabs: [
-            {
-              tabProperties: { title: 'Tab1' },
-              documentTab: {
-                body: {
-                  content: [{ paragraph: { elements: [{ textRun: { content: 'First tab\n' }, startIndex: 1, endIndex: 11 }] } }],
-                },
-              },
-            },
-            {
-              tabProperties: { title: 'Tab2' },
-              documentTab: {
-                body: {
-                  content: [{ paragraph: { elements: [{ textRun: { content: 'Second tab\n' }, startIndex: 1, endIndex: 12 }] } }],
-                },
-              },
-            },
-          ],
-        },
+        data: mockDocs.multiTab(),
       }));
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
@@ -414,6 +575,42 @@ describe('Docs tools', () => {
       assert.ok(res.content[0].text.includes('=== Tab: Tab2 ==='));
       assert.ok(res.content[0].text.includes('First tab'));
       assert.ok(res.content[0].text.includes('Second tab'));
+    });
+
+    it('reads multi-tab document with nested tabs', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: mockDocs.fullyNested(),
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      // Should include all tabs with proper hierarchy
+      assert.ok(res.content[0].text.includes('=== Tab: Tab1 ==='));
+      assert.ok(res.content[0].text.includes('First tab'));
+      assert.ok(res.content[0].text.includes('=== Tab: Tab1.1 ==='));
+      assert.ok(res.content[0].text.includes('First child'));
+      assert.ok(res.content[0].text.includes('=== Tab: Tab1.2 ==='));
+      assert.ok(res.content[0].text.includes('Second child'));
+      assert.ok(res.content[0].text.includes('=== Tab: Tab1.2.1 ==='));
+      assert.ok(res.content[0].text.includes('First grandchild'));
+      assert.ok(res.content[0].text.includes('=== Tab: Tab2 ==='));
+      assert.ok(res.content[0].text.includes('Second tab'));
+    });
+
+    it('reads multi-tab document with nested tabs when the document has only one parent tab with child tabs', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: mockDocs.singleParentNested(),
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      // Should include all tabs with proper hierarchy
+      assert.ok(res.content[0].text.includes('=== Tab: Tab1 ==='));
+      assert.ok(res.content[0].text.includes('First tab'));
+      assert.ok(res.content[0].text.includes('=== Tab: Tab1.1 ==='));
+      assert.ok(res.content[0].text.includes('First child'));
+      assert.ok(res.content[0].text.includes('=== Tab: Tab1.2 ==='));
+      assert.ok(res.content[0].text.includes('Second child'));
+      assert.ok(res.content[0].text.includes('=== Tab: Tab1.2.1 ==='));
+      assert.ok(res.content[0].text.includes('First grandchild'));
     });
 
     it('falls back to body for single-tab doc', async () => {

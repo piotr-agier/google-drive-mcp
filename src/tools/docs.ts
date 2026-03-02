@@ -38,6 +38,18 @@ function rgbColorToHex(color: any): string | null {
   return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
 }
 
+// Helper to recursively collect all tabs with their nesting level
+function collectAllTabsWithLevel(tabs: any[], level: number = 0): Array<{ tab: any; level: number }> {
+  const result: Array<{ tab: any; level: number }> = [];
+  for (const tab of tabs) {
+    result.push({ tab, level });
+    if (tab.childTabs && tab.childTabs.length > 0) {
+      result.push(...collectAllTabsWithLevel(tab.childTabs, level + 1));
+    }
+  }
+  return result;
+}
+
 // Execute batch update for Google Docs
 async function executeBatchUpdate(ctx: ToolContext, documentId: string, requests: any[]): Promise<any> {
   if (!requests || requests.length === 0) {
@@ -204,6 +216,8 @@ async function getParagraphRange(ctx: ToolContext, documentId: string, indexWith
     throw new Error(`Failed to find paragraph: ${error.message}`);
   }
 }
+
+
 
 // Pure helper – build text style update request
 function buildUpdateTextStyleRequest(
@@ -1330,12 +1344,17 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       let formattedContent = 'Document content with indices:\n\n';
       let totalLength = 0;
 
-      if (tabs && tabs.length > 1) {
-        // Multi-tab document
-        for (const tab of tabs) {
+      if (tabs && tabs.length) {
+        // Multi-tab document (including nested tabs)
+        const allTabs = collectAllTabsWithLevel(tabs);
+        const showTabTitles = allTabs.length > 1;
+        for (const { tab, level } of allTabs) {
           const title = tab.tabProperties?.title || 'Untitled';
+          const indent = '  '.repeat(level);
           const bodyContent = tab.documentTab?.body?.content;
-          formattedContent += `=== Tab: ${title} ===\n`;
+          if (showTabTitles) {
+            formattedContent += `${indent}=== Tab: ${title} ===\n`;
+          }
           if (bodyContent) {
             const segments = extractSegments(bodyContent);
             trackFonts(segments);
@@ -1345,15 +1364,6 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
             }
           }
           formattedContent += '\n';
-        }
-      } else if (tabs && tabs.length === 1) {
-        // Single-tab document via tabs API
-        const bodyContent = tabs[0].documentTab?.body?.content;
-        if (bodyContent) {
-          const segments = extractSegments(bodyContent);
-          trackFonts(segments);
-          formattedContent += formatSegments(segments);
-          totalLength = segments.length > 0 ? segments[segments.length - 1].endIndex : 0;
         }
       } else {
         // Fallback to legacy body content
@@ -1505,13 +1515,27 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         return result;
       }
 
+      // Helper to recursively find a tab by ID in the tab tree
+      function findTabById(tabs: any[], targetId: string): any | null {
+        for (const tab of tabs) {
+          if (tab.tabProperties?.tabId === targetId) {
+            return tab;
+          }
+          if (tab.childTabs && tab.childTabs.length > 0) {
+            const found = findTabById(tab.childTabs, targetId);
+            if (found) return found;
+          }
+        }
+        return null;
+      }
+
       let text = '';
       const tabs = (doc as any).tabs as any[] | undefined;
 
       if (tabs && tabs.length > 0) {
         if (a.tabId) {
-          // Find the specific tab
-          const tab = tabs.find((t: any) => t.tabProperties?.tabId === a.tabId);
+          // Find the specific tab (recursively through childTabs)
+          const tab = findTabById(tabs, a.tabId);
           if (!tab) {
             return errorResponse(`Tab with ID "${a.tabId}" not found. Use listDocumentTabs to see available tabs.`);
           }
@@ -1519,11 +1543,13 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           if (bodyContent) {
             text = extractText(bodyContent);
           }
-        } else if (tabs.length > 1) {
+        } else if (tabs.length > 1 || tabs[0]?.childTabs) {
           // Multi-tab: include all tabs with headers
-          for (const tab of tabs) {
+          const allTabs = collectAllTabsWithLevel(tabs);
+          for (const { tab, level } of allTabs) {
             const title = tab.tabProperties?.title || 'Untitled';
-            text += `=== Tab: ${title} ===\n`;
+            const indent = '  '.repeat(level);
+            text += `${indent}=== Tab: ${title} ===\n`;
             const bodyContent = tab.documentTab?.body?.content;
             if (bodyContent) {
               text += extractText(bodyContent);

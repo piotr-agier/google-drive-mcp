@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it, before, after, beforeEach } from 'node:test';
 import { setupTestServer, callTool, type TestContext } from '../helpers/setup-server.js';
 
+// Create reusable mock document structures for testing common document and tab configurations
 const mockDocs = {
   // Simple single-tab document
   singleTab: (content = 'Hello World\n') => ({

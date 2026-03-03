@@ -50,6 +50,20 @@ function collectAllTabsWithLevel(tabs: any[], level: number = 0): Array<{ tab: a
   return result;
 }
 
+// Helper to recursively find a tab by ID in the tab tree
+function findTabById(tabs: any[], targetId: string): any | null {
+  for (const tab of tabs) {
+    if (tab.tabProperties?.tabId === targetId) {
+      return tab;
+    }
+    if (tab.childTabs && tab.childTabs.length > 0) {
+      const found = findTabById(tab.childTabs, targetId);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 // Execute batch update for Google Docs
 async function executeBatchUpdate(ctx: ToolContext, documentId: string, requests: any[]): Promise<any> {
   if (!requests || requests.length === 0) {
@@ -1342,15 +1356,15 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       let formattedContent = 'Document content with indices:\n\n';
       let totalLength = 0;
 
-      if (tabs && tabs.length) {
-        // Multi-tab document (including nested tabs)
+      if (tabs && tabs.length > 0) {
         const allTabs = collectAllTabsWithLevel(tabs);
-        const showTabTitles = allTabs.length > 1;
+        const isMultiTab = allTabs.length > 1;
         for (const { tab, level } of allTabs) {
-          const title = tab.tabProperties?.title || 'Untitled';
-          const indent = '  '.repeat(level);
           const bodyContent = tab.documentTab?.body?.content;
-          if (showTabTitles) {
+          // Multi-tab: include all tabs with headers
+          if (isMultiTab) {
+            const title = tab.tabProperties?.title || 'Untitled';
+            const indent = '  '.repeat(level);
             formattedContent += `${indent}=== Tab: ${title} ===\n`;
           }
           if (bodyContent) {
@@ -1361,7 +1375,10 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
               totalLength += segments[segments.length - 1].endIndex;
             }
           }
-          formattedContent += '\n';
+          // Multi-tab: add new line between tabs
+          if (isMultiTab) {
+            formattedContent += '\n';
+          }
         }
       } else {
         // Fallback to legacy body content
@@ -1513,20 +1530,6 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         return result;
       }
 
-      // Helper to recursively find a tab by ID in the tab tree
-      function findTabById(tabs: any[], targetId: string): any | null {
-        for (const tab of tabs) {
-          if (tab.tabProperties?.tabId === targetId) {
-            return tab;
-          }
-          if (tab.childTabs && tab.childTabs.length > 0) {
-            const found = findTabById(tab.childTabs, targetId);
-            if (found) return found;
-          }
-        }
-        return null;
-      }
-
       let text = '';
       const tabs = (doc as any).tabs as any[] | undefined;
 
@@ -1541,24 +1544,24 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           if (bodyContent) {
             text = extractText(bodyContent);
           }
-        } else if (tabs.length > 1 || tabs[0]?.childTabs) {
-          // Multi-tab: include all tabs with headers
+        } else {
           const allTabs = collectAllTabsWithLevel(tabs);
+          const isMultiTab = allTabs.length > 1;
           for (const { tab, level } of allTabs) {
-            const title = tab.tabProperties?.title || 'Untitled';
-            const indent = '  '.repeat(level);
-            text += `${indent}=== Tab: ${title} ===\n`;
             const bodyContent = tab.documentTab?.body?.content;
+            // Multi-tab: include all tabs with headers
+            if (isMultiTab) {
+              const title = tab.tabProperties?.title || 'Untitled';
+              const indent = '  '.repeat(level);
+              text += `${indent}=== Tab: ${title} ===\n`;
+            }
             if (bodyContent) {
               text += extractText(bodyContent);
             }
-            text += '\n';
-          }
-        } else {
-          // Single tab via tabs API
-          const bodyContent = tabs[0].documentTab?.body?.content;
-          if (bodyContent) {
-            text = extractText(bodyContent);
+            // Multi-tab: add new line between tabs
+            if (isMultiTab) {
+              text += '\n';
+            }
           }
         }
       } else {

@@ -217,8 +217,6 @@ async function getParagraphRange(ctx: ToolContext, documentId: string, indexWith
   }
 }
 
-
-
 // Pure helper – build text style update request
 function buildUpdateTextStyleRequest(
   startIndex: number,

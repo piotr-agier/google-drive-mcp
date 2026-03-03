@@ -320,8 +320,6 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      // Print out res.content[0].text
-      console.log('Document content:\n', res.content[0].text);
 
       // Should include all tabs with proper hierarchy
       assert.ok(res.content[0].text.includes('=== Tab: Tab1 ==='));

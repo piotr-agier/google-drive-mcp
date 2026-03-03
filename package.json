@@ -57,6 +57,7 @@
         "express": "^5.1.0",
         "google-auth-library": "^9.15.0",
         "googleapis": "^144.0.0",
+        "jszip": "^3.10.1",
         "open": "^10.2.0",
         "pdf-lib": "^1.17.1",
         "punycode": "^2.3.1",

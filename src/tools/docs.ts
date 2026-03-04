@@ -420,6 +420,341 @@ async function uploadImageToDriveHelper(
 }
 
 // ---------------------------------------------------------------------------
+// Comment context extraction helpers
+// ---------------------------------------------------------------------------
+
+/** Context extracted for a single comment (keyed by Drive API comment ID) */
+interface CommentContext {
+  contextBefore?: string;
+  contextAfter?: string;
+  startIndex?: number;
+  endIndex?: number;
+}
+
+/** A segment of text with its Docs API startIndex */
+interface TextSegment {
+  text: string;
+  startIndex: number;
+}
+
+/** Result of building flat text from a Google Doc */
+interface FlatTextResult {
+  flatText: string;
+  offsetMap: number[];
+}
+
+// Guard against matching XML elements from distant/unrelated tables or paragraphs
+const MAX_ROW_XML_DISTANCE = 100_000;
+const MAX_PARAGRAPH_XML_DISTANCE = 50_000;
+const MAX_PARAGRAPH_CONTEXT_LENGTH = 300;
+
+/**
+ * Build flat text from a Google Doc, tracking each character's Docs API startIndex.
+ * Handles paragraphs, tables (including nested), and multi-tab docs.
+ */
+function buildFlatTextFromDoc(docData: any): FlatTextResult {
+  function extractSegments(bodyContent: any[]): TextSegment[] {
+    const segs: TextSegment[] = [];
+    function fromElements(elements: any[]) {
+      for (const el of elements) {
+        if (el.textRun?.content && el.startIndex != null) {
+          segs.push({ text: el.textRun.content, startIndex: el.startIndex });
+        }
+      }
+    }
+    for (const el of bodyContent) {
+      if (el.paragraph?.elements) {
+        fromElements(el.paragraph.elements);
+      } else if (el.table) {
+        for (const row of el.table.tableRows || []) {
+          for (const cell of row.tableCells || []) {
+            for (const cc of cell.content || []) {
+              if (cc.paragraph?.elements) fromElements(cc.paragraph.elements);
+              if (cc.table) {
+                const nested = extractSegments([cc]);
+                segs.push(...nested);
+              }
+            }
+          }
+        }
+      }
+    }
+    return segs;
+  }
+
+  const allSegments: TextSegment[] = [];
+  const tabs = (docData as any).tabs as any[] | undefined;
+  if (tabs && tabs.length > 0) {
+    for (const tab of tabs) {
+      const bc = tab.documentTab?.body?.content;
+      if (bc) allSegments.push(...extractSegments(bc));
+    }
+  } else if (docData.body?.content) {
+    allSegments.push(...extractSegments(docData.body.content));
+  }
+
+  let flatText = '';
+  const offsetMap: number[] = [];
+  for (const seg of allSegments) {
+    for (let i = 0; i < seg.text.length; i++) {
+      offsetMap.push(seg.startIndex + i);
+      flatText += seg.text[i];
+    }
+  }
+
+  return { flatText, offsetMap };
+}
+
+/** Extract cell texts from a DOCX table row XML string */
+function extractRowCells(rowXml: string): string[] {
+  const cells: string[] = [];
+  let searchFrom = 0;
+  while (true) {
+    const tcStart1 = rowXml.indexOf('<w:tc>', searchFrom);
+    const tcStart2 = rowXml.indexOf('<w:tc ', searchFrom);
+    const tcStart = (tcStart1 === -1 && tcStart2 === -1) ? -1 :
+      (tcStart1 === -1) ? tcStart2 : (tcStart2 === -1) ? tcStart1 : Math.min(tcStart1, tcStart2);
+    if (tcStart === -1) break;
+    const tcEnd = rowXml.indexOf('</w:tc>', tcStart);
+    if (tcEnd === -1) break;
+    const cellXml = rowXml.substring(tcStart, tcEnd);
+    const tTexts: string[] = [];
+    const tRegex = /<w:t[^>]*>([^<]*)<\/w:t>/g;
+    let t: RegExpExecArray | null;
+    while ((t = tRegex.exec(cellXml)) !== null) tTexts.push(t[1]);
+    if (tTexts.length > 0) cells.push(tTexts.join(''));
+    searchFrom = tcEnd + 7;
+  }
+  return cells;
+}
+
+/** DOCX comment info parsed from word/comments.xml */
+interface DocxComment {
+  author: string;
+  date: string;
+  content: string;
+}
+
+/** Context extracted from DOCX comment ranges in document.xml */
+interface DocxContextResult {
+  docxComments: Map<number, DocxComment>;
+  contextsBefore: Map<number, string>;
+  contextsAfter: Map<number, string>;
+  rowCells: Map<number, string[]>;
+}
+
+/**
+ * Parse a DOCX export to extract comment positions and surrounding context.
+ * Returns DOCX comment metadata and context maps keyed by DOCX comment ID.
+ */
+async function resolveContextFromDocx(docxData: ArrayBuffer): Promise<DocxContextResult | null> {
+  const zip = await JSZip.loadAsync(docxData);
+  const commentsXml = await zip.file('word/comments.xml')?.async('string');
+  const documentXml = await zip.file('word/document.xml')?.async('string');
+
+  if (!commentsXml || !documentXml) return null;
+
+  // ── Parse word/comments.xml ──
+  const docxComments = new Map<number, DocxComment>();
+  const commentTagRegex = /<w:comment\s+[^>]*?w:id="(\d+)"[^>]*>/g;
+  let cMatch: RegExpExecArray | null;
+  while ((cMatch = commentTagRegex.exec(commentsXml)) !== null) {
+    const id = parseInt(cMatch[1]);
+    const tagStr = cMatch[0];
+    const authorMatch = tagStr.match(/w:author="([^"]*)"/);
+    const dateMatch = tagStr.match(/w:date="([^"]*)"/);
+    const author = authorMatch ? authorMatch[1] : '';
+    const date = dateMatch ? dateMatch[1] : '';
+
+    const endPos = commentsXml.indexOf('</w:comment>', cMatch.index);
+    if (endPos !== -1) {
+      const body = commentsXml.substring(cMatch.index, endPos);
+      const texts: string[] = [];
+      const tRegex = /<w:t[^>]*>([^<]*)<\/w:t>/g;
+      let tMatch: RegExpExecArray | null;
+      while ((tMatch = tRegex.exec(body)) !== null) {
+        texts.push(tMatch[1]);
+      }
+      docxComments.set(id, { author, date, content: texts.join('') });
+    }
+  }
+
+  // ── Parse document.xml for comment range context ──
+  const contextsBefore = new Map<number, string>();
+  const contextsAfter = new Map<number, string>();
+  const rowCells = new Map<number, string[]>();
+
+  const rangeStartRegex = /<w:commentRangeStart\s+w:id="(\d+)"\/>/g;
+  let rMatch: RegExpExecArray | null;
+  while ((rMatch = rangeStartRegex.exec(documentXml)) !== null) {
+    const docxId = parseInt(rMatch[1]);
+    const startPos = rMatch.index;
+
+    // Try table row context first (most comments in table-based docs)
+    const trStart = documentXml.lastIndexOf('<w:tr>', startPos);
+    const trEnd = documentXml.indexOf('</w:tr>', startPos);
+    if (trStart !== -1 && trEnd !== -1 && (startPos - trStart) < MAX_ROW_XML_DISTANCE) {
+      const rowXml = documentXml.substring(trStart, trEnd);
+
+      const cellTexts = extractRowCells(rowXml);
+      // Find which cell contains the comment marker
+      const commentMarker = `commentRangeStart w:id="${docxId}"`;
+      let commentCellIdx = -1;
+      let cellSearchFrom = 0;
+      for (let ci = 0; ci < cellTexts.length; ci++) {
+        // Walk through <w:tc> tags in order to match cell index with extractRowCells output
+        const tcStart1 = rowXml.indexOf('<w:tc>', cellSearchFrom);
+        const tcStart2 = rowXml.indexOf('<w:tc ', cellSearchFrom);
+        const tcStart = (tcStart1 === -1 && tcStart2 === -1) ? -1 :
+          (tcStart1 === -1) ? tcStart2 : (tcStart2 === -1) ? tcStart1 : Math.min(tcStart1, tcStart2);
+        if (tcStart === -1) break;
+        const tcEnd = rowXml.indexOf('</w:tc>', tcStart);
+        if (tcEnd === -1) break;
+        const cellXml = rowXml.substring(tcStart, tcEnd);
+        if (cellXml.includes(commentMarker)) {
+          commentCellIdx = ci;
+        }
+        cellSearchFrom = tcEnd + 7;
+      }
+
+      if (cellTexts.length > 0) {
+        const allTexts = cellTexts;
+        rowCells.set(docxId, allTexts);
+
+        if (commentCellIdx !== -1) {
+          const before = cellTexts.slice(0, commentCellIdx);
+          let after = cellTexts.slice(commentCellIdx + 1);
+
+          // If comment is in the last cell, grab the NEXT row for "after" context
+          if (commentCellIdx === cellTexts.length - 1) {
+            const nextTrStart = documentXml.indexOf('<w:tr>', trEnd);
+            const nextTrEnd = nextTrStart !== -1 ? documentXml.indexOf('</w:tr>', nextTrStart) : -1;
+            if (nextTrStart !== -1 && nextTrEnd !== -1) {
+              const nextRowXml = documentXml.substring(nextTrStart, nextTrEnd);
+              after = extractRowCells(nextRowXml);
+            }
+          }
+
+          const commentText = cellTexts[commentCellIdx];
+          contextsBefore.set(docxId, [...before, commentText].join(' | '));
+          contextsAfter.set(docxId, [commentText, ...after].join(' | '));
+        } else {
+          contextsBefore.set(docxId, allTexts.join(' | '));
+          contextsAfter.set(docxId, '');
+        }
+        continue;
+      }
+    }
+
+    // Paragraph fallback for non-table docs
+    const pStart = documentXml.lastIndexOf('<w:p ', startPos);
+    const pEnd = documentXml.indexOf('</w:p>', startPos);
+    if (pStart !== -1 && pEnd !== -1 && (startPos - pStart) < MAX_PARAGRAPH_XML_DISTANCE) {
+      const pXml = documentXml.substring(pStart, pEnd);
+      const pTexts: string[] = [];
+      const tRegex = /<w:t[^>]*>([^<]*)<\/w:t>/g;
+      let t: RegExpExecArray | null;
+      while ((t = tRegex.exec(pXml)) !== null) pTexts.push(t[1]);
+      const pText = pTexts.join('').trim();
+      if (pText) {
+        contextsBefore.set(docxId, pText.length > MAX_PARAGRAPH_CONTEXT_LENGTH
+          ? pText.substring(0, MAX_PARAGRAPH_CONTEXT_LENGTH) + '...' : pText);
+        contextsAfter.set(docxId, '');
+      }
+    }
+  }
+
+  return { docxComments, contextsBefore, contextsAfter, rowCells };
+}
+
+/**
+ * Match Drive API comments to DOCX comments by (author, createdTime).
+ * DOCX timestamps omit milliseconds, so we strip them from the API date.
+ * Populates the contextMap with matched context. Also resolves Docs API
+ * character offsets when flatText/offsetMap are available.
+ */
+function matchDocxToDriveComments(
+  driveComments: any[],
+  docxResult: DocxContextResult,
+  contextMap: Map<string, CommentContext>,
+  flatText: string,
+  offsetMap: number[],
+): void {
+  const { docxComments, contextsBefore, contextsAfter } = docxResult;
+
+  for (const comment of driveComments) {
+    if (contextMap.has(comment.id)) continue; // already has Tier 1 context
+    if (comment.resolved) continue; // resolved comments not in DOCX
+
+    const apiAuthor = comment.author?.displayName || '';
+    const apiDate = (comment.createdTime || '').replace(/\.\d+Z$/, 'Z');
+
+    // Find matching DOCX comment
+    let matchedDocxId: number | null = null;
+    for (const [docxId, docxComment] of docxComments) {
+      if (docxComment.author === apiAuthor && docxComment.date === apiDate) {
+        matchedDocxId = docxId;
+        break;
+      }
+    }
+
+    if (matchedDocxId !== null) {
+      const ctxBefore = contextsBefore.get(matchedDocxId) || '';
+      const ctxAfter = contextsAfter.get(matchedDocxId) || '';
+      if (ctxBefore || ctxAfter) {
+        const entry: CommentContext = {
+          contextBefore: ctxBefore,
+          contextAfter: ctxAfter,
+        };
+
+        // Find Docs API character index using row context in flatText
+        const quoted = comment.quotedFileContent?.value;
+        if (quoted && flatText && offsetMap.length > 0 && ctxBefore) {
+          const beforePattern = ctxBefore.split(' | ').join('\n');
+
+          const findAll = (pattern: string): number[] => {
+            const results: number[] = [];
+            let from = 0;
+            while (true) {
+              const idx = flatText.indexOf(pattern, from);
+              if (idx === -1) break;
+              results.push(idx);
+              from = idx + 1;
+            }
+            return results;
+          };
+
+          let matches = findAll(beforePattern);
+
+          if (matches.length !== 1 && ctxAfter) {
+            const afterCells = ctxAfter.split(' | ');
+            const afterWithoutAnchor = afterCells.slice(1).join('\n');
+            if (afterWithoutAnchor) {
+              const fullPattern = beforePattern + '\n' + afterWithoutAnchor;
+              matches = findAll(fullPattern);
+            }
+          }
+
+          if (matches.length === 1) {
+            const patternStart = matches[0];
+            const qIdx = patternStart + beforePattern.length - quoted.length;
+            const endIdx = qIdx + quoted.length - 1;
+            if (endIdx < offsetMap.length && flatText.substring(qIdx, qIdx + quoted.length) === quoted) {
+              entry.startIndex = offsetMap[qIdx];
+              entry.endIndex = offsetMap[endIdx] + 1;
+            }
+          }
+        }
+
+        contextMap.set(comment.id, entry);
+      }
+      // Remove from map so duplicate timestamps (rare) don't double-match
+      docxComments.delete(matchedDocxId);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Zod schemas
 // ---------------------------------------------------------------------------
 
@@ -1916,10 +2251,9 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
       const a = validation.data;
 
-      // Use Drive API v3 for comments (include anchor for position data)
       const response = await ctx.getDrive().comments.list({
         fileId: a.documentId,
-        fields: 'comments(id,content,quotedFileContent,anchor,author,createdTime,resolved,replies(id,content,author,createdTime)),nextPageToken',
+        fields: 'comments(id,content,quotedFileContent,author,createdTime,resolved,replies(id,content,author,createdTime)),nextPageToken',
         pageSize: a.pageSize || 100,
         pageToken: a.pageToken,
         includeDeleted: a.includeDeleted || false,
@@ -1936,427 +2270,141 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
 
       // ── Comment context extraction (two-tiered) ──
-      // The Drive API anchor field returns opaque kix.xxx IDs for Google Docs,
-      // so we can't get comment position from the API alone.
-      //
       // Tier 1 (fast): Read doc via Docs API, find each comment's quotedFileContent
       //   in the body text. If there's exactly one match, extract surrounding context.
-      //   No extra API calls beyond what we already need.
-      //
-      // Tier 2 (fallback): For ambiguous comments (quotedFileContent appears multiple
-      //   times), export as DOCX and parse commentRangeStart/End XML markers.
-      //   Match to Drive API comments by (author, createdTime).
-      //   Only triggered when needed. Requires jszip dependency.
-
-      // Shared state: doc text and offset map from Tier 1, used by Tier 2 for index lookups
+      // Tier 2 (fallback): For ambiguous or failed Tier 1 comments, export as DOCX
+      //   and parse commentRangeStart/End XML markers. Match by (author, createdTime).
+      const contextMap = new Map<string, CommentContext>();
       let flatText = '';
       let offsetMap: number[] = [];
 
       // ── Tier 1: Docs API text matching ──
+      // Check MIME type upfront — only Google Docs support the Docs API
       let needsDocxFallback = false;
+      let isGoogleDoc = false;
       try {
-        const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-        const docResponse = await docs.documents.get({
-          documentId: a.documentId,
-          includeTabsContent: true,
+        const fileInfo = await ctx.getDrive().files.get({
+          fileId: a.documentId,
+          fields: 'mimeType',
+          supportsAllDrives: true,
         });
-        const docData = docResponse.data;
+        isGoogleDoc = fileInfo.data.mimeType === 'application/vnd.google-apps.document';
+      } catch (err) {
+        ctx.log('Failed to check file MIME type:', err);
+      }
 
-        // Build flat text from doc body, tracking each character's source offset.
-        // Works for paragraphs, tables (including nested), and multi-tab docs.
-        interface TextSegment { text: string; startIndex: number; }
-        function extractSegments(bodyContent: any[]): TextSegment[] {
-          const segs: TextSegment[] = [];
-          function fromElements(elements: any[]) {
-            for (const el of elements) {
-              if (el.textRun?.content && el.startIndex != null) {
-                segs.push({ text: el.textRun.content, startIndex: el.startIndex });
-              }
+      if (isGoogleDoc) {
+        try {
+          const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+          const docResponse = await docs.documents.get({
+            documentId: a.documentId,
+            includeTabsContent: true,
+          });
+
+          const result = buildFlatTextFromDoc(docResponse.data);
+          flatText = result.flatText;
+          offsetMap = result.offsetMap;
+
+          // Get surrounding context for a match at a flatText position
+          function getContext(matchStart: number, matchLen: number): { before: string; after: string } {
+            const matchText = flatText.substring(matchStart, matchStart + matchLen);
+            const beforeStart = Math.max(0, matchStart - 120);
+            let before = flatText.substring(beforeStart, matchStart).trim();
+            if (beforeStart > 0) before = '...' + before;
+            before = before + matchText;
+            const afterEnd = Math.min(flatText.length, matchStart + matchLen + 120);
+            let after = flatText.substring(matchStart + matchLen, afterEnd).trim();
+            if (afterEnd < flatText.length) after = after + '...';
+            after = matchText + after;
+            return { before, after };
+          }
+
+          // For each comment, find all occurrences of its quotedFileContent in the doc
+          const ambiguousComments: any[] = [];
+          for (const comment of comments) {
+            const quoted = comment.quotedFileContent?.value;
+            if (!quoted) continue;
+
+            const positions: number[] = [];
+            let searchFrom = 0;
+            while (true) {
+              const idx = flatText.indexOf(quoted, searchFrom);
+              if (idx === -1) break;
+              positions.push(idx);
+              searchFrom = idx + 1;
             }
-          }
-          for (const el of bodyContent) {
-            if (el.paragraph?.elements) {
-              fromElements(el.paragraph.elements);
-            } else if (el.table) {
-              for (const row of el.table.tableRows || []) {
-                for (const cell of row.tableCells || []) {
-                  for (const cc of cell.content || []) {
-                    if (cc.paragraph?.elements) fromElements(cc.paragraph.elements);
-                    // Recurse into nested tables
-                    if (cc.table) {
-                      const nested = extractSegments([cc]);
-                      segs.push(...nested);
-                    }
-                  }
-                }
+
+            if (positions.length === 1) {
+              const surrounding = getContext(positions[0], quoted.length);
+              const entry: CommentContext = {
+                contextBefore: surrounding.before,
+                contextAfter: surrounding.after,
+              };
+              // Store Docs API character offsets with bounds check
+              const endIdx = positions[0] + quoted.length - 1;
+              if (endIdx < offsetMap.length) {
+                entry.startIndex = offsetMap[positions[0]];
+                entry.endIndex = offsetMap[endIdx] + 1;
               }
+              if (comment.id) contextMap.set(comment.id, entry);
+            } else if (positions.length > 1) {
+              // Ambiguous — need DOCX fallback to disambiguate
+              ambiguousComments.push(comment);
             }
-          }
-          return segs;
-        }
-
-        // Collect segments from all tabs into a combined flat text
-        const allSegments: TextSegment[] = [];
-        const tabs = (docData as any).tabs as any[] | undefined;
-        if (tabs && tabs.length > 0) {
-          for (const tab of tabs) {
-            const bc = tab.documentTab?.body?.content;
-            if (bc) allSegments.push(...extractSegments(bc));
-          }
-        } else if (docData.body?.content) {
-          allSegments.push(...extractSegments(docData.body.content));
-        }
-
-        // Build flat text string with offset map (each char → Docs API startIndex)
-        flatText = '';
-        offsetMap = [];
-        for (const seg of allSegments) {
-          for (let i = 0; i < seg.text.length; i++) {
-            offsetMap.push(seg.startIndex + i);
-            flatText += seg.text[i];
-          }
-        }
-
-        // Helper: get surrounding context (before and after) for a match at flatText position.
-        // Returns { before, after } strings. "before" ends with the anchored text,
-        // "after" starts with the anchored text, so the user can verify the match.
-        function getContext(matchStart: number, matchLen: number): { before: string; after: string } {
-          const matchText = flatText.substring(matchStart, matchStart + matchLen);
-
-          // Look backwards up to 120 chars, ending with the anchored text
-          const beforeStart = Math.max(0, matchStart - 120);
-          let before = flatText.substring(beforeStart, matchStart).trim();
-          if (beforeStart > 0) before = '...' + before;
-          before = before + matchText;
-
-          // Look forwards up to 120 chars, starting with the anchored text
-          const afterEnd = Math.min(flatText.length, matchStart + matchLen + 120);
-          let after = flatText.substring(matchStart + matchLen, afterEnd).trim();
-          if (afterEnd < flatText.length) after = after + '...';
-          after = matchText + after;
-
-          return { before, after };
-        }
-
-        // For each comment, find all occurrences of its quotedFileContent in the doc
-        const ambiguousComments: any[] = [];
-        for (const comment of comments) {
-          const quoted = comment.quotedFileContent?.value;
-          if (!quoted) continue;
-
-          // Find all occurrences
-          const positions: number[] = [];
-          let searchFrom = 0;
-          while (true) {
-            const idx = flatText.indexOf(quoted, searchFrom);
-            if (idx === -1) break;
-            positions.push(idx);
-            searchFrom = idx + 1;
+            // positions.length === 0: quoted text not found (e.g., doc was edited since comment)
           }
 
-          if (positions.length === 1) {
-            // Unique match — we know exactly where this comment is
-            const ctx = getContext(positions[0], quoted.length);
-            (comment as any)._contextBefore = ctx.before;
-            (comment as any)._contextAfter = ctx.after;
-            (comment as any)._contextSource = 'tier1'; // Mark source for index reliability
-            // Store Docs API character offsets (1-based, as used by Docs API)
-            (comment as any)._startIndex = offsetMap[positions[0]];
-            (comment as any)._endIndex = offsetMap[positions[0] + quoted.length - 1] + 1;
-          } else if (positions.length > 1) {
-            // Ambiguous — need HTML fallback to disambiguate
-            ambiguousComments.push(comment);
-          }
-          // positions.length === 0: quoted text not found (e.g., doc was edited since comment)
+          needsDocxFallback = ambiguousComments.length > 0;
+        } catch (err) {
+          ctx.log('Tier 1 context extraction failed:', err);
+          needsDocxFallback = true;
         }
-
-        needsDocxFallback = ambiguousComments.length > 0;
-      } catch {
-        // Docs API failed (might not be a Google Doc — could be Sheets, PDF, etc.)
-        // Try DOCX fallback for all comments
-        needsDocxFallback = true;
       }
 
       // ── Tier 2: DOCX export fallback for ambiguous comments ──
-      // DOCX files contain explicit commentRangeStart/commentRangeEnd XML markers
-      // at exact comment positions, plus word/comments.xml with author+date+content.
-      // We match DOCX comments to Drive API comments by (author, createdTime) which
-      // is nearly always unique — far more reliable than the old HTML content-matching.
-      // Note: resolved comments are excluded from DOCX export by Google Docs.
       if (needsDocxFallback) {
-        const unresolved = comments.filter((c: any) => !c._contextBefore && !c.resolved);
+        const unresolved = comments.filter((c: any) => !contextMap.has(c.id) && !c.resolved);
 
         if (unresolved.length > 0) {
           try {
-            // Export document as DOCX (ZIP containing XML files)
             const docxResponse = await ctx.getDrive().files.export({
               fileId: a.documentId,
               mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
             }, { responseType: 'arraybuffer' });
 
-            const zip = await JSZip.loadAsync(docxResponse.data as ArrayBuffer);
-            const commentsXml = await zip.file('word/comments.xml')?.async('string');
-            const documentXml = await zip.file('word/document.xml')?.async('string');
-
-            if (commentsXml && documentXml) {
-              // ── Step 1: Parse word/comments.xml ──
-              // Extract DOCX comment id → { author, date, content } for matching to Drive API.
-              const docxComments = new Map<number, { author: string; date: string; content: string }>();
-              const commentTagRegex = /<w:comment\s+[^>]*?w:id="(\d+)"[^>]*>/g;
-              let cMatch: RegExpExecArray | null;
-              while ((cMatch = commentTagRegex.exec(commentsXml)) !== null) {
-                const id = parseInt(cMatch[1]);
-                const tagStr = cMatch[0];
-                const authorMatch = tagStr.match(/w:author="([^"]*)"/);
-                const dateMatch = tagStr.match(/w:date="([^"]*)"/);
-                const author = authorMatch ? authorMatch[1] : '';
-                const date = dateMatch ? dateMatch[1] : '';
-
-                // Extract text content from <w:t> elements within this comment
-                const endPos = commentsXml.indexOf('</w:comment>', cMatch.index);
-                if (endPos !== -1) {
-                  const body = commentsXml.substring(cMatch.index, endPos);
-                  const texts: string[] = [];
-                  const tRegex = /<w:t[^>]*>([^<]*)<\/w:t>/g;
-                  let tMatch: RegExpExecArray | null;
-                  while ((tMatch = tRegex.exec(body)) !== null) {
-                    texts.push(tMatch[1]);
-                  }
-                  docxComments.set(id, { author, date, content: texts.join('') });
-                }
-              }
-
-              // ── Step 2: Parse document.xml for comment range context ──
-              // Find commentRangeStart markers and extract the containing table row's cells.
-              // "Before" = cells before the commented cell, "After" = cells after it.
-              // If the comment is in the last cell (common), grab the next row for "after" context.
-              // Also store the ordered cell texts for row-sequence index matching in Step 3.
-              const docxContextsBefore = new Map<number, string>();
-              const docxContextsAfter = new Map<number, string>();
-              // Ordered cell texts for the full row (used for flatText index matching)
-              const docxRowCells = new Map<number, string[]>();
-
-              // Helper: extract cell texts from a table row XML string
-              function extractRowCells(rowXml: string): string[] {
-                const cells: string[] = [];
-                let searchFrom = 0;
-                while (true) {
-                  const tcStart1 = rowXml.indexOf('<w:tc>', searchFrom);
-                  const tcStart2 = rowXml.indexOf('<w:tc ', searchFrom);
-                  const tcStart = (tcStart1 === -1 && tcStart2 === -1) ? -1 :
-                    (tcStart1 === -1) ? tcStart2 : (tcStart2 === -1) ? tcStart1 : Math.min(tcStart1, tcStart2);
-                  if (tcStart === -1) break;
-                  const tcEnd = rowXml.indexOf('</w:tc>', tcStart);
-                  if (tcEnd === -1) break;
-                  const cellXml = rowXml.substring(tcStart, tcEnd);
-                  const tTexts: string[] = [];
-                  const tRegex = /<w:t[^>]*>([^<]*)<\/w:t>/g;
-                  let t: RegExpExecArray | null;
-                  while ((t = tRegex.exec(cellXml)) !== null) tTexts.push(t[1]);
-                  if (tTexts.length > 0) cells.push(tTexts.join(''));
-                  searchFrom = tcEnd + 7;
-                }
-                return cells;
-              }
-
-              const rangeStartRegex = /<w:commentRangeStart\s+w:id="(\d+)"\/>/g;
-              let rMatch: RegExpExecArray | null;
-              while ((rMatch = rangeStartRegex.exec(documentXml)) !== null) {
-                const docxId = parseInt(rMatch[1]);
-                const startPos = rMatch.index;
-
-                // Try table row context first (most comments in table-based docs)
-                const trStart = documentXml.lastIndexOf('<w:tr>', startPos);
-                const trEnd = documentXml.indexOf('</w:tr>', startPos);
-                if (trStart !== -1 && trEnd !== -1 && (startPos - trStart) < 100000) {
-                  const rowXml = documentXml.substring(trStart, trEnd);
-
-                  // Find which cell contains the comment
-                  const cells: { text: string; containsComment: boolean }[] = [];
-                  let cellSearchFrom = 0;
-                  while (true) {
-                    const tcStart1 = rowXml.indexOf('<w:tc>', cellSearchFrom);
-                    const tcStart2 = rowXml.indexOf('<w:tc ', cellSearchFrom);
-                    const tcStart = (tcStart1 === -1 && tcStart2 === -1) ? -1 :
-                      (tcStart1 === -1) ? tcStart2 : (tcStart2 === -1) ? tcStart1 : Math.min(tcStart1, tcStart2);
-                    if (tcStart === -1) break;
-                    const tcEnd = rowXml.indexOf('</w:tc>', tcStart);
-                    if (tcEnd === -1) break;
-                    const cellXml = rowXml.substring(tcStart, tcEnd);
-                    const tTexts: string[] = [];
-                    const tRegex2 = /<w:t[^>]*>([^<]*)<\/w:t>/g;
-                    let t2: RegExpExecArray | null;
-                    while ((t2 = tRegex2.exec(cellXml)) !== null) tTexts.push(t2[1]);
-                    if (tTexts.length > 0) {
-                      const hasComment = cellXml.includes(`commentRangeStart w:id="${docxId}"`);
-                      cells.push({ text: tTexts.join(''), containsComment: hasComment });
-                    }
-                    cellSearchFrom = tcEnd + 7;
-                  }
-
-                  if (cells.length > 0) {
-                    const commentCellIdx = cells.findIndex(c => c.containsComment);
-                    const allTexts = cells.map(c => c.text);
-                    docxRowCells.set(docxId, allTexts);
-
-                    if (commentCellIdx !== -1) {
-                      const before = cells.slice(0, commentCellIdx).map(c => c.text);
-                      let after = cells.slice(commentCellIdx + 1).map(c => c.text);
-
-                      // If comment is in the last cell, grab the NEXT row for "after" context
-                      if (commentCellIdx === cells.length - 1) {
-                        const nextTrStart = documentXml.indexOf('<w:tr>', trEnd);
-                        const nextTrEnd = nextTrStart !== -1 ? documentXml.indexOf('</w:tr>', nextTrStart) : -1;
-                        if (nextTrStart !== -1 && nextTrEnd !== -1) {
-                          const nextRowXml = documentXml.substring(nextTrStart, nextTrEnd);
-                          after = extractRowCells(nextRowXml);
-                        }
-                      }
-
-                      // Include the commented cell text at the end of "before" and start of "after"
-                      // so the user can visually verify the match is on the right row.
-                      const commentText = cells[commentCellIdx].text;
-                      docxContextsBefore.set(docxId, [...before, commentText].join(' | '));
-                      docxContextsAfter.set(docxId, [commentText, ...after].join(' | '));
-                    } else {
-                      docxContextsBefore.set(docxId, allTexts.join(' | '));
-                      docxContextsAfter.set(docxId, '');
-                    }
-                    continue;
-                  }
-                }
-
-                // Paragraph fallback for non-table docs
-                const pStart = documentXml.lastIndexOf('<w:p ', startPos);
-                const pEnd = documentXml.indexOf('</w:p>', startPos);
-                if (pStart !== -1 && pEnd !== -1 && (startPos - pStart) < 50000) {
-                  const pXml = documentXml.substring(pStart, pEnd);
-                  const pTexts: string[] = [];
-                  const tRegex3 = /<w:t[^>]*>([^<]*)<\/w:t>/g;
-                  let t3: RegExpExecArray | null;
-                  while ((t3 = tRegex3.exec(pXml)) !== null) pTexts.push(t3[1]);
-                  const pText = pTexts.join('').trim();
-                  if (pText) {
-                    docxContextsBefore.set(docxId, pText.length > 300 ? pText.substring(0, 300) + '...' : pText);
-                    docxContextsAfter.set(docxId, '');
-                  }
-                }
-              }
-
-              // ── Step 3: Match Drive API comments → DOCX comments by (author, date) ──
-              // The Drive API createdTime has milliseconds (e.g., "2026-03-03T18:38:53.000Z")
-              // while DOCX w:date omits them (e.g., "2026-03-03T18:38:53Z").
-              // Stripping milliseconds from the API date gives us a reliable match key.
-              for (const comment of comments) {
-                if ((comment as any)._contextBefore) continue; // already has Tier 1 context
-                if (comment.resolved) continue; // resolved comments not in DOCX
-
-                const apiAuthor = comment.author?.displayName || '';
-                const apiDate = (comment.createdTime || '').replace(/\.\d+Z$/, 'Z');
-
-                // Find matching DOCX comment
-                let matchedDocxId: number | null = null;
-                for (const [docxId, docxComment] of docxComments) {
-                  if (docxComment.author === apiAuthor && docxComment.date === apiDate) {
-                    matchedDocxId = docxId;
-                    break;
-                  }
-                }
-
-                if (matchedDocxId !== null) {
-                  const ctxBefore = docxContextsBefore.get(matchedDocxId) || '';
-                  const ctxAfter = docxContextsAfter.get(matchedDocxId) || '';
-                  if (ctxBefore || ctxAfter) {
-                    (comment as any)._contextBefore = ctxBefore;
-                    (comment as any)._contextAfter = ctxAfter;
-                    (comment as any)._contextSource = 'tier2-docx';
-
-                    // Find Docs API character index using context before/after.
-                    // In Docs API flatText, table cells appear separated by \n.
-                    // Strategy: search combined flatText for the before pattern (which ends
-                    // with the anchored text). If ambiguous, extend with after pattern.
-                    // Multi-tab docs naturally disambiguate since the same row in different
-                    // tabs will have different surrounding rows.
-                    const quoted = comment.quotedFileContent?.value;
-                    if (quoted && flatText && offsetMap.length > 0 && ctxBefore) {
-                      const beforePattern = ctxBefore.split(' | ').join('\n');
-
-                      // Helper: find all occurrences of a pattern in flatText
-                      const findAll = (pattern: string): number[] => {
-                        const results: number[] = [];
-                        let from = 0;
-                        while (true) {
-                          const idx = flatText.indexOf(pattern, from);
-                          if (idx === -1) break;
-                          results.push(idx);
-                          from = idx + 1;
-                        }
-                        return results;
-                      };
-
-                      let matches = findAll(beforePattern);
-
-                      // If before-only is ambiguous, extend with after context.
-                      // ctxAfter starts with the anchored text (same as end of ctxBefore),
-                      // so strip it to avoid duplication.
-                      if (matches.length !== 1 && ctxAfter) {
-                        const afterCells = ctxAfter.split(' | ');
-                        const afterWithoutAnchor = afterCells.slice(1).join('\n');
-                        if (afterWithoutAnchor) {
-                          const fullPattern = beforePattern + '\n' + afterWithoutAnchor;
-                          matches = findAll(fullPattern);
-                        }
-                      }
-
-                      if (matches.length === 1) {
-                        const patternStart = matches[0];
-                        const qIdx = patternStart + beforePattern.length - quoted.length;
-                        if (flatText.substring(qIdx, qIdx + quoted.length) === quoted) {
-                          (comment as any)._startIndex = offsetMap[qIdx];
-                          (comment as any)._endIndex = offsetMap[qIdx + quoted.length - 1] + 1;
-                        }
-                      }
-                    }
-                  }
-                  // Remove from map so duplicate timestamps (rare) don't double-match
-                  docxComments.delete(matchedDocxId);
-                }
-              }
+            const docxResult = await resolveContextFromDocx(docxResponse.data as ArrayBuffer);
+            if (docxResult) {
+              matchDocxToDriveComments(comments, docxResult, contextMap, flatText, offsetMap);
             }
-          } catch {
-            // DOCX export failed — ambiguous comments won't get context
+          } catch (err) {
+            ctx.log('Tier 2 DOCX context extraction failed:', err);
           }
         }
       }
 
       // ── Format comments for display ──
-      // Each comment shows: number, author, date, status, position context, content,
-      // full reply chain, and comment ID.
       const formattedComments = comments.map((comment: any, index: number) => {
         const status = comment.resolved ? ' [RESOLVED]' : '';
         const author = comment.author?.displayName || 'Unknown';
         const date = comment.createdTime ? new Date(comment.createdTime).toLocaleDateString() : 'Unknown date';
         const quotedText = comment.quotedFileContent?.value;
+        const commentCtx = contextMap.get(comment.id);
 
-        // ── Position info: anchored text + surrounding context ──
-        // _contextBefore/_contextAfter come from Tier 1 (Docs API) or Tier 2 (DOCX export).
-        // _startIndex/_endIndex are Docs API character offsets (Tier 1 always, Tier 2 when unambiguous).
         let positionInfo = '';
-        const hasContext = comment._contextBefore || comment._contextAfter;
-        const indexStr = comment._startIndex != null ? ` [chars ${comment._startIndex}-${comment._endIndex}]` : '';
+        const indexStr = commentCtx?.startIndex != null
+          ? ` [chars ${commentCtx.startIndex}-${commentCtx.endIndex}]` : '';
 
         if (quotedText) {
           const snippet = quotedText.length > 100 ? quotedText.substring(0, 100) + '...' : quotedText;
           positionInfo = `\n   Anchored to: "${snippet}"${indexStr}`;
         }
-        if (hasContext) {
-          if (comment._contextBefore) positionInfo += `\n   Context before: "${comment._contextBefore}"`;
-          if (comment._contextAfter) positionInfo += `\n   Context after: "${comment._contextAfter}"`;
+        if (commentCtx) {
+          if (commentCtx.contextBefore) positionInfo += `\n   Context before: "${commentCtx.contextBefore}"`;
+          if (commentCtx.contextAfter) positionInfo += `\n   Context after: "${commentCtx.contextAfter}"`;
         }
 
         let result = `${index + 1}. ${author} (${date})${status}${positionInfo}\n   Comment: ${comment.content}`;
 
-        // ── Reply chain: show each reply with author, date, and content ──
         if (comment.replies && comment.replies.length > 0) {
           for (const reply of comment.replies) {
             const replyAuthor = reply.author?.displayName || 'Unknown';

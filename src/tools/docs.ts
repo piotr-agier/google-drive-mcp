@@ -2466,7 +2466,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const response = await ctx.getDrive().comments.get({
         fileId: a.documentId,
         commentId: a.commentId,
-        fields: 'id,content,quotedFileContent,anchor,author,createdTime,resolved,replies(id,content,author,createdTime)'
+        fields: 'id,content,quotedFileContent,author,createdTime,resolved,replies(id,content,author,createdTime)'
       });
 
       const comment = response.data;

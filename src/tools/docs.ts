@@ -450,7 +450,7 @@ async function uploadImageToDriveHelper(
 // ---------------------------------------------------------------------------
 
 /** Context extracted for a single comment (keyed by Drive API comment ID) */
-interface CommentContext {
+export interface CommentContext {
   contextBefore?: string;
   contextAfter?: string;
   startIndex?: number;
@@ -478,7 +478,7 @@ const MAX_PARAGRAPH_CONTEXT_LENGTH = 300;
  * Build flat text from a Google Doc, tracking each character's Docs API startIndex.
  * Handles paragraphs, tables (including nested), and multi-tab docs.
  */
-function buildFlatTextFromDoc(docData: any): FlatTextResult {
+export function buildFlatTextFromDoc(docData: any): FlatTextResult {
   function extractSegments(bodyContent: any[]): TextSegment[] {
     const segs: TextSegment[] = [];
     function fromElements(elements: any[]) {
@@ -532,7 +532,7 @@ function buildFlatTextFromDoc(docData: any): FlatTextResult {
 }
 
 /** Extract cell texts from a DOCX table row XML string */
-function extractRowCells(rowXml: string): string[] {
+export function extractRowCells(rowXml: string): string[] {
   const cells: string[] = [];
   let searchFrom = 0;
   while (true) {
@@ -555,14 +555,14 @@ function extractRowCells(rowXml: string): string[] {
 }
 
 /** DOCX comment info parsed from word/comments.xml */
-interface DocxComment {
+export interface DocxComment {
   author: string;
   date: string;
   content: string;
 }
 
 /** Context extracted from DOCX comment ranges in document.xml */
-interface DocxContextResult {
+export interface DocxContextResult {
   docxComments: Map<number, DocxComment>;
   contextsBefore: Map<number, string>;
   contextsAfter: Map<number, string>;
@@ -573,7 +573,7 @@ interface DocxContextResult {
  * Parse a DOCX export to extract comment positions and surrounding context.
  * Returns DOCX comment metadata and context maps keyed by DOCX comment ID.
  */
-async function resolveContextFromDocx(docxData: ArrayBuffer): Promise<DocxContextResult | null> {
+export async function resolveContextFromDocx(docxData: ArrayBuffer): Promise<DocxContextResult | null> {
   const zip = await JSZip.loadAsync(docxData);
   const commentsXml = await zip.file('word/comments.xml')?.async('string');
   const documentXml = await zip.file('word/document.xml')?.async('string');
@@ -699,7 +699,7 @@ async function resolveContextFromDocx(docxData: ArrayBuffer): Promise<DocxContex
  * Populates the contextMap with matched context. Also resolves Docs API
  * character offsets when flatText/offsetMap are available.
  */
-function matchDocxToDriveComments(
+export function matchDocxToDriveComments(
   driveComments: any[],
   docxResult: DocxContextResult,
   contextMap: Map<string, CommentContext>,

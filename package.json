@@ -44,7 +44,7 @@
         "prepare": "npm run build",
         "test": "npm run test:build && MCP_TESTING=1 node --test .tmp-test/test/**/*.test.js",
         "test:build": "shx rm -rf .tmp-test && tsc -p tsconfig.test.json && shx cp package.json .tmp-test/",
-        "test:unit": "npm run test:build && node --test .tmp-test/test/download-file.test.js .tmp-test/test/utils.test.js",
+        "test:unit": "npm run test:build && node --test .tmp-test/test/download-file.test.js .tmp-test/test/utils.test.js .tmp-test/test/comment-context.test.js",
         "test:integration": "npm run test:build && MCP_TESTING=1 node --test .tmp-test/test/integration/**/*.test.js .tmp-test/test/schema/**/*.test.js",
         "lint": "tsc --noEmit && eslint src/",
         "lint:types": "tsc --noEmit",

@@ -580,11 +580,12 @@ Add the server to your Claude Desktop configuration:
   - `uploadToSameFolder`: Upload to same folder as document (optional, default: true)
 
 #### Comments
-- **listComments** - List all comments in a Google Document
+- **listComments** - List all comments in a Google Document with position context, character offsets, and full reply chains
   - `documentId`: Document ID
   - `includeDeleted`: Include deleted comments (optional, default: false)
   - `pageSize`: Max comments to return, 1-100 (optional, default: 100)
   - `pageToken`: Token for next page of results (optional)
+  - Returns surrounding context and Docs API character offsets for each comment using a two-tiered approach (Docs API text matching, DOCX export fallback for ambiguous matches)
 
 - **getComment** - Get a specific comment with its full thread of replies
   - `documentId`: Document ID
@@ -1143,7 +1144,7 @@ npm run typecheck # Type checking without compilation
 - `npm run typecheck` - Run TypeScript type checking only
 - `npm run lint` - Run TypeScript type checking (alias for typecheck)
 - `npm run prepare` - Auto-runs build before npm publish
-- `npm test` - Run tests (placeholder - no tests implemented yet)
+- `npm test` - Run unit tests
 
 ## Advanced Configuration
 

@@ -240,13 +240,20 @@ Add this configuration to use the Docker container with Claude Desktop:
 
 The server supports multiple methods for providing OAuth credentials (in order of priority):
 
-#### 1. **Environment Variable** (Recommended)
+#### 1. **Environment Variable** (Highest Priority)
 ```bash
 export GOOGLE_DRIVE_OAUTH_CREDENTIALS="/path/to/your/gcp-oauth.keys.json"
 ```
 
-#### 2. **Default File Location**
-Place `gcp-oauth.keys.json` in the project root directory
+#### 2. **Config Directory** (Recommended)
+Place `gcp-oauth.keys.json` in the XDG config directory:
+```
+~/.config/google-drive-mcp/gcp-oauth.keys.json
+```
+This is the recommended location — it works reliably with `npx`, global installs, and local setups.
+
+#### 3. **Project Root** (Legacy Fallback)
+Place `gcp-oauth.keys.json` in the project root directory. This still works for local development but is unreliable with `npx` or global installs.
 
 ### OAuth Scope Configuration
 
@@ -943,15 +950,15 @@ After revoking access, you'll need to re-authenticate the next time you use the 
 #### "OAuth credentials not found"
 ```
 OAuth credentials not found. Please provide credentials using one of these methods:
-1. Environment variable:
+1. Config directory (recommended):
+   Place your gcp-oauth.keys.json file in: ~/.config/google-drive-mcp/
+2. Environment variable:
    export GOOGLE_DRIVE_OAUTH_CREDENTIALS="/path/to/gcp-oauth.keys.json"
-2. Default file path:
-   Place your gcp-oauth.keys.json file in the package root directory.
 ```
 
 **Solution:**
 - Download credentials from Google Cloud Console
-- Either set the environment variable or place the file in the project root
+- Place the file in `~/.config/google-drive-mcp/gcp-oauth.keys.json` (recommended), or set the environment variable
 - Ensure the file has proper read permissions
 
 #### "Authentication failed" or Browser doesn't open
@@ -1156,7 +1163,8 @@ npm run typecheck # Type checking without compilation
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `GOOGLE_DRIVE_OAUTH_CREDENTIALS` | Path to your OAuth credentials JSON file | `/home/user/secrets/oauth.json` |
-| *(or place file at)* | Default location: `gcp-oauth.keys.json` in project root | `./gcp-oauth.keys.json` |
+| *(or place file at)* | Config directory (recommended): `~/.config/google-drive-mcp/gcp-oauth.keys.json` | `~/.config/google-drive-mcp/gcp-oauth.keys.json` |
+| *(or place file at)* | Project root (legacy fallback): `gcp-oauth.keys.json` | `./gcp-oauth.keys.json` |
 
 **Optional** (for customization):
 | Variable | Description | Default | Example |

@@ -28,8 +28,13 @@ async function loadCredentialsFromFile(): Promise<OAuthCredentials> {
       const keysContent = await fs.readFile(keysPath, "utf-8");
       const keys = JSON.parse(keysContent);
       return parseCredentialsFile(keys);
-    } catch {
-      // Try next path
+    } catch (err: unknown) {
+      // Re-throw parse/validation errors so the user gets actionable feedback
+      if (err instanceof SyntaxError ||
+          (err instanceof Error && err.message.includes('Invalid credentials'))) {
+        throw new Error(`Invalid credentials file at ${keysPath}: ${(err as Error).message}`);
+      }
+      // File not found — try next path
     }
   }
 

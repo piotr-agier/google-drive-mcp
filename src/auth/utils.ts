@@ -45,18 +45,45 @@ export function getAdditionalLegacyPaths(): string[] {
 
 // Returns the absolute path for the GCP OAuth keys file with priority:
 // 1. Environment variable GOOGLE_DRIVE_OAUTH_CREDENTIALS (highest priority)
-// 2. Default file path (lowest priority)
+// 2. Config directory ~/.config/google-drive-mcp/gcp-oauth.keys.json
+// 3. Project root directory (legacy fallback)
 export function getKeysFilePath(): string {
   // Priority 1: Environment variable
   const envCredentialsPath = process.env.GOOGLE_DRIVE_OAUTH_CREDENTIALS;
   if (envCredentialsPath) {
     return path.resolve(envCredentialsPath);
   }
-  
-  // Priority 2: Default file path
+
+  // Priority 2: Config directory (stable across npx/global installs)
+  const configHome = process.env.XDG_CONFIG_HOME ||
+    path.join(os.homedir(), '.config');
+  const configKeysPath = path.join(configHome, 'google-drive-mcp', 'gcp-oauth.keys.json');
+
+  // Priority 3: Project root directory (legacy fallback)
   const projectRoot = getProjectRoot();
-  const keysPath = path.join(projectRoot, "gcp-oauth.keys.json");
-  return keysPath;
+  const projectKeysPath = path.join(projectRoot, "gcp-oauth.keys.json");
+
+  return configKeysPath;
+}
+
+// Returns all candidate paths for the credentials file, in priority order.
+// Used by loadCredentialsFromFile to try each location.
+export function getKeysFilePaths(): string[] {
+  const paths: string[] = [];
+
+  const envCredentialsPath = process.env.GOOGLE_DRIVE_OAUTH_CREDENTIALS;
+  if (envCredentialsPath) {
+    paths.push(path.resolve(envCredentialsPath));
+  }
+
+  const configHome = process.env.XDG_CONFIG_HOME ||
+    path.join(os.homedir(), '.config');
+  paths.push(path.join(configHome, 'google-drive-mcp', 'gcp-oauth.keys.json'));
+
+  const projectRoot = getProjectRoot();
+  paths.push(path.join(projectRoot, "gcp-oauth.keys.json"));
+
+  return paths;
 }
 
 // Interface for OAuth credentials
@@ -68,15 +95,19 @@ export interface OAuthCredentials {
 
 // Generate helpful error message for missing credentials
 export function generateCredentialsErrorMessage(): string {
+  const configHome = process.env.XDG_CONFIG_HOME ||
+    path.join(os.homedir(), '.config');
+  const configDir = path.join(configHome, 'google-drive-mcp');
+
   return `
 OAuth credentials not found. Please provide credentials using one of these methods:
 
-1. Environment variable:
+1. Config directory (recommended):
+   Place your gcp-oauth.keys.json file in: ${configDir}/
+
+2. Environment variable:
    Set GOOGLE_DRIVE_OAUTH_CREDENTIALS to the path of your credentials file:
    export GOOGLE_DRIVE_OAUTH_CREDENTIALS="/path/to/gcp-oauth.keys.json"
-
-2. Default file path:
-   Place your gcp-oauth.keys.json file in the package root directory.
 
 Token storage:
 - Tokens are saved to: ${getSecureTokenPath()}

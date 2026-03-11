@@ -1,29 +1,39 @@
 import { OAuth2Client } from 'google-auth-library';
 import * as fs from 'fs/promises';
-import { getKeysFilePath, generateCredentialsErrorMessage, OAuthCredentials } from './utils.js';
+import { getKeysFilePaths, generateCredentialsErrorMessage, OAuthCredentials } from './utils.js';
 
-async function loadCredentialsFromFile(): Promise<OAuthCredentials> {
-  const keysContent = await fs.readFile(getKeysFilePath(), "utf-8");
-  const keys = JSON.parse(keysContent);
-
+function parseCredentialsFile(keys: Record<string, unknown>): OAuthCredentials {
   if (keys.installed) {
-    // Standard OAuth credentials file format
-    const { client_id, client_secret, redirect_uris } = keys.installed;
+    const { client_id, client_secret, redirect_uris } = keys.installed as OAuthCredentials;
     return { client_id, client_secret, redirect_uris };
   } else if (keys.web) {
-    // Web application credentials format
-    const { client_id, client_secret, redirect_uris } = keys.web;
+    const { client_id, client_secret, redirect_uris } = keys.web as OAuthCredentials;
     return { client_id, client_secret, redirect_uris };
   } else if (keys.client_id) {
-    // Direct format (simplified)
     return {
-      client_id: keys.client_id,
-      client_secret: keys.client_secret,
-      redirect_uris: keys.redirect_uris || ['http://localhost:3000/oauth2callback']
+      client_id: keys.client_id as string,
+      client_secret: keys.client_secret as string | undefined,
+      redirect_uris: (keys.redirect_uris as string[] | undefined) || ['http://localhost:3000/oauth2callback']
     };
   } else {
     throw new Error('Invalid credentials file format. Expected either "installed", "web" object or direct client_id field.');
   }
+}
+
+async function loadCredentialsFromFile(): Promise<OAuthCredentials> {
+  const paths = getKeysFilePaths();
+
+  for (const keysPath of paths) {
+    try {
+      const keysContent = await fs.readFile(keysPath, "utf-8");
+      const keys = JSON.parse(keysContent);
+      return parseCredentialsFile(keys);
+    } catch {
+      // Try next path
+    }
+  }
+
+  throw new Error(`Credentials file not found. Searched: ${paths.join(', ')}`);
 }
 
 async function loadCredentialsWithFallback(): Promise<OAuthCredentials> {

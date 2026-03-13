@@ -1590,8 +1590,35 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         backgroundColor?: string;
       }
 
+      // Helper to resolve inline element text for non-textRun elements
+      function resolveInlineElementText(el: any, inlineObjects?: any): string | null {
+        if (el.person?.personProperties) {
+          const p = el.person.personProperties;
+          if (p.name && p.email) return `@${p.name} (${p.email})`;
+          return `@${p.name || p.email || ''}`;
+        }
+        if (el.richLink?.richLinkProperties) {
+          const rl = el.richLink.richLinkProperties;
+          const title = rl.title || rl.uri;
+          return title && rl.uri ? `[${title}](${rl.uri})` : title || null;
+        }
+        if (el.inlineObjectElement?.inlineObjectId && inlineObjects) {
+          const obj = inlineObjects[el.inlineObjectElement.inlineObjectId];
+          const desc = obj?.inlineObjectProperties?.embeddedObject?.description
+                    || obj?.inlineObjectProperties?.embeddedObject?.title;
+          return desc ? `[image: ${desc}]` : '[image]';
+        }
+        if (el.footnoteReference) {
+          return `[^${el.footnoteReference.footnoteNumber || ''}]`;
+        }
+        if (el.horizontalRule) {
+          return '---\n';
+        }
+        return null;
+      }
+
       // Helper to extract segments from body content
-      function extractSegments(bodyContent: any[]): Segment[] {
+      function extractSegments(bodyContent: any[], inlineObjects?: any): Segment[] {
         const segments: Segment[] = [];
         for (const element of bodyContent) {
           if (element.paragraph?.elements) {
@@ -1618,6 +1645,16 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
                   }
                 }
                 segments.push(seg);
+              } else {
+                // Handle non-textRun inline elements (person chips, rich links, images, footnotes, horizontal rules)
+                const inlineText = resolveInlineElementText(textElement, inlineObjects);
+                if (inlineText && textElement.startIndex != null && textElement.endIndex != null) {
+                  segments.push({
+                    text: inlineText,
+                    startIndex: textElement.startIndex,
+                    endIndex: textElement.endIndex,
+                  });
+                }
               }
             }
           }
@@ -1704,7 +1741,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
             formattedContent += `${indent}=== Tab: ${title} ===\n`;
           }
           if (bodyContent) {
-            const segments = extractSegments(bodyContent);
+            const tabInlineObjects = tab.documentTab?.inlineObjects;
+            const segments = extractSegments(bodyContent, tabInlineObjects);
             trackFonts(segments);
             formattedContent += formatSegments(segments);
             if (segments.length > 0) {
@@ -1720,7 +1758,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         // Fallback to legacy body content
         const bodyContent = document.data.body?.content;
         if (bodyContent) {
-          const segments = extractSegments(bodyContent);
+          const legacyInlineObjects = (document.data as any).inlineObjects;
+          const segments = extractSegments(bodyContent, legacyInlineObjects);
           trackFonts(segments);
           formattedContent += formatSegments(segments);
           totalLength = segments.length > 0 ? segments[segments.length - 1].endIndex : 0;

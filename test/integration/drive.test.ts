@@ -514,6 +514,49 @@ describe('Drive tools', () => {
     });
   });
 
+  // --- createShortcut ---
+  describe('createShortcut', () => {
+    it('happy path', async () => {
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({
+        data: { id: 'target-1', name: 'Report.pdf', mimeType: 'application/pdf' },
+      }));
+      ctx.mocks.drive.service.files.create._setImpl(async () => ({
+        data: { id: 'shortcut-1', name: 'Report.pdf', webViewLink: 'https://drive.google.com/shortcut-1' },
+      }));
+      const res = await callTool(ctx.client, 'createShortcut', { targetFileId: 'target-1' });
+      assert.equal(res.isError, undefined);
+      assert.ok(res.content[0].text.includes('Shortcut created successfully'));
+      assert.ok(res.content[0].text.includes('Report.pdf'));
+
+      const createCalls = ctx.mocks.drive.tracker.getCalls('files.create');
+      assert.ok(createCalls.length >= 1);
+      const createArgs = createCalls[createCalls.length - 1].args[0];
+      assert.equal(createArgs.requestBody.mimeType, 'application/vnd.google-apps.shortcut');
+      assert.equal(createArgs.requestBody.shortcutDetails.targetId, 'target-1');
+      assert.equal(createArgs.supportsAllDrives, true);
+    });
+
+    it('uses custom shortcutName', async () => {
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({
+        data: { id: 'target-1', name: 'Report.pdf', mimeType: 'application/pdf' },
+      }));
+      ctx.mocks.drive.service.files.create._setImpl(async () => ({
+        data: { id: 'shortcut-1', name: 'My Link', webViewLink: 'https://drive.google.com/shortcut-1' },
+      }));
+      const res = await callTool(ctx.client, 'createShortcut', { targetFileId: 'target-1', shortcutName: 'My Link' });
+      assert.ok(res.content[0].text.includes('My Link'));
+
+      const createCalls = ctx.mocks.drive.tracker.getCalls('files.create');
+      const createArgs = createCalls[createCalls.length - 1].args[0];
+      assert.equal(createArgs.requestBody.name, 'My Link');
+    });
+
+    it('validation error on missing targetFileId', async () => {
+      const res = await callTool(ctx.client, 'createShortcut', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
   describe('v1.6.0 pdf conversion tools', () => {
     it('convertPdfToGoogleDoc happy path', async () => {
       ctx.mocks.drive.service.files.get._setImpl(async () => ({ data: { id: 'pdf-1', name: 'A.pdf', mimeType: 'application/pdf', parents: ['root'] } }));

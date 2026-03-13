@@ -206,7 +206,34 @@ docker run -it \
 
 ### Docker Configuration for Claude Desktop
 
-Add this configuration to use the Docker container with Claude Desktop:
+#### Option A: Reusable container (recommended)
+
+Uses a wrapper script that keeps a single named container running and reuses it across client restarts — faster startup and no container churn:
+
+```json
+{
+  "mcpServers": {
+    "google-drive": {
+      "command": "/path/to/google-drive-mcp/scripts/docker-mcp.sh",
+      "env": {
+        "GOOGLE_DRIVE_OAUTH_CREDENTIALS": "/Users/yourname/gcp-oauth.keys.json",
+        "GOOGLE_DRIVE_MCP_TOKEN_PATH": "/Users/yourname/.config/google-drive-mcp/tokens.json"
+      }
+    }
+  }
+}
+```
+
+The script will:
+- Create the container on first run
+- Reuse the existing container on subsequent runs
+- Automatically restart it if it was stopped
+
+To stop the background container: `docker stop google-drive-mcp`
+
+#### Option B: Fresh container each time
+
+Creates and removes a new container on every client restart:
 
 ```json
 {

@@ -17,6 +17,7 @@ import { SCOPE_ALIASES, SCOPE_PRESETS, resolveOAuthScopes } from '../auth/scopes
 // ---------------------------------------------------------------------------
 
 const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
+const SHORTCUT_MIME_TYPE = 'application/vnd.google-apps.shortcut';
 
 // MIME types for binary file uploads (extension → MIME)
 const BINARY_MIME_TYPES: Record<string, string> = {
@@ -91,6 +92,12 @@ const CopyFileSchema = z.object({
   fileId: z.string().min(1, "File ID is required"),
   newName: z.string().optional(),
   parentFolderId: z.string().optional()
+});
+
+const CreateShortcutSchema = z.object({
+  targetFileId: z.string().min(1, "Target file ID is required"),
+  parentFolderId: z.string().optional(),
+  shortcutName: z.string().optional()
 });
 
 const UploadFileSchema = z.object({
@@ -535,6 +542,28 @@ export const toolDefinitions: ToolDefinition[] = [
       }
     }
   },
+  {
+    name: "createShortcut",
+    description: "Create a shortcut (link) to a file or folder in Google Drive. Useful for referencing the same document from multiple locations without duplicating it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        targetFileId: {
+          type: "string",
+          description: "ID of the file or folder to create a shortcut to"
+        },
+        parentFolderId: {
+          type: "string",
+          description: "ID or path of the folder where the shortcut will be created"
+        },
+        shortcutName: {
+          type: "string",
+          description: "Custom name for the shortcut (defaults to original file name)"
+        }
+      },
+      required: ["targetFileId"]
+    }
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -958,6 +987,51 @@ export async function handleTool(
       return {
         content: [{ type: "text", text: `Successfully copied file as "${response.data.name}"\nNew file ID: ${response.data.id}\nLink: ${response.data.webViewLink}` }],
         isError: false
+      };
+    }
+
+    case "createShortcut": {
+      const validation = CreateShortcutSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const data = validation.data;
+
+      const parentId = await ctx.resolveFolderId(data.parentFolderId);
+
+      // Get target file metadata for default name
+      const targetFile = await ctx.getDrive().files.get({
+        fileId: data.targetFileId,
+        fields: 'id, name, mimeType',
+        supportsAllDrives: true
+      });
+
+      const shortcutName = data.shortcutName || targetFile.data.name || 'Shortcut';
+
+      const shortcut = await ctx.getDrive().files.create({
+        requestBody: {
+          name: shortcutName,
+          mimeType: SHORTCUT_MIME_TYPE,
+          shortcutDetails: {
+            targetId: data.targetFileId
+          },
+          parents: [parentId]
+        },
+        fields: 'id, name, webViewLink, shortcutDetails',
+        supportsAllDrives: true
+      });
+
+      ctx.log('Shortcut created', {
+        shortcutId: shortcut.data.id,
+        targetId: data.targetFileId,
+        name: shortcutName
+      });
+
+      return {
+        content: [{
+          type: "text",
+          text: `Shortcut created successfully!\n\nShortcut: ${shortcut.data.name} (${shortcut.data.id})\nTarget: ${targetFile.data.name} (${data.targetFileId})\nLocation: folder ${parentId}\nLink: ${shortcut.data.webViewLink || 'N/A'}`
+        }]
       };
     }
 

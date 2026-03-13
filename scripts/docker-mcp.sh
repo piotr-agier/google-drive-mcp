@@ -12,11 +12,17 @@ set -euo pipefail
 CONTAINER_NAME="${1:-google-drive-mcp}"
 IMAGE_NAME="google-drive-mcp"
 
+# Verify the image exists before attempting to create a container
+if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
+  echo "Image '$IMAGE_NAME' not found. Build it first: docker build -t $IMAGE_NAME ." >&2
+  exit 1
+fi
+
 STATE="$(docker inspect --format '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null)" || STATE="missing"
 
 case "$STATE" in
   running)
-    # Container already running — exec a new MCP session
+    # Container already running — fall through to the readiness check below
     ;;
   exited|created)
     # Container exists but stopped — start it

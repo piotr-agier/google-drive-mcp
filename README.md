@@ -216,8 +216,8 @@ Uses a wrapper script that keeps a single named container running and reuses it 
     "google-drive": {
       "command": "/path/to/google-drive-mcp/scripts/docker-mcp.sh",
       "env": {
-        "GOOGLE_DRIVE_OAUTH_CREDENTIALS": "/Users/yourname/gcp-oauth.keys.json",
-        "GOOGLE_DRIVE_MCP_TOKEN_PATH": "/Users/yourname/.config/google-drive-mcp/tokens.json"
+        "GOOGLE_DRIVE_OAUTH_CREDENTIALS": "$HOME/gcp-oauth.keys.json",
+        "GOOGLE_DRIVE_MCP_TOKEN_PATH": "$HOME/.config/google-drive-mcp/tokens.json"
       }
     }
   }
@@ -229,7 +229,8 @@ The script will:
 - Reuse the existing container on subsequent runs
 - Automatically restart it if it was stopped
 
-To stop the background container: `docker stop google-drive-mcp`
+**Note:** The container stays running in the background until explicitly stopped.
+To stop it: `docker stop google-drive-mcp`
 
 #### Option B: Fresh container each time
 
@@ -1111,7 +1112,7 @@ The Dockerfile expects the `dist/` directory to exist from your local build.
 -v "$HOME/.config/google-drive-mcp/tokens.json":/config/tokens.json
 
 # Wrong: read-only mount prevents token refresh
--v ~/.config/google-drive-mcp/tokens.json:/config/tokens.json:ro
+-v "$HOME/.config/google-drive-mcp/tokens.json":/config/tokens.json:ro
 ```
 
 ### Debug Mode

@@ -785,6 +785,148 @@ describe('Docs tools', () => {
       assert.ok(res.content[0].text.includes('Content here'));
       assert.ok(!res.content[0].text.includes('=== Tab:'));
     });
+
+    it('extracts person chips', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Doc with chips',
+          tabs: [{
+            tabProperties: { title: 'Main' },
+            documentTab: {
+              body: {
+                content: [{
+                  paragraph: {
+                    elements: [
+                      { textRun: { content: 'Assigned to ' }, startIndex: 0, endIndex: 12 },
+                      { person: { personProperties: { name: 'Alice', email: 'alice@example.com' } }, startIndex: 12, endIndex: 13 },
+                      { textRun: { content: '\n' }, startIndex: 13, endIndex: 14 },
+                    ],
+                  },
+                }],
+              },
+            },
+          }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('@Alice (alice@example.com)'));
+    });
+
+    it('extracts rich links as markdown', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Doc with links',
+          tabs: [{
+            tabProperties: { title: 'Main' },
+            documentTab: {
+              body: {
+                content: [{
+                  paragraph: {
+                    elements: [
+                      { textRun: { content: 'See ' }, startIndex: 0, endIndex: 4 },
+                      { richLink: { richLinkProperties: { title: 'Design Doc', uri: 'https://docs.google.com/doc/123' } }, startIndex: 4, endIndex: 5 },
+                      { textRun: { content: '\n' }, startIndex: 5, endIndex: 6 },
+                    ],
+                  },
+                }],
+              },
+            },
+          }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('[Design Doc](https://docs.google.com/doc/123)'));
+    });
+
+    it('extracts inline images with description', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Doc with image',
+          tabs: [{
+            tabProperties: { title: 'Main' },
+            documentTab: {
+              body: {
+                content: [{
+                  paragraph: {
+                    elements: [
+                      { inlineObjectElement: { inlineObjectId: 'obj-1' }, startIndex: 0, endIndex: 1 },
+                      { textRun: { content: '\n' }, startIndex: 1, endIndex: 2 },
+                    ],
+                  },
+                }],
+              },
+              inlineObjects: {
+                'obj-1': {
+                  inlineObjectProperties: {
+                    embeddedObject: { description: 'Architecture diagram' },
+                  },
+                },
+              },
+            },
+          }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('[image: Architecture diagram]'));
+    });
+
+    it('extracts footnote references', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Doc with footnote',
+          tabs: [{
+            tabProperties: { title: 'Main' },
+            documentTab: {
+              body: {
+                content: [{
+                  paragraph: {
+                    elements: [
+                      { textRun: { content: 'Important claim' }, startIndex: 0, endIndex: 15 },
+                      { footnoteReference: { footnoteNumber: '1', footnoteId: 'fn-1' }, startIndex: 15, endIndex: 16 },
+                      { textRun: { content: '\n' }, startIndex: 16, endIndex: 17 },
+                    ],
+                  },
+                }],
+              },
+            },
+          }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('[^1]'));
+    });
+
+    it('extracts horizontal rules', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Doc with hr',
+          tabs: [{
+            tabProperties: { title: 'Main' },
+            documentTab: {
+              body: {
+                content: [
+                  { paragraph: { elements: [{ textRun: { content: 'Above\n' }, startIndex: 0, endIndex: 6 }] } },
+                  { paragraph: { elements: [{ horizontalRule: {}, startIndex: 6, endIndex: 7 }] } },
+                  { paragraph: { elements: [{ textRun: { content: 'Below\n' }, startIndex: 7, endIndex: 13 }] } },
+                ],
+              },
+            },
+          }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('---'));
+    });
   });
 
   describe('deleteComment', () => {

@@ -194,7 +194,7 @@ Run the container with your credentials and tokens mounted:
 ```bash
 docker run -it \
   -v /path/to/gcp-oauth.keys.json:/config/gcp-oauth.keys.json:ro \
-  -v ~/.config/google-drive-mcp/tokens.json:/config/tokens.json \
+  -v "$HOME/.config/google-drive-mcp/tokens.json":/config/tokens.json \
   google-drive-mcp
 ```
 
@@ -1056,7 +1056,7 @@ ls -la ~/.config/google-drive-mcp/tokens.json
 # 3. Run Docker with tokens mounted
 docker run -it \
   -v $(pwd)/gcp-oauth.keys.json:/config/gcp-oauth.keys.json:ro \
-  -v ~/.config/google-drive-mcp/tokens.json:/config/tokens.json \
+  -v "$HOME/.config/google-drive-mcp/tokens.json":/config/tokens.json \
   google-drive-mcp
 ```
 
@@ -1081,7 +1081,7 @@ The Dockerfile expects the `dist/` directory to exist from your local build.
 **Solution:** Ensure the token file is mounted with write permissions:
 ```bash
 # Correct: tokens can be updated
--v ~/.config/google-drive-mcp/tokens.json:/config/tokens.json
+-v "$HOME/.config/google-drive-mcp/tokens.json":/config/tokens.json
 
 # Wrong: read-only mount prevents token refresh
 -v ~/.config/google-drive-mcp/tokens.json:/config/tokens.json:ro

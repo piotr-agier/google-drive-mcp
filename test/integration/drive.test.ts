@@ -557,6 +557,76 @@ describe('Drive tools', () => {
     });
   });
 
+  // --- lockFile ---
+  describe('lockFile', () => {
+    it('happy path', async () => {
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({
+        data: { id: 'file-1', name: 'Report.docx', contentRestrictions: [] },
+      }));
+      const res = await callTool(ctx.client, 'lockFile', { fileId: 'file-1', reason: 'Final version' });
+      assert.equal(res.isError, undefined);
+      assert.ok(res.content[0].text.includes('File locked successfully'));
+      assert.ok(res.content[0].text.includes('Final version'));
+
+      const updateCalls = ctx.mocks.drive.tracker.getCalls('files.update');
+      assert.ok(updateCalls.length >= 1);
+      const updateArgs = updateCalls[updateCalls.length - 1].args[0];
+      assert.deepEqual(updateArgs.requestBody.contentRestrictions, [{ readOnly: true, reason: 'Final version' }]);
+      assert.equal(updateArgs.supportsAllDrives, true);
+    });
+
+    it('returns message when file is already locked', async () => {
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({
+        data: { id: 'file-1', name: 'Report.docx', contentRestrictions: [{ readOnly: true, reason: 'Locked' }] },
+      }));
+      const res = await callTool(ctx.client, 'lockFile', { fileId: 'file-1' });
+      assert.ok(res.content[0].text.includes('already locked'));
+    });
+
+    it('uses default reason when none provided', async () => {
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({
+        data: { id: 'file-1', name: 'Report.docx', contentRestrictions: [] },
+      }));
+      const res = await callTool(ctx.client, 'lockFile', { fileId: 'file-1' });
+      assert.ok(res.content[0].text.includes('Locked via MCP'));
+    });
+
+    it('validation error on missing fileId', async () => {
+      const res = await callTool(ctx.client, 'lockFile', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- unlockFile ---
+  describe('unlockFile', () => {
+    it('happy path', async () => {
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({
+        data: { id: 'file-1', name: 'Report.docx', contentRestrictions: [{ readOnly: true, reason: 'Locked' }] },
+      }));
+      const res = await callTool(ctx.client, 'unlockFile', { fileId: 'file-1' });
+      assert.equal(res.isError, undefined);
+      assert.ok(res.content[0].text.includes('File unlocked successfully'));
+
+      const updateCalls = ctx.mocks.drive.tracker.getCalls('files.update');
+      assert.ok(updateCalls.length >= 1);
+      const updateArgs = updateCalls[updateCalls.length - 1].args[0];
+      assert.deepEqual(updateArgs.requestBody.contentRestrictions, []);
+    });
+
+    it('returns message when file is not locked', async () => {
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({
+        data: { id: 'file-1', name: 'Report.docx', contentRestrictions: [] },
+      }));
+      const res = await callTool(ctx.client, 'unlockFile', { fileId: 'file-1' });
+      assert.ok(res.content[0].text.includes('not locked'));
+    });
+
+    it('validation error on missing fileId', async () => {
+      const res = await callTool(ctx.client, 'unlockFile', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
   describe('v1.6.0 pdf conversion tools', () => {
     it('convertPdfToGoogleDoc happy path', async () => {
       ctx.mocks.drive.service.files.get._setImpl(async () => ({ data: { id: 'pdf-1', name: 'A.pdf', mimeType: 'application/pdf', parents: ['root'] } }));

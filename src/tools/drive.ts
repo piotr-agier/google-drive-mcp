@@ -100,6 +100,15 @@ const CreateShortcutSchema = z.object({
   shortcutName: z.string().optional()
 });
 
+const LockFileSchema = z.object({
+  fileId: z.string().min(1, "File ID is required"),
+  reason: z.string().optional()
+});
+
+const UnlockFileSchema = z.object({
+  fileId: z.string().min(1, "File ID is required")
+});
+
 const UploadFileSchema = z.object({
   localPath: z.string().min(1, "Local file path is required"),
   name: z.string().optional(),
@@ -562,6 +571,38 @@ export const toolDefinitions: ToolDefinition[] = [
         }
       },
       required: ["targetFileId"]
+    }
+  },
+  {
+    name: "lockFile",
+    description: "Lock a file to prevent editing by setting content restrictions. The file remains readable but cannot be modified until unlocked.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: {
+          type: "string",
+          description: "ID of the file to lock"
+        },
+        reason: {
+          type: "string",
+          description: "Reason for locking the file (shown to users who try to edit)"
+        }
+      },
+      required: ["fileId"]
+    }
+  },
+  {
+    name: "unlockFile",
+    description: "Unlock a previously locked file by removing content restrictions, restoring full edit access.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: {
+          type: "string",
+          description: "ID of the file to unlock"
+        }
+      },
+      required: ["fileId"]
     }
   },
 ];
@@ -1031,6 +1072,91 @@ export async function handleTool(
         content: [{
           type: "text",
           text: `Shortcut created successfully!\n\nShortcut: ${shortcut.data.name} (${shortcut.data.id})\nTarget: ${targetFile.data.name} (${data.targetFileId})\nLocation: folder ${parentId}\nLink: ${shortcut.data.webViewLink || 'N/A'}`
+        }]
+      };
+    }
+
+    case "lockFile": {
+      const validation = LockFileSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const data = validation.data;
+
+      const fileInfo = await ctx.getDrive().files.get({
+        fileId: data.fileId,
+        fields: 'id, name, contentRestrictions',
+        supportsAllDrives: true
+      });
+
+      const existingRestrictions = fileInfo.data.contentRestrictions || [];
+      if (existingRestrictions.some((r) => r.readOnly)) {
+        return {
+          content: [{
+            type: "text",
+            text: `File "${fileInfo.data.name}" is already locked.`
+          }]
+        };
+      }
+
+      await ctx.getDrive().files.update({
+        fileId: data.fileId,
+        requestBody: {
+          contentRestrictions: [{
+            readOnly: true,
+            reason: data.reason || 'Locked via MCP'
+          }]
+        },
+        supportsAllDrives: true
+      });
+
+      ctx.log('File locked', { fileId: data.fileId, name: fileInfo.data.name, reason: data.reason });
+
+      return {
+        content: [{
+          type: "text",
+          text: `File locked successfully!\n\nFile: ${fileInfo.data.name}\nReason: ${data.reason || 'Locked via MCP'}\n\nThe file is now read-only and cannot be edited or deleted.`
+        }]
+      };
+    }
+
+    case "unlockFile": {
+      const validation = UnlockFileSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const data = validation.data;
+
+      const fileInfo = await ctx.getDrive().files.get({
+        fileId: data.fileId,
+        fields: 'id, name, contentRestrictions',
+        supportsAllDrives: true
+      });
+
+      const existingRestrictions = fileInfo.data.contentRestrictions || [];
+      if (!existingRestrictions.some((r) => r.readOnly)) {
+        return {
+          content: [{
+            type: "text",
+            text: `File "${fileInfo.data.name}" is not locked.`
+          }]
+        };
+      }
+
+      await ctx.getDrive().files.update({
+        fileId: data.fileId,
+        requestBody: {
+          contentRestrictions: []
+        },
+        supportsAllDrives: true
+      });
+
+      ctx.log('File unlocked', { fileId: data.fileId, name: fileInfo.data.name });
+
+      return {
+        content: [{
+          type: "text",
+          text: `File unlocked successfully!\n\nFile: ${fileInfo.data.name}\n\nThe file can now be edited and deleted.`
         }]
       };
     }

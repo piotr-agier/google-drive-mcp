@@ -20,6 +20,19 @@ fi
 
 STATE="$(docker inspect --format '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null)" || STATE="missing"
 
+# If a container exists, check whether its image is still current.
+# When the user rebuilds the image (e.g. to test a feature), the old
+# container would keep running stale code.  Detect the mismatch and
+# replace the container so the new image is actually used.
+if [ "$STATE" != "missing" ]; then
+  CONTAINER_IMAGE="$(docker inspect --format '{{.Image}}' "$CONTAINER_NAME" 2>/dev/null)" || CONTAINER_IMAGE=""
+  CURRENT_IMAGE="$(docker image inspect --format '{{.Id}}' "$IMAGE_NAME" 2>/dev/null)" || CURRENT_IMAGE=""
+  if [ -n "$CURRENT_IMAGE" ] && [ "$CONTAINER_IMAGE" != "$CURRENT_IMAGE" ]; then
+    docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1
+    STATE="missing"
+  fi
+fi
+
 case "$STATE" in
   running)
     # Container already running — fall through to the readiness check below

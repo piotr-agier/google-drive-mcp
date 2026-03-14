@@ -1599,14 +1599,18 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         }
         if (el.richLink?.richLinkProperties) {
           const rl = el.richLink.richLinkProperties;
-          const title = rl.title || rl.uri;
-          return title && rl.uri ? `[${title}](${rl.uri})` : title || null;
+          const title = (rl.title || rl.uri || '').replace(/[\[\]]/g, '\\$&');
+          const uri = rl.uri;
+          return title && uri ? `[${title}](${uri})` : title || null;
         }
-        if (el.inlineObjectElement?.inlineObjectId && inlineObjects) {
-          const obj = inlineObjects[el.inlineObjectElement.inlineObjectId];
-          const desc = obj?.inlineObjectProperties?.embeddedObject?.description
-                    || obj?.inlineObjectProperties?.embeddedObject?.title;
-          return desc ? `[image: ${desc}]` : '[image]';
+        if (el.inlineObjectElement?.inlineObjectId) {
+          if (inlineObjects) {
+            const obj = inlineObjects[el.inlineObjectElement.inlineObjectId];
+            const desc = obj?.inlineObjectProperties?.embeddedObject?.description
+                      || obj?.inlineObjectProperties?.embeddedObject?.title;
+            return desc ? `[image: ${desc}]` : '[image]';
+          }
+          return '[image]';
         }
         if (el.footnoteReference) {
           return `[^${el.footnoteReference.footnoteNumber || ''}]`;

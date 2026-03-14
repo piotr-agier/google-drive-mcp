@@ -896,6 +896,79 @@ describe('Docs tools', () => {
       assert.ok(res.content[0].text.includes('| Field | Value |'));
       assert.ok(res.content[0].text.includes('| Status |  |'));
     });
+
+    it('escapes pipe characters in cell text', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Doc with pipes in cells',
+          tabs: [{
+            tabProperties: { title: 'Main' },
+            documentTab: {
+              body: {
+                content: [{
+                  table: {
+                    tableRows: [
+                      { tableCells: [
+                        { content: [{ paragraph: { elements: [{ textRun: { content: 'Choice' }, startIndex: 1, endIndex: 7 }] } }] },
+                      ]},
+                      { tableCells: [
+                        { content: [{ paragraph: { elements: [{ textRun: { content: 'Option A | Option B' }, startIndex: 8, endIndex: 27 }] } }] },
+                      ]},
+                    ],
+                  },
+                  startIndex: 0,
+                  endIndex: 30,
+                }],
+              },
+            },
+          }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text;
+      assert.ok(text.includes('Option A \\| Option B'), 'pipe in cell text should be escaped');
+      assert.ok(!text.includes('| Option A | Option B |'), 'unescaped pipe should not produce extra columns');
+    });
+
+    it('joins multi-paragraph cells with spaces', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Doc with multi-paragraph cell',
+          tabs: [{
+            tabProperties: { title: 'Main' },
+            documentTab: {
+              body: {
+                content: [{
+                  table: {
+                    tableRows: [
+                      { tableCells: [
+                        { content: [{ paragraph: { elements: [{ textRun: { content: 'Header' }, startIndex: 1, endIndex: 7 }] } }] },
+                      ]},
+                      { tableCells: [
+                        { content: [
+                          { paragraph: { elements: [{ textRun: { content: 'Hello\n' }, startIndex: 8, endIndex: 14 }] } },
+                          { paragraph: { elements: [{ textRun: { content: 'World\n' }, startIndex: 14, endIndex: 20 }] } },
+                        ]},
+                      ]},
+                    ],
+                  },
+                  startIndex: 0,
+                  endIndex: 25,
+                }],
+              },
+            },
+          }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text;
+      assert.ok(text.includes('Hello World'), 'multi-paragraph cell should join with space');
+      assert.ok(!text.includes('HelloWorld'), 'paragraphs should not be concatenated without separator');
+    });
   });
 
   describe('deleteComment', () => {

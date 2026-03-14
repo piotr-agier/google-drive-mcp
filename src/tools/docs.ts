@@ -1603,7 +1603,11 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           const before = segments.length;
           processContent(cellContent);
           const cellSegs = segments.splice(before);
-          return cellSegs.map(s => s.text.replace(/\n$/g, '')).join('').trim();
+          return cellSegs
+            .map(s => s.text.replace(/\n$/g, ''))
+            .join(' ')
+            .replace(/\|/g, '\\|')
+            .trim();
         }
 
         function processContent(content: any[]) {

@@ -927,6 +927,64 @@ describe('Docs tools', () => {
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('---'));
     });
+
+    it('escapes brackets in rich link titles', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Doc with bracketed link',
+          tabs: [{
+            tabProperties: { title: 'Main' },
+            documentTab: {
+              body: {
+                content: [{
+                  paragraph: {
+                    elements: [
+                      { richLink: { richLinkProperties: { title: 'Budget [Draft]', uri: 'https://docs.google.com/doc/456' } }, startIndex: 0, endIndex: 1 },
+                      { textRun: { content: '\n' }, startIndex: 1, endIndex: 2 },
+                    ],
+                  },
+                }],
+              },
+            },
+          }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text;
+      assert.ok(text.includes('Budget \\[Draft\\]'), 'brackets in title should be escaped');
+      assert.ok(text.includes('(https://docs.google.com/doc/456)'), 'URL should be preserved');
+    });
+
+    it('shows [image] placeholder when inlineObjects map is missing', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Doc with orphan image',
+          tabs: [{
+            tabProperties: { title: 'Main' },
+            documentTab: {
+              body: {
+                content: [{
+                  paragraph: {
+                    elements: [
+                      { textRun: { content: 'Before ' }, startIndex: 0, endIndex: 7 },
+                      { inlineObjectElement: { inlineObjectId: 'obj-1' }, startIndex: 7, endIndex: 8 },
+                      { textRun: { content: ' after\n' }, startIndex: 8, endIndex: 15 },
+                    ],
+                  },
+                }],
+              },
+              // no inlineObjects map
+            },
+          }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('[image]'), 'should show placeholder even without inlineObjects map');
+    });
   });
 
   describe('deleteComment', () => {

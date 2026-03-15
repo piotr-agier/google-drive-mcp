@@ -1590,38 +1590,83 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         backgroundColor?: string;
       }
 
-      // Helper to extract segments from body content
+      // Helper to extract segments from body content.
+      // Table cell extraction reuses processContent so that any element handling
+      // improvements (e.g. inline element extraction) automatically apply inside
+      // table cells as well.
       function extractSegments(bodyContent: any[]): Segment[] {
         const segments: Segment[] = [];
-        for (const element of bodyContent) {
-          if (element.paragraph?.elements) {
-            for (const textElement of element.paragraph.elements) {
-              if (textElement.textRun?.content && textElement.startIndex != null && textElement.endIndex != null) {
-                const seg: Segment = {
-                  text: textElement.textRun.content,
-                  startIndex: textElement.startIndex,
-                  endIndex: textElement.endIndex,
-                };
-                if (withFormatting) {
-                  const ts = textElement.textRun.textStyle;
-                  if (ts) {
-                    if (ts.weightedFontFamily?.fontFamily) seg.fontFamily = ts.weightedFontFamily.fontFamily;
-                    if (ts.fontSize?.magnitude != null) seg.fontSize = ts.fontSize.magnitude;
-                    if (ts.bold) seg.bold = true;
-                    if (ts.italic) seg.italic = true;
-                    if (ts.underline) seg.underline = true;
-                    if (ts.strikethrough) seg.strikethrough = true;
-                    const fg = rgbColorToHex(ts.foregroundColor);
-                    const bg = rgbColorToHex(ts.backgroundColor);
-                    if (fg) seg.foregroundColor = fg;
-                    if (bg) seg.backgroundColor = bg;
+
+        // Extract plain text from a table cell by running its content through
+        // processContent and collecting the text from the produced segments.
+        function getCellText(cellContent: any[]): string {
+          const before = segments.length;
+          processContent(cellContent);
+          const cellSegs = segments.splice(before);
+          return cellSegs
+            .map(s => s.text.replace(/\n$/g, ''))
+            .join(' ')
+            .replace(/\|/g, '\\|')
+            .trim();
+        }
+
+        function processContent(content: any[]) {
+          for (const element of content) {
+            if (element.paragraph?.elements) {
+              for (const textElement of element.paragraph.elements) {
+                if (textElement.textRun?.content && textElement.startIndex != null && textElement.endIndex != null) {
+                  const seg: Segment = {
+                    text: textElement.textRun.content,
+                    startIndex: textElement.startIndex,
+                    endIndex: textElement.endIndex,
+                  };
+                  if (withFormatting) {
+                    const ts = textElement.textRun.textStyle;
+                    if (ts) {
+                      if (ts.weightedFontFamily?.fontFamily) seg.fontFamily = ts.weightedFontFamily.fontFamily;
+                      if (ts.fontSize?.magnitude != null) seg.fontSize = ts.fontSize.magnitude;
+                      if (ts.bold) seg.bold = true;
+                      if (ts.italic) seg.italic = true;
+                      if (ts.underline) seg.underline = true;
+                      if (ts.strikethrough) seg.strikethrough = true;
+                      const fg = rgbColorToHex(ts.foregroundColor);
+                      const bg = rgbColorToHex(ts.backgroundColor);
+                      if (fg) seg.foregroundColor = fg;
+                      if (bg) seg.backgroundColor = bg;
+                    }
                   }
+                  segments.push(seg);
                 }
-                segments.push(seg);
               }
+            } else if (element.table?.tableRows) {
+              const rows: string[] = [];
+              for (let rowIdx = 0; rowIdx < element.table.tableRows.length; rowIdx++) {
+                const row = element.table.tableRows[rowIdx];
+                if (!row.tableCells) continue;
+                const cellTexts: string[] = [];
+                for (const cell of row.tableCells) {
+                  cellTexts.push(cell.content ? getCellText(cell.content) : '');
+                }
+                rows.push('| ' + cellTexts.join(' | ') + ' |');
+                if (rowIdx === 0) {
+                  rows.push('| ' + cellTexts.map(() => '---').join(' | ') + ' |');
+                }
+              }
+              const md = rows.join('\n') + '\n\n';
+              if (element.startIndex != null && element.endIndex != null) {
+                segments.push({
+                  text: md,
+                  startIndex: element.startIndex,
+                  endIndex: element.endIndex,
+                });
+              }
+            } else if (element.tableOfContents?.content) {
+              processContent(element.tableOfContents.content);
             }
           }
         }
+
+        processContent(bodyContent);
         return segments;
       }
 

@@ -92,10 +92,9 @@ export async function runAuthCommand(): Promise<void> {
     );
     
     // Wait for completion
-    const intervalId = setInterval(async () => {
+    const intervalId = setInterval(() => {
       if (authServer.authCompletedSuccessfully) {
         clearInterval(intervalId);
-        await authServer.stop();
         console.error("\n✅ Authentication completed successfully!");
         console.error("You can now use the Google Drive MCP server.");
         process.exit(0);

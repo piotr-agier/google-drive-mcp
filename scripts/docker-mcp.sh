@@ -68,5 +68,8 @@ if [ "$S" != "running" ]; then
   exit 1
 fi
 
+# Kill any already-running MCP server inside the container
+docker exec "$CONTAINER_NAME" pkill -f 'node dist/index.js' >/dev/null 2>&1 || true
+
 # Run the MCP server via exec — stdin/stdout are connected to the client
 exec docker exec -i "$CONTAINER_NAME" node dist/index.js

@@ -525,6 +525,12 @@ Add the server to your Claude Desktop configuration:
 - **readSmartChips** - Read smart chip-like elements (person mentions, rich links, date chips) from the default tab of a document. Only the default tab is scanned; other tabs are not included.
   - `documentId`: Document ID
 
+- **createFootnote** - Create a footnote in a Google Doc. Footnotes cannot be inserted inside equations, headers, footers, or other footnotes.
+  - `documentId`: Document ID
+  - `index`: 1-based character index where the footnote reference should be inserted (optional — provide this or `endOfSegment`)
+  - `endOfSegment`: If true, insert footnote at the end of the document body (optional — provide this or `index`)
+  - `content`: Optional text content for the footnote body
+
 - **listGoogleDocs** - List Google Documents with optional filtering
   - `query`: Search query to filter by name or content (optional)
   - `maxResults`: Maximum documents to return, 1-100 (optional, default: 20)

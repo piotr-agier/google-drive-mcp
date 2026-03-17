@@ -1219,4 +1219,60 @@ describe('Docs tools', () => {
       assert.equal(res.isError, false);
     });
   });
+
+  describe('createFootnote', () => {
+    beforeEach(() => {
+      ctx.mocks.docs.service.documents.batchUpdate._setImpl(async () => ({
+        data: { replies: [{ createFootnote: { footnoteId: 'fn-123' } }] },
+      }));
+    });
+
+    after(() => {
+      ctx.mocks.docs.service.documents.batchUpdate._resetImpl();
+    });
+
+    it('creates footnote at index without content', async () => {
+      const res = await callTool(ctx.client, 'createFootnote', { documentId: 'doc-1', index: 5 });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('fn-123'));
+      assert.ok(res.content[0].text.includes('at index 5'));
+
+      const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
+      assert.equal(calls.length, 1);
+      const req = calls[0].args[0].requestBody.requests[0];
+      assert.ok('createFootnote' in req);
+      assert.equal(req.createFootnote.location.index, 5);
+    });
+
+    it('creates footnote with content (two batchUpdate calls)', async () => {
+      const res = await callTool(ctx.client, 'createFootnote', { documentId: 'doc-1', index: 3, content: 'See reference.' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Content inserted'));
+
+      const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
+      assert.equal(calls.length, 2);
+
+      // Second call should insertText into the footnote segment
+      const secondReq = calls[1].args[0].requestBody.requests[0];
+      assert.ok('insertText' in secondReq);
+      assert.equal(secondReq.insertText.location.segmentId, 'fn-123');
+      assert.equal(secondReq.insertText.text, 'See reference.');
+    });
+
+    it('creates footnote with endOfSegment', async () => {
+      const res = await callTool(ctx.client, 'createFootnote', { documentId: 'doc-1', endOfSegment: true });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('end of document'));
+
+      const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
+      const req = calls[0].args[0].requestBody.requests[0];
+      assert.ok('createFootnote' in req);
+      assert.deepEqual(req.createFootnote.endOfSegmentLocation, { segmentId: '' });
+    });
+
+    it('rejects when neither index nor endOfSegment provided', async () => {
+      const res = await callTool(ctx.client, 'createFootnote', { documentId: 'doc-1' });
+      assert.equal(res.isError, true);
+    });
+  });
 });

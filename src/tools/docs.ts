@@ -992,6 +992,15 @@ const ReadSmartChipsSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
 });
 
+const CreateFootnoteSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  index: z.number().int().min(1, "Index must be at least 1").optional(),
+  endOfSegment: z.boolean().optional(),
+  content: z.string().optional(),
+}).refine(data => data.index !== undefined || data.endOfSegment === true, {
+  message: "Either 'index' or 'endOfSegment: true' must be provided",
+});
+
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
@@ -1412,6 +1421,20 @@ export const toolDefinitions: ToolDefinition[] = [
       type: "object",
       properties: {
         documentId: { type: "string", description: "Document ID" }
+      },
+      required: ["documentId"]
+    }
+  },
+  {
+    name: "createFootnote",
+    description: "Create a footnote in a Google Doc. Footnotes cannot be inserted inside equations, headers, footers, or other footnotes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentId: { type: "string", description: "Document ID" },
+        index: { type: "number", description: "1-based character index where the footnote reference should be inserted" },
+        endOfSegment: { type: "boolean", description: "If true, insert footnote at the end of the document body (use instead of index)" },
+        content: { type: "string", description: "Optional text content for the footnote body" },
       },
       required: ["documentId"]
     }
@@ -3055,6 +3078,52 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
       // Date chips appear as richLink elements in the Docs API model — already covered above.
       return { content: [{ type: 'text', text: hits.length ? hits.join('\n') : 'No smart chips detected (note: only the default tab is scanned).' }], isError: false };
+    }
+
+    case "createFootnote": {
+      const validation = CreateFootnoteSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+
+      // Build the createFootnote request
+      const createFootnoteReq: any = {};
+      if (a.index !== undefined) {
+        createFootnoteReq.location = { index: a.index };
+      } else {
+        createFootnoteReq.endOfSegmentLocation = { segmentId: "" };
+      }
+
+      const res = await docs.documents.batchUpdate({
+        documentId: a.documentId,
+        requestBody: {
+          requests: [{ createFootnote: createFootnoteReq } as any],
+        },
+      });
+
+      const footnoteId = (res.data as any).replies?.[0]?.createFootnote?.footnoteId;
+      if (!footnoteId) {
+        return errorResponse("Failed to create footnote — no footnoteId in response.");
+      }
+
+      // Optionally insert text content into the footnote body
+      if (a.content) {
+        await docs.documents.batchUpdate({
+          documentId: a.documentId,
+          requestBody: {
+            requests: [{
+              insertText: {
+                location: { segmentId: footnoteId, index: 0 },
+                text: a.content,
+              },
+            }],
+          },
+        });
+      }
+
+      const locationDesc = a.index !== undefined ? `at index ${a.index}` : 'at end of document';
+      return { content: [{ type: 'text', text: `Created footnote ${footnoteId} ${locationDesc}.${a.content ? ' Content inserted.' : ''}` }], isError: false };
     }
 
     default:

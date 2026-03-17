@@ -189,20 +189,13 @@ npx @piotr-agier/google-drive-mcp auth
 
 ### Running the Docker Container
 
-Run the container with your credentials and tokens mounted:
+The `scripts/docker-mcp.sh` wrapper manages the container lifecycle — it creates, reuses, and replaces containers automatically. MCP clients invoke this script directly (see configuration below).
+
+To verify the image works after a rebuild:
 
 ```bash
-docker run -it \
-  -v /path/to/gcp-oauth.keys.json:/config/gcp-oauth.keys.json:ro \
-  -v "$HOME/.config/google-drive-mcp/tokens.json":/config/tokens.json \
-  google-drive-mcp
+docker run --rm google-drive-mcp --help
 ```
-
-**Important Notes:**
-- Replace `/path/to/gcp-oauth.keys.json` with the actual path to your OAuth credentials
-- The `:ro` flag mounts the credentials as read-only for security
-- Tokens are mounted read-write to allow automatic refresh
-- The container runs as non-root user for security
 
 ### Docker Configuration for Claude Desktop
 
@@ -228,6 +221,7 @@ The script will:
 - Create the container on first run
 - Reuse the existing container on subsequent runs
 - Automatically restart it if it was stopped
+- Replace the container when the image has been rebuilt
 
 **Note:** The container stays running in the background until explicitly stopped.
 To stop it: `docker stop google-drive-mcp`
@@ -1087,11 +1081,9 @@ npx @piotr-agier/google-drive-mcp auth
 # 2. Verify tokens exist
 ls -la ~/.config/google-drive-mcp/tokens.json
 
-# 3. Run Docker with tokens mounted
-docker run -it \
-  -v $(pwd)/gcp-oauth.keys.json:/config/gcp-oauth.keys.json:ro \
-  -v "$HOME/.config/google-drive-mcp/tokens.json":/config/tokens.json \
-  google-drive-mcp
+# 3. Rebuild the image and restart the client
+docker build -t google-drive-mcp .
+# The client will invoke scripts/docker-mcp.sh, which auto-replaces the stale container
 ```
 
 #### "npm ci failed" during Docker build

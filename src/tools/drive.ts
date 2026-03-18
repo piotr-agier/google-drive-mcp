@@ -1124,7 +1124,7 @@ export async function handleTool(
       return {
         content: [{
           type: "text",
-          text: `File locked successfully!\n\nFile: ${fileInfo.data.name}\nReason: ${data.reason || 'Locked via MCP'}\n\nThe file is now read-only and cannot be edited or deleted.`
+          text: `File locked successfully!\n\nFile: ${fileInfo.data.name}\nReason: ${data.reason || 'Locked via MCP'}${data.ownerRestricted ? '\nOwner-restricted: only the file owner can unlock' : ''}\n\nThe file is now read-only and cannot be edited or deleted.`
         }],
         isError: false
       };

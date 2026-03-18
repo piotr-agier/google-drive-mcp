@@ -3088,7 +3088,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
 
       // Build the createFootnote request
-      const createFootnoteReq: any = {};
+      const createFootnoteReq: { location?: { index: number }; endOfSegmentLocation?: { segmentId: string } } = {};
       if (a.index !== undefined) {
         createFootnoteReq.location = { index: a.index };
       } else {
@@ -3098,31 +3098,36 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const res = await docs.documents.batchUpdate({
         documentId: a.documentId,
         requestBody: {
-          requests: [{ createFootnote: createFootnoteReq } as any],
+          requests: [{ createFootnote: createFootnoteReq }],
         },
       });
 
-      const footnoteId = (res.data as any).replies?.[0]?.createFootnote?.footnoteId;
+      const footnoteId = res.data.replies?.[0]?.createFootnote?.footnoteId;
       if (!footnoteId) {
         return errorResponse("Failed to create footnote — no footnoteId in response.");
       }
 
+      const locationDesc = a.index !== undefined ? `at index ${a.index}` : 'at end of document';
+
       // Optionally insert text content into the footnote body
       if (a.content) {
-        await docs.documents.batchUpdate({
-          documentId: a.documentId,
-          requestBody: {
-            requests: [{
-              insertText: {
-                location: { segmentId: footnoteId, index: 0 },
-                text: a.content,
-              },
-            }],
-          },
-        });
+        try {
+          await docs.documents.batchUpdate({
+            documentId: a.documentId,
+            requestBody: {
+              requests: [{
+                insertText: {
+                  location: { segmentId: footnoteId, index: 0 },
+                  text: a.content,
+                },
+              }],
+            },
+          });
+        } catch (err: any) {
+          return { content: [{ type: 'text', text: `Created footnote ${footnoteId} ${locationDesc}, but failed to insert content: ${err.message}` }], isError: true };
+        }
       }
 
-      const locationDesc = a.index !== undefined ? `at index ${a.index}` : 'at end of document';
       return { content: [{ type: 'text', text: `Created footnote ${footnoteId} ${locationDesc}.${a.content ? ' Content inserted.' : ''}` }], isError: false };
     }
 

@@ -524,7 +524,7 @@ describe('Drive tools', () => {
         data: { id: 'shortcut-1', name: 'Report.pdf', webViewLink: 'https://drive.google.com/shortcut-1' },
       }));
       const res = await callTool(ctx.client, 'createShortcut', { targetFileId: 'target-1' });
-      assert.equal(res.isError, undefined);
+      assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('Shortcut created successfully'));
       assert.ok(res.content[0].text.includes('Report.pdf'));
 
@@ -564,14 +564,14 @@ describe('Drive tools', () => {
         data: { id: 'file-1', name: 'Report.docx', contentRestrictions: [] },
       }));
       const res = await callTool(ctx.client, 'lockFile', { fileId: 'file-1', reason: 'Final version' });
-      assert.equal(res.isError, undefined);
+      assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('File locked successfully'));
       assert.ok(res.content[0].text.includes('Final version'));
 
       const updateCalls = ctx.mocks.drive.tracker.getCalls('files.update');
       assert.ok(updateCalls.length >= 1);
       const updateArgs = updateCalls[updateCalls.length - 1].args[0];
-      assert.deepEqual(updateArgs.requestBody.contentRestrictions, [{ readOnly: true, reason: 'Final version' }]);
+      assert.deepEqual(updateArgs.requestBody.contentRestrictions, [{ readOnly: true, reason: 'Final version', ownerRestricted: false }]);
       assert.equal(updateArgs.supportsAllDrives, true);
     });
 
@@ -604,13 +604,13 @@ describe('Drive tools', () => {
         data: { id: 'file-1', name: 'Report.docx', contentRestrictions: [{ readOnly: true, reason: 'Locked' }] },
       }));
       const res = await callTool(ctx.client, 'unlockFile', { fileId: 'file-1' });
-      assert.equal(res.isError, undefined);
+      assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('File unlocked successfully'));
 
       const updateCalls = ctx.mocks.drive.tracker.getCalls('files.update');
       assert.ok(updateCalls.length >= 1);
       const updateArgs = updateCalls[updateCalls.length - 1].args[0];
-      assert.deepEqual(updateArgs.requestBody.contentRestrictions, []);
+      assert.deepEqual(updateArgs.requestBody.contentRestrictions, [{ readOnly: false }]);
     });
 
     it('returns message when file is not locked', async () => {

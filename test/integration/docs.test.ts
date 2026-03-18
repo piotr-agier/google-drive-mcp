@@ -1274,5 +1274,28 @@ describe('Docs tools', () => {
       const res = await callTool(ctx.client, 'createFootnote', { documentId: 'doc-1' });
       assert.equal(res.isError, true);
     });
+
+    it('returns partial-success error when content insertion fails', async () => {
+      let callCount = 0;
+      ctx.mocks.docs.service.documents.batchUpdate._setImpl(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return { data: { replies: [{ createFootnote: { footnoteId: 'fn-orphan' } }] } };
+        }
+        throw new Error('Simulated Docs API failure');
+      });
+
+      const res = await callTool(ctx.client, 'createFootnote', {
+        documentId: 'doc-1', index: 3, content: 'Some text',
+      });
+
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.includes('fn-orphan'));
+      assert.ok(res.content[0].text.includes('failed to insert content'));
+      assert.ok(res.content[0].text.includes('Simulated Docs API failure'));
+
+      const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
+      assert.equal(calls.length, 2);
+    });
   });
 });

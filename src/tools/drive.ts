@@ -102,7 +102,8 @@ const CreateShortcutSchema = z.object({
 
 const LockFileSchema = z.object({
   fileId: z.string().min(1, "File ID is required"),
-  reason: z.string().optional()
+  reason: z.string().optional(),
+  ownerRestricted: z.boolean().optional()
 });
 
 const UnlockFileSchema = z.object({
@@ -358,7 +359,7 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         fileId: { type: "string", description: "ID of the file to copy" },
         newName: { type: "string", description: "Name for the copied file. If not provided, will use 'Copy of [original name]'" },
-        parentFolderId: { type: "string", description: "ID of folder where copy should be placed. If not provided, places in same location as original." }
+        parentFolderId: { type: "string", description: "ID or path of the destination folder (defaults to same folder as original)" }
       },
       required: ["fileId"]
     }
@@ -559,7 +560,7 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         targetFileId: {
           type: "string",
-          description: "ID of the file or folder to create a shortcut to"
+          description: "The file or folder ID (not a path) to create a shortcut to"
         },
         parentFolderId: {
           type: "string",
@@ -586,6 +587,10 @@ export const toolDefinitions: ToolDefinition[] = [
         reason: {
           type: "string",
           description: "Reason for locking the file (shown to users who try to edit)"
+        },
+        ownerRestricted: {
+          type: "boolean",
+          description: "If true, only the file owner can unlock the file (default: false)"
         }
       },
       required: ["fileId"]
@@ -1013,7 +1018,8 @@ export async function handleTool(
       };
 
       if (data.parentFolderId) {
-        copyMetadata.parents = [data.parentFolderId];
+        const resolvedParentId = await ctx.resolveFolderId(data.parentFolderId);
+        copyMetadata.parents = [resolvedParentId];
       } else if (originalFile.data.parents) {
         copyMetadata.parents = originalFile.data.parents;
       }
@@ -1072,7 +1078,8 @@ export async function handleTool(
         content: [{
           type: "text",
           text: `Shortcut created successfully!\n\nShortcut: ${shortcut.data.name} (${shortcut.data.id})\nTarget: ${targetFile.data.name} (${data.targetFileId})\nLocation: folder ${parentId}\nLink: ${shortcut.data.webViewLink || 'N/A'}`
-        }]
+        }],
+        isError: false
       };
     }
 
@@ -1095,7 +1102,8 @@ export async function handleTool(
           content: [{
             type: "text",
             text: `File "${fileInfo.data.name}" is already locked.`
-          }]
+          }],
+          isError: false
         };
       }
 
@@ -1104,7 +1112,8 @@ export async function handleTool(
         requestBody: {
           contentRestrictions: [{
             readOnly: true,
-            reason: data.reason || 'Locked via MCP'
+            reason: data.reason || 'Locked via MCP',
+            ownerRestricted: data.ownerRestricted ?? false
           }]
         },
         supportsAllDrives: true
@@ -1116,7 +1125,8 @@ export async function handleTool(
         content: [{
           type: "text",
           text: `File locked successfully!\n\nFile: ${fileInfo.data.name}\nReason: ${data.reason || 'Locked via MCP'}\n\nThe file is now read-only and cannot be edited or deleted.`
-        }]
+        }],
+        isError: false
       };
     }
 
@@ -1139,14 +1149,15 @@ export async function handleTool(
           content: [{
             type: "text",
             text: `File "${fileInfo.data.name}" is not locked.`
-          }]
+          }],
+          isError: false
         };
       }
 
       await ctx.getDrive().files.update({
         fileId: data.fileId,
         requestBody: {
-          contentRestrictions: []
+          contentRestrictions: [{ readOnly: false }]
         },
         supportsAllDrives: true
       });
@@ -1157,7 +1168,8 @@ export async function handleTool(
         content: [{
           type: "text",
           text: `File unlocked successfully!\n\nFile: ${fileInfo.data.name}\n\nThe file can now be edited and deleted.`
-        }]
+        }],
+        isError: false
       };
     }
 

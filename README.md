@@ -898,6 +898,78 @@ Add the server to your Claude Desktop configuration:
   - `calendarId`: Calendar ID (optional, default: primary)
   - `sendUpdates`: Send cancellation notifications (optional, default: none)
 
+## External Authentication
+
+For hosted, containerized, or CI/CD deployments where a browser-based OAuth flow is not available, the server supports two alternative authentication modes. They are checked in priority order before falling back to the default local OAuth flow.
+
+### 1. Service Account Mode
+
+Set the standard `GOOGLE_APPLICATION_CREDENTIALS` environment variable to point to a service account JSON key file. Best for server-to-server, CI/CD, and container deployments.
+
+```json
+{
+  "mcpServers": {
+    "google-drive": {
+      "command": "npx",
+      "args": ["@piotr-agier/google-drive-mcp"],
+      "env": {
+        "GOOGLE_APPLICATION_CREDENTIALS": "/path/to/service-account-key.json"
+      }
+    }
+  }
+}
+```
+
+**Note:** The service account must have access to the Google Drive files/folders you want to work with. For Shared Drives, grant the service account's email address the appropriate permissions.
+
+### 2. External OAuth Token Mode
+
+Provide a pre-obtained OAuth access token via `GOOGLE_DRIVE_MCP_ACCESS_TOKEN`. This is useful when an external service handles the OAuth flow (e.g., a web app that obtains tokens on behalf of the user).
+
+**Access token only** (no auto-refresh — token will eventually expire):
+```json
+{
+  "mcpServers": {
+    "google-drive": {
+      "command": "npx",
+      "args": ["@piotr-agier/google-drive-mcp"],
+      "env": {
+        "GOOGLE_DRIVE_MCP_ACCESS_TOKEN": "ya29.a0AfH6SM..."
+      }
+    }
+  }
+}
+```
+
+**With refresh token** (recommended — enables automatic token refresh):
+```json
+{
+  "mcpServers": {
+    "google-drive": {
+      "command": "npx",
+      "args": ["@piotr-agier/google-drive-mcp"],
+      "env": {
+        "GOOGLE_DRIVE_MCP_ACCESS_TOKEN": "ya29.a0AfH6SM...",
+        "GOOGLE_DRIVE_MCP_REFRESH_TOKEN": "1//0dx...",
+        "GOOGLE_DRIVE_MCP_CLIENT_ID": "123456789.apps.googleusercontent.com",
+        "GOOGLE_DRIVE_MCP_CLIENT_SECRET": "GOCSPX-..."
+      }
+    }
+  }
+}
+```
+
+| Variable | Required | Description |
+|---|---|---|
+| `GOOGLE_DRIVE_MCP_ACCESS_TOKEN` | Yes (activates mode) | Google OAuth access token |
+| `GOOGLE_DRIVE_MCP_REFRESH_TOKEN` | No | Refresh token for auto-refresh |
+| `GOOGLE_DRIVE_MCP_CLIENT_ID` | Required with refresh token | OAuth client ID |
+| `GOOGLE_DRIVE_MCP_CLIENT_SECRET` | Required with refresh token | OAuth client secret |
+
+### 3. Local OAuth Flow (Default)
+
+If neither of the above modes is configured, the server uses the existing browser-based OAuth flow. See below for details.
+
 ## Authentication Flow
 
 The server uses OAuth 2.0 for secure authentication:
@@ -1139,6 +1211,7 @@ google-drive-mcp/
 │   ├── auth.ts            # Main authentication module
 │   ├── auth/              # Authentication components
 │   │   ├── client.ts      # OAuth2 client setup
+│   │   ├── externalAuth.ts # Service account & external token auth
 │   │   ├── server.ts      # Local auth server
 │   │   ├── tokenManager.ts # Token storage and validation
 │   │   └── utils.ts       # Auth utilities
@@ -1197,6 +1270,15 @@ npm run typecheck # Type checking without compilation
 |----------|-------------|---------|---------|
 | `GOOGLE_DRIVE_MCP_TOKEN_PATH` | Override token storage location | `~/.config/google-drive-mcp/tokens.json` | `/custom/path/tokens.json` |
 | `DEBUG` | Enable debug logging | (disabled) | `google-drive-mcp:*` |
+
+**External Authentication** (alternative to local OAuth flow):
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path to service account JSON key file | `/path/to/service-account.json` |
+| `GOOGLE_DRIVE_MCP_ACCESS_TOKEN` | Pre-obtained OAuth access token | `ya29.a0AfH6SM...` |
+| `GOOGLE_DRIVE_MCP_REFRESH_TOKEN` | Refresh token for auto-refresh (optional) | `1//0dx...` |
+| `GOOGLE_DRIVE_MCP_CLIENT_ID` | OAuth client ID (required with refresh token) | `123456789.apps.googleusercontent.com` |
+| `GOOGLE_DRIVE_MCP_CLIENT_SECRET` | OAuth client secret (required with refresh token) | `GOCSPX-...` |
 
 #### System Variables (used by the codebase if present)
 

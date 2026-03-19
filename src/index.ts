@@ -376,8 +376,17 @@ Examples:
   npx @yourusername/google-drive-mcp
 
 Environment Variables:
-  GOOGLE_DRIVE_OAUTH_CREDENTIALS   Path to OAuth credentials file
-  GOOGLE_DRIVE_MCP_TOKEN_PATH      Path to store authentication tokens
+  GOOGLE_DRIVE_OAUTH_CREDENTIALS        Path to OAuth credentials file
+  GOOGLE_DRIVE_MCP_TOKEN_PATH           Path to store authentication tokens
+
+  Service Account Mode:
+  GOOGLE_APPLICATION_CREDENTIALS        Path to service account JSON key file
+
+  External OAuth Token Mode:
+  GOOGLE_DRIVE_MCP_ACCESS_TOKEN         Pre-obtained Google OAuth access token
+  GOOGLE_DRIVE_MCP_REFRESH_TOKEN        Refresh token for auto-refresh (optional)
+  GOOGLE_DRIVE_MCP_CLIENT_ID            OAuth client ID (required with refresh token)
+  GOOGLE_DRIVE_MCP_CLIENT_SECRET        OAuth client secret (required with refresh token)
 `);
 }
 

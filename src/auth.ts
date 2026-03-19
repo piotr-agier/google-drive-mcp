@@ -2,11 +2,21 @@
 import { initializeOAuth2Client } from './auth/client.js';
 import { AuthServer } from './auth/server.js';
 import { TokenManager } from './auth/tokenManager.js';
+import {
+  isServiceAccountMode, createServiceAccountAuth,
+  isExternalTokenMode, validateExternalTokenConfig,
+  createExternalOAuth2Client,
+} from './auth/externalAuth.js';
 
 export { TokenManager } from './auth/tokenManager.js';
 export { initializeOAuth2Client } from './auth/client.js';
 export { AuthServer } from './auth/server.js';
 export { SCOPE_ALIASES, SCOPE_PRESETS, DEFAULT_SCOPES, resolveOAuthScopes } from './auth/scopes.js';
+export {
+  isServiceAccountMode, createServiceAccountAuth,
+  isExternalTokenMode, validateExternalTokenConfig,
+  createExternalOAuth2Client,
+} from './auth/externalAuth.js';
 
 /**
  * Authenticate and return OAuth2 client
@@ -14,7 +24,20 @@ export { SCOPE_ALIASES, SCOPE_PRESETS, DEFAULT_SCOPES, resolveOAuthScopes } from
  */
 export async function authenticate(): Promise<any> {
   console.error('Initializing authentication...');
-  
+
+  // Priority 1: Service account
+  if (isServiceAccountMode()) {
+    return await createServiceAccountAuth();
+  }
+
+  // Priority 2: External OAuth tokens
+  if (isExternalTokenMode()) {
+    validateExternalTokenConfig();
+    return createExternalOAuth2Client();
+  }
+
+  // Priority 3: Existing local OAuth flow
+
   // Initialize OAuth2 client
   const oauth2Client = await initializeOAuth2Client();
   const tokenManager = new TokenManager(oauth2Client);

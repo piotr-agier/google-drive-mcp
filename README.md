@@ -371,7 +371,7 @@ CLI flags take priority over environment variables.
 | `--port` | `MCP_HTTP_PORT` | `3100` | HTTP listen port |
 | `--host` | `MCP_HTTP_HOST` | `127.0.0.1` | HTTP bind address |
 
-The HTTP endpoint is `POST /mcp` for JSON-RPC requests, `GET /mcp` for SSE streaming, and `DELETE /mcp` to close a session.
+The HTTP endpoint is `POST /mcp` for JSON-RPC requests, `GET /mcp` for SSE streaming, and `DELETE /mcp` to close a session. After the initial `initialize` request, all subsequent requests must include the `mcp-session-id` header returned in the initialize response.
 
 When binding to `127.0.0.1` (default), DNS rebinding protection is automatically enabled. For remote deployments (`0.0.0.0`), use service account or external token authentication and ensure the endpoint is behind a reverse proxy with TLS.
 

@@ -565,17 +565,21 @@ async function startStdioTransport(): Promise<void> {
   }
 }
 
-async function startHttpTransport(args: CliArgs): Promise<void> {
-  try {
-    const { httpPort, httpHost } = args;
-    console.error(`Starting Google Drive MCP server (HTTP on ${httpHost}:${httpPort})...`);
+interface HttpSession {
+  transport: StreamableHTTPServerTransport;
+  server: Server;
+}
 
-    const app = createMcpExpressApp({ host: httpHost });
+/**
+ * Create an Express app with MCP Streamable HTTP routes.
+ * Shared by production (startHttpTransport) and tests.
+ */
+function createHttpApp(host: string) {
+  const app = createMcpExpressApp({ host });
+  const sessions = new Map<string, HttpSession>();
 
-    // Track active sessions
-    const sessions = new Map<string, { transport: StreamableHTTPServerTransport; server: Server }>();
-
-    app.post('/mcp', async (req, res) => {
+  app.post('/mcp', async (req, res) => {
+    try {
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
       // If we have an existing session, delegate to it
@@ -619,9 +623,20 @@ async function startHttpTransport(args: CliArgs): Promise<void> {
         sessions.set(sid, { transport, server: sessionServer });
         log(`New session created: ${sid}`);
       }
-    });
+    } catch (error) {
+      log('Error handling POST /mcp', { error: (error as Error).message });
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: { code: -32603, message: 'Internal server error' },
+          id: null,
+        });
+      }
+    }
+  });
 
-    app.get('/mcp', async (req, res) => {
+  app.get('/mcp', async (req, res) => {
+    try {
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
       if (!sessionId || !sessions.has(sessionId)) {
         res.status(400).json({
@@ -633,9 +648,20 @@ async function startHttpTransport(args: CliArgs): Promise<void> {
       }
       const session = sessions.get(sessionId)!;
       await session.transport.handleRequest(req, res);
-    });
+    } catch (error) {
+      log('Error handling GET /mcp', { error: (error as Error).message });
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: { code: -32603, message: 'Internal server error' },
+          id: null,
+        });
+      }
+    }
+  });
 
-    app.delete('/mcp', async (req, res) => {
+  app.delete('/mcp', async (req, res) => {
+    try {
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
       if (!sessionId || !sessions.has(sessionId)) {
         res.status(400).json({
@@ -649,7 +675,27 @@ async function startHttpTransport(args: CliArgs): Promise<void> {
       await session.transport.close();
       sessions.delete(sessionId);
       res.status(200).end();
-    });
+    } catch (error) {
+      log('Error handling DELETE /mcp', { error: (error as Error).message });
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: { code: -32603, message: 'Internal server error' },
+          id: null,
+        });
+      }
+    }
+  });
+
+  return { app, sessions };
+}
+
+async function startHttpTransport(args: CliArgs): Promise<void> {
+  try {
+    const { httpPort, httpHost } = args;
+    console.error(`Starting Google Drive MCP server (HTTP on ${httpHost}:${httpPort})...`);
+
+    const { app, sessions } = createHttpApp(httpHost);
 
     const httpServer = app.listen(httpPort, httpHost, () => {
       log(`HTTP server listening on ${httpHost}:${httpPort}`);
@@ -674,7 +720,7 @@ async function startHttpTransport(args: CliArgs): Promise<void> {
 }
 
 // Export server, factory, and main for testing or potential programmatic use
-export { main, server, createMcpServer };
+export { main, server, createMcpServer, createHttpApp };
 
 /** Inject a fake auth client for testing — bypasses authenticate(). */
 export function _setAuthClientForTesting(client: any) {

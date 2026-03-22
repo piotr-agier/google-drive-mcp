@@ -1,11 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it, before, after } from 'node:test';
 import type { Server as HttpServer } from 'node:http';
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
-import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
-import { randomUUID } from 'crypto';
 import { google } from 'googleapis';
 import { createAllMocks } from '../helpers/mock-google-apis.js';
 
@@ -16,11 +11,6 @@ async function getServerModule() {
     _serverModule = await import('../../src/index.js');
   }
   return _serverModule;
-}
-
-interface Session {
-  transport: StreamableHTTPServerTransport;
-  server: Server;
 }
 
 const MCP_HEADERS = {
@@ -47,7 +37,7 @@ async function parseResponse(res: Response): Promise<any> {
 describe('HTTP transport', () => {
   let httpServer: HttpServer;
   let baseUrl: string;
-  const sessions = new Map<string, Session>();
+  let sessions: Map<string, any>;
 
   before(async () => {
     const mocks = createAllMocks();
@@ -62,74 +52,9 @@ describe('HTTP transport', () => {
       request: async () => ({ data: 'mock-auth-request-response' }),
     });
 
-    const app = createMcpExpressApp({ host: '127.0.0.1' });
-
-    app.post('/mcp', async (req: any, res: any) => {
-      const sessionId = req.headers['mcp-session-id'] as string | undefined;
-
-      if (sessionId && sessions.has(sessionId)) {
-        const session = sessions.get(sessionId)!;
-        await session.transport.handleRequest(req, res, req.body);
-        return;
-      }
-
-      if (!isInitializeRequest(req.body)) {
-        res.status(400).json({
-          jsonrpc: '2.0',
-          error: { code: -32600, message: 'Bad Request: expected initialize request or valid session ID' },
-          id: null,
-        });
-        return;
-      }
-
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-      });
-      const sessionServer = mod.createMcpServer();
-      await sessionServer.connect(transport);
-
-      transport.onclose = () => {
-        const sid = transport.sessionId;
-        if (sid) sessions.delete(sid);
-      };
-
-      await transport.handleRequest(req, res, req.body);
-
-      const sid = transport.sessionId;
-      if (sid) {
-        sessions.set(sid, { transport, server: sessionServer });
-      }
-    });
-
-    app.get('/mcp', async (req: any, res: any) => {
-      const sessionId = req.headers['mcp-session-id'] as string | undefined;
-      if (!sessionId || !sessions.has(sessionId)) {
-        res.status(400).json({
-          jsonrpc: '2.0',
-          error: { code: -32600, message: 'Bad Request: missing or invalid session ID' },
-          id: null,
-        });
-        return;
-      }
-      const session = sessions.get(sessionId)!;
-      await session.transport.handleRequest(req, res);
-    });
-
-    app.delete('/mcp', async (req: any, res: any) => {
-      const sessionId = req.headers['mcp-session-id'] as string | undefined;
-      if (!sessionId || !sessions.has(sessionId)) {
-        res.status(400).json({
-          jsonrpc: '2.0',
-          error: { code: -32600, message: 'Bad Request: missing or invalid session ID' },
-          id: null,
-        });
-        return;
-      }
-      const session = sessions.get(sessionId)!;
-      await session.transport.close();
-      sessions.delete(sessionId);
-      res.status(200).end();
-    });
+    const result = mod.createHttpApp('127.0.0.1');
+    const app = result.app;
+    sessions = result.sessions;
 
     await new Promise<void>((resolve) => {
       httpServer = app.listen(0, '127.0.0.1', () => {

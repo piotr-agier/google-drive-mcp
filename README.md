@@ -347,6 +347,46 @@ Add the server to your Claude Desktop configuration:
 
 **Note**: Replace `/path/to/your/gcp-oauth.keys.json` with the actual path to your OAuth credentials file.
 
+## Streamable HTTP Transport
+
+By default the server uses stdio transport (for local MCP clients like Claude Desktop). You can also run it as an HTTP server using the Streamable HTTP transport, which enables remote/hosted deployments and shared gateways.
+
+### Starting in HTTP mode
+
+```bash
+google-drive-mcp start --transport http --port 3100 --host 127.0.0.1
+```
+
+Or with environment variables:
+
+```bash
+MCP_TRANSPORT=http MCP_HTTP_PORT=3100 MCP_HTTP_HOST=127.0.0.1 google-drive-mcp start
+```
+
+CLI flags take priority over environment variables.
+
+| CLI Flag | Env Var | Default | Description |
+|----------|---------|---------|-------------|
+| `--transport` | `MCP_TRANSPORT` | `stdio` | `stdio` or `http` |
+| `--port` | `MCP_HTTP_PORT` | `3100` | HTTP listen port |
+| `--host` | `MCP_HTTP_HOST` | `127.0.0.1` | HTTP bind address |
+
+The HTTP endpoint is `POST /mcp` for JSON-RPC requests, `GET /mcp` for SSE streaming, and `DELETE /mcp` to close a session. After the initial `initialize` request, all subsequent requests must include the `mcp-session-id` header returned in the initialize response.
+
+When binding to `127.0.0.1` (default), DNS rebinding protection is automatically enabled. For remote deployments (`0.0.0.0`), use service account or external token authentication and ensure the endpoint is behind a reverse proxy with TLS.
+
+### MCP client configuration (HTTP)
+
+```json
+{
+  "mcpServers": {
+    "google-drive": {
+      "url": "http://localhost:3100/mcp"
+    }
+  }
+}
+```
+
 ## Available Tools
 
 ### Search and Navigation

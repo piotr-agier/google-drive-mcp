@@ -21,7 +21,8 @@ export class AuthServer {
     this.baseOAuth2Client = oauth2Client;
     this.tokenManager = new TokenManager(oauth2Client);
     this.app = express();
-    this.portRange = { start: 3000, end: 3004 };
+    const portStart = parseInt(process.env.GOOGLE_DRIVE_MCP_AUTH_PORT || '3000', 10);
+    this.portRange = { start: portStart, end: portStart + 4 };
     this.setupRoutes();
   }
 

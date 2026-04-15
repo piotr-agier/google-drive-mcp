@@ -292,6 +292,16 @@ Notes:
   `drive`, `drive.file`, `drive.readonly`, `documents`, `spreadsheets`, `presentations`, `calendar`, `calendar.events`.
 - Changing scopes usually requires re-authentication.
 
+### Auth Server Port Configuration
+
+During OAuth authentication, a local HTTP server is started to receive the callback. By default it tries ports 3000–3004. If those conflict with other services (e.g., a dev server), you can change the starting port:
+
+```bash
+export GOOGLE_DRIVE_MCP_AUTH_PORT=3100
+```
+
+The server will try 5 consecutive ports starting from the configured value (e.g., 3100–3104).
+
 ### Token Storage
 
 Authentication tokens are stored securely following the XDG Base Directory specification:
@@ -1104,7 +1114,7 @@ OAuth credentials not found. Please provide credentials using one of these metho
 #### "Authentication failed" or Browser doesn't open
 **Possible causes:**
 1. **Wrong credential type**: Must be "Desktop app", not "Web application"
-2. **Port blocked**: Ports 3000-3004 must be available
+2. **Port blocked**: Ports 3000-3004 must be available (or custom range if `GOOGLE_DRIVE_MCP_AUTH_PORT` is set)
 3. **Test user not added**: Add your email in OAuth consent screen
 
 **Solution:**
@@ -1112,8 +1122,11 @@ OAuth credentials not found. Please provide credentials using one of these metho
 # Check if ports are in use
 lsof -i :3000-3004
 
-# Kill processes if needed
+# Option 1: Kill processes if needed
 kill -9 <PID>
+
+# Option 2: Use a different port range
+export GOOGLE_DRIVE_MCP_AUTH_PORT=3100
 
 # Re-run authentication
 npx @piotr-agier/google-drive-mcp auth

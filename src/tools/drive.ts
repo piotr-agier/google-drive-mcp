@@ -135,6 +135,7 @@ const AddPermissionSchema = z.object({
   role: z.enum(["owner", "organizer", "fileOrganizer", "writer", "commenter", "reader"]).default("reader"),
   type: z.enum(["user", "group", "domain", "anyone"]).default("user"),
   sendNotificationEmail: z.boolean().optional().default(false),
+  emailMessage: z.string().optional(),
 });
 
 const UpdatePermissionSchema = z.object({
@@ -158,6 +159,7 @@ const ShareFileSchema = z.object({
   emailAddress: z.string().email("Valid email is required"),
   role: z.enum(["writer", "commenter", "reader"]).default("reader"),
   sendNotificationEmail: z.boolean().optional().default(true),
+  emailMessage: z.string().optional(),
 });
 
 const ConvertPdfToGoogleDocSchema = z.object({
@@ -420,7 +422,8 @@ export const toolDefinitions: ToolDefinition[] = [
         emailAddress: { type: "string", description: "Target user/group email" },
         role: { type: "string", enum: ["owner", "organizer", "fileOrganizer", "writer", "commenter", "reader"], description: "Permission role" },
         type: { type: "string", enum: ["user", "group", "domain", "anyone"], description: "Principal type" },
-        sendNotificationEmail: { type: "boolean", description: "Send notification email" }
+        sendNotificationEmail: { type: "boolean", description: "Send notification email" },
+        emailMessage: { type: "string", description: "Custom message to include in the notification email" }
       },
       required: ["fileId", "emailAddress"]
     }
@@ -460,7 +463,8 @@ export const toolDefinitions: ToolDefinition[] = [
         fileId: { type: "string", description: "Google Drive file ID" },
         emailAddress: { type: "string", description: "User email" },
         role: { type: "string", enum: ["writer", "commenter", "reader"], description: "Access role" },
-        sendNotificationEmail: { type: "boolean", description: "Send notification email" }
+        sendNotificationEmail: { type: "boolean", description: "Send notification email" },
+        emailMessage: { type: "string", description: "Custom message to include in the notification email" }
       },
       required: ["fileId", "emailAddress"]
     }
@@ -1314,6 +1318,7 @@ export async function handleTool(
           emailAddress: data.emailAddress,
         },
         sendNotificationEmail: data.sendNotificationEmail,
+        ...(data.emailMessage && { emailMessage: data.emailMessage }),
         fields: 'id,type,role,emailAddress',
         supportsAllDrives: true,
       });
@@ -1417,6 +1422,7 @@ export async function handleTool(
           emailAddress: data.emailAddress,
         },
         sendNotificationEmail: data.sendNotificationEmail,
+        ...(data.emailMessage && { emailMessage: data.emailMessage }),
         fields: 'id,type,role,emailAddress',
         supportsAllDrives: true,
       });

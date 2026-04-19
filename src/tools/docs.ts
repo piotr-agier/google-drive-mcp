@@ -722,13 +722,15 @@ const GetGoogleDocContentSchema = z.object({
 const InsertTextSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
   text: z.string().min(1, "Text to insert is required"),
-  index: z.number().int().min(1, "Index must be at least 1 (1-based)")
+  index: z.number().int().min(1, "Index must be at least 1 (1-based)"),
+  tabId: z.string().optional()
 });
 
 const DeleteRangeSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
   startIndex: z.number().int().min(1, "Start index must be at least 1"),
-  endIndex: z.number().int().min(1, "End index must be at least 1")
+  endIndex: z.number().int().min(1, "End index must be at least 1"),
+  tabId: z.string().optional()
 }).refine(data => data.endIndex > data.startIndex, {
   message: "End index must be greater than start index",
   path: ["endIndex"]
@@ -952,26 +954,28 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "insertText",
-    description: "Insert text at a specific index in a Google Doc (surgical edit, doesn't replace entire doc)",
+    description: "Insert text at a specific index in a Google Doc (surgical edit, doesn't replace entire doc). For multi-tab docs, specify tabId to target a specific tab.",
     inputSchema: {
       type: "object",
       properties: {
         documentId: { type: "string", description: "The document ID" },
         text: { type: "string", description: "Text to insert" },
-        index: { type: "number", description: "Position to insert at (1-based)" }
+        index: { type: "number", description: "Position to insert at (1-based)" },
+        tabId: { type: "string", description: "Optional. Tab ID to insert into (from listDocumentTabs). If omitted, inserts into the first/default tab." }
       },
       required: ["documentId", "text", "index"]
     }
   },
   {
     name: "deleteRange",
-    description: "Delete content between start and end indices in a Google Doc",
+    description: "Delete content between start and end indices in a Google Doc. For multi-tab docs, specify tabId to target a specific tab.",
     inputSchema: {
       type: "object",
       properties: {
         documentId: { type: "string", description: "The document ID" },
         startIndex: { type: "number", description: "Start index (1-based, inclusive)" },
-        endIndex: { type: "number", description: "End index (exclusive)" }
+        endIndex: { type: "number", description: "End index (exclusive)" },
+        tabId: { type: "string", description: "Optional. Tab ID to delete from (from listDocumentTabs). If omitted, deletes from the first/default tab." }
       },
       required: ["documentId", "startIndex", "endIndex"]
     }
@@ -1789,13 +1793,16 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
       const a = validation.data;
 
+      const location: { index: number; tabId?: string } = { index: a.index };
+      if (a.tabId) location.tabId = a.tabId;
+
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
       await docs.documents.batchUpdate({
         documentId: a.documentId,
         requestBody: {
           requests: [{
             insertText: {
-              location: { index: a.index },
+              location,
               text: a.text
             }
           }]
@@ -1803,7 +1810,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       });
 
       return {
-        content: [{ type: "text", text: `Successfully inserted ${a.text.length} characters at index ${a.index}` }],
+        content: [{ type: "text", text: `Successfully inserted ${a.text.length} characters at index ${a.index}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
         isError: false
       };
     }
@@ -1819,17 +1826,18 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         return errorResponse("endIndex must be greater than startIndex");
       }
 
+      const range: { startIndex: number; endIndex: number; tabId?: string } = {
+        startIndex: a.startIndex,
+        endIndex: a.endIndex
+      };
+      if (a.tabId) range.tabId = a.tabId;
+
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
       await docs.documents.batchUpdate({
         documentId: a.documentId,
         requestBody: {
           requests: [{
-            deleteContentRange: {
-              range: {
-                startIndex: a.startIndex,
-                endIndex: a.endIndex
-              }
-            }
+            deleteContentRange: { range }
           }]
         }
       });
@@ -2954,8 +2962,10 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
       await docs.documents.batchUpdate({
         documentId: a.documentId,
-        // updateDocumentTabProperties is not yet in the googleapis TypeScript types — cast required
-        requestBody: { requests: [{ updateDocumentTabProperties: { tabId: a.tabId, tabProperties: { title: a.title }, fields: 'title' } } as any] }
+        // updateDocumentTabProperties is not yet in the googleapis TypeScript types — cast required.
+        // Per Google Docs API spec: tabId lives INSIDE tabProperties (it's the tab identifier),
+        // and `fields` is a FieldMask for which properties to update (excludes tabId).
+        requestBody: { requests: [{ updateDocumentTabProperties: { tabProperties: { tabId: a.tabId, title: a.title }, fields: 'title' } } as any] }
       });
 
       return { content: [{ type: 'text', text: `Renamed tab ${a.tabId} to "${a.title}".` }], isError: false };

@@ -410,6 +410,41 @@ describe('Drive tools', () => {
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('No changes needed'));
     });
+
+    it('addPermission forwards emailMessage to permissions.create', async () => {
+      ctx.mocks.drive.service.permissions.list._resetImpl();
+      const res = await callTool(ctx.client, 'addPermission', {
+        fileId: 'file-1', emailAddress: 'user@example.com', role: 'reader', type: 'user',
+        sendNotificationEmail: true, emailMessage: 'Welcome!',
+      });
+      assert.equal(res.isError, false);
+      const createCalls = ctx.mocks.drive.tracker.getCalls('permissions.create');
+      assert.ok(createCalls.length >= 1);
+      assert.equal(createCalls[0].args[0].emailMessage, 'Welcome!');
+    });
+
+    it('shareFile forwards emailMessage to permissions.create', async () => {
+      ctx.mocks.drive.service.permissions.list._setImpl(async () => ({ data: { permissions: [] } }));
+      const res = await callTool(ctx.client, 'shareFile', {
+        fileId: 'file-1', emailAddress: 'user@example.com', role: 'writer',
+        emailMessage: 'Sharing this with you',
+      });
+      assert.equal(res.isError, false);
+      const createCalls = ctx.mocks.drive.tracker.getCalls('permissions.create');
+      assert.ok(createCalls.length >= 1);
+      assert.equal(createCalls[0].args[0].emailMessage, 'Sharing this with you');
+    });
+
+    it('shareFile omits emailMessage when not provided', async () => {
+      ctx.mocks.drive.service.permissions.list._setImpl(async () => ({ data: { permissions: [] } }));
+      const res = await callTool(ctx.client, 'shareFile', {
+        fileId: 'file-1', emailAddress: 'user@example.com', role: 'writer',
+      });
+      assert.equal(res.isError, false);
+      const createCalls = ctx.mocks.drive.tracker.getCalls('permissions.create');
+      assert.ok(createCalls.length >= 1);
+      assert.equal('emailMessage' in createCalls[0].args[0], false);
+    });
   });
 
   // --- auth diagnostics ---

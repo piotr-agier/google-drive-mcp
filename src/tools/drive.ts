@@ -423,7 +423,7 @@ export const toolDefinitions: ToolDefinition[] = [
         role: { type: "string", enum: ["owner", "organizer", "fileOrganizer", "writer", "commenter", "reader"], description: "Permission role" },
         type: { type: "string", enum: ["user", "group", "domain", "anyone"], description: "Principal type" },
         sendNotificationEmail: { type: "boolean", description: "Send notification email" },
-        emailMessage: { type: "string", description: "Custom message to include in the notification email" }
+        emailMessage: { type: "string", description: "Custom message to include in the notification email. Ignored unless sendNotificationEmail is true." }
       },
       required: ["fileId", "emailAddress"]
     }
@@ -464,7 +464,7 @@ export const toolDefinitions: ToolDefinition[] = [
         emailAddress: { type: "string", description: "User email" },
         role: { type: "string", enum: ["writer", "commenter", "reader"], description: "Access role" },
         sendNotificationEmail: { type: "boolean", description: "Send notification email" },
-        emailMessage: { type: "string", description: "Custom message to include in the notification email" }
+        emailMessage: { type: "string", description: "Custom message to include in the notification email. Ignored unless sendNotificationEmail is true." }
       },
       required: ["fileId", "emailAddress"]
     }

@@ -392,6 +392,7 @@ Examples:
 Environment Variables:
   GOOGLE_DRIVE_OAUTH_CREDENTIALS        Path to OAuth credentials file
   GOOGLE_DRIVE_MCP_TOKEN_PATH           Path to store authentication tokens
+  GOOGLE_DRIVE_MCP_AUTH_PORT            Starting port for OAuth callback server (default: 3000, uses 5 consecutive ports)
 
   Transport Configuration:
   MCP_TRANSPORT                         Transport mode: stdio or http (default: stdio)
@@ -420,8 +421,9 @@ async function runAuthServer(): Promise<void> {
     const success = await authServerInstance.start(true);
 
     if (!success && !authServerInstance.authCompletedSuccessfully) {
+      const { start, end } = authServerInstance.portRange;
       console.error(
-        "Authentication failed. Could not start server or validate existing tokens. Check port availability (3000-3004) and try again."
+        `Authentication failed. Could not start server or validate existing tokens. Check port availability (${start}-${end}) and try again.`
       );
       process.exit(1);
     } else if (authServerInstance.authCompletedSuccessfully) {

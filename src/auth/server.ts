@@ -14,7 +14,7 @@ export class AuthServer {
   private app: express.Express;
   private server: http.Server | null = null;
   private tokenManager: TokenManager;
-  private portRange: { start: number; end: number };
+  public readonly portRange: { start: number; end: number };
   public authCompletedSuccessfully = false; // Flag for standalone script
 
   constructor(oauth2Client: OAuth2Client) {

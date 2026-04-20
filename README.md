@@ -1322,6 +1322,7 @@ npm run typecheck # Type checking without compilation
 | Variable | Description | Default | Example |
 |----------|-------------|---------|---------|
 | `GOOGLE_DRIVE_MCP_TOKEN_PATH` | Override token storage location | `~/.config/google-drive-mcp/tokens.json` | `/custom/path/tokens.json` |
+| `GOOGLE_DRIVE_MCP_AUTH_PORT` | Starting port for OAuth callback server (uses 5 consecutive ports) | `3000` | `3100` |
 | `DEBUG` | Enable debug logging | (disabled) | `google-drive-mcp:*` |
 
 **External Authentication** (alternative to local OAuth flow):

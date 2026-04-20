@@ -21,7 +21,13 @@ export class AuthServer {
     this.baseOAuth2Client = oauth2Client;
     this.tokenManager = new TokenManager(oauth2Client);
     this.app = express();
-    const portStart = parseInt(process.env.GOOGLE_DRIVE_MCP_AUTH_PORT || '3000', 10);
+    const raw = process.env.GOOGLE_DRIVE_MCP_AUTH_PORT;
+    const portStart = raw ? Number(raw) : 3000;
+    if (!Number.isInteger(portStart) || portStart < 1 || portStart > 65531) {
+      throw new Error(
+        `Invalid GOOGLE_DRIVE_MCP_AUTH_PORT: "${raw}". Must be an integer between 1 and 65531.`
+      );
+    }
     this.portRange = { start: portStart, end: portStart + 4 };
     this.setupRoutes();
   }

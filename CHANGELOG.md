@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **Multi-account support** — `tokens.json` has migrated to a versioned multi-account schema (v2). Existing single-account installs are upgraded automatically on first boot; a `tokens.json.v1-backup-<timestamp>` is left alongside for rollback. Downgrading to 2.x after running 3.x will not read the new file without manual restoration of the backup.
+- **Tool input schemas** — every non-admin tool now carries an optional top-level `account` parameter. MCP clients that cache schemas should refresh. Existing calls that omit `account` continue to work against the default/sole account.
+- **Admin-tool access** — `authGetStatus`, `authListScopes`, and `authTestFileAccess` no longer accept the `account` parameter (they always report on the active account); the new `manage_accounts` tool is the supported surface for per-account operations.
 ### Features
 
 - **sheets:** add `ONE_OF_RANGE` to `addDataValidation` condition types, enabling dropdowns sourced from a cell range (Data validation → "Dropdown (from a range)"). Takes exactly one value — the source range in A1 notation; a leading `=` is added automatically if omitted. Lets dropdown option lists be maintained in one place (including a separate master spreadsheet via an `IMPORTRANGE` staging range)
@@ -12,17 +17,29 @@ All notable changes to this project will be documented in this file.
 - **resources:** add `GOOGLE_DRIVE_MCP_DISABLE_RESOURCES` env var (and `--no-resources` flag) to opt out of the MCP resource protocol (`gdrive:///` listing/reading); tools stay available. For tools-only clients or clients that hang enumerating a large Drive. The env var and `--no-resources[=<bool>]` accept `1/0`, `true/false`, `yes/no`, `on/off`; `--no-resources=false` re-enables resources, overriding a truthy env value ([#115](https://github.com/piotr-agier/google-drive-mcp/issues/115), [#128](https://github.com/piotr-agier/google-drive-mcp/pull/128))
 - **drive/docs:** add `readTextFile` and extend `insertText`/`deleteRange` to edit raw `text/*` files (e.g. `text/plain`, `text/markdown`, `text/csv`) in place, alongside Google Docs. Text files are addressed by a 0-based Unicode code-point (character) offset, so edits and truncation stay safe for content containing emoji/astral characters; deleting a file's entire content correctly empties it; edits keep working under the `content-editor` (`drive.file`) scope; and `text/*` acceptance is consistent across `readTextFile`/`insertText`/`deleteRange`/`updateTextFile` (Google Docs indexes remain 1-based) ([#133](https://github.com/piotr-agier/google-drive-mcp/pull/133), [#141](https://github.com/piotr-agier/google-drive-mcp/pull/141))
 - **sheets:** add column/row dimension tools — `setColumnWidth`, `setRowHeight`, `autoResizeColumns`, `autoResizeRows`, and `hideSheetDimension`/`showSheetDimension` — for resizing, auto-fitting, and hiding/showing columns and rows. Indices are 0-based and the interval is half-open `[start, end)`. Ranges are validated client-side (`start < end`, and `pixelSize >= 0` for width/height), so reversed or empty ranges are rejected up front with a clear message instead of an opaque Google API `400` ([#134](https://github.com/piotr-agier/google-drive-mcp/pull/134))
-
+- **auth:** add `manage_accounts` tool with `list`, `add`, `remove`, and `set_default` actions for managing multiple connected Google accounts in a single process (local OAuth mode only; service-account and external-token modes remain single-identity).
+- **auth:** add optional `account` parameter to every non-admin tool so a single call can be routed to a specific connected Google account. Resolution order is: explicit `account` → global default → sole-eligible account. Write tools refuse ambiguous resolution and point at `manage_accounts set_default`.
+- **auth:** connect identity discovery — `manage_accounts add` requests `openid` and `userinfo.email` scopes so new accounts record their Google stable `sub` and email at consent time. Existing accounts are left untouched (no forced re-consent).
+- **auth:** atomic-rename writes for `tokens.json` plus a process-wide write queue that serializes concurrent refreshes from different accounts.
+- **auth:** per-alias refresh dedupe — N concurrent tool calls on the same account fire at most one refresh request to Google.
 ### Bug Fixes
 
 - **drive:** `addPermission` no longer forces `emailAddress` for `type: "anyone"` and `type: "domain"` — the Drive API rejected the field for those principals, making both unusable. Added a `domain` parameter so domain-wide grants work, and per-type requirements are now validated up front (`emailAddress` for `user`/`group`, `domain` for `domain`, neither for `anyone`). Also added an optional `allowFileDiscovery` flag for `anyone`/`domain` grants — `false` (default) keeps a file link-only, `true` makes it discoverable in search ([#131](https://github.com/piotr-agier/google-drive-mcp/issues/131))
 - **resources:** raise the `resources/list` page size from 10 to 1000 (Drive API max) so clients that eagerly enumerate the entire Drive (e.g. Gemini CLI) no longer hang during initialization ([#111](https://github.com/piotr-agier/google-drive-mcp/issues/111), [#128](https://github.com/piotr-agier/google-drive-mcp/pull/128))
 - **docs:** honor `tabId` in `insertTable`, `editTableCell`, `insertSmartChip`, `createFootnote`, `applyTextStyle`/`formatGoogleDocText`, `applyParagraphStyle`/`formatGoogleDocParagraph`, and `createParagraphBullets` — these previously ignored `tabId` and silently edited the default tab of multi-tab documents while reporting success ([#114](https://github.com/piotr-agier/google-drive-mcp/issues/114), [#126](https://github.com/piotr-agier/google-drive-mcp/pull/126))
 - **auth:** use loopback IP `127.0.0.1` instead of `localhost` for the OAuth callback redirect URI, matching the IPv4-only callback-server bind so the redirect resolves to the bound address on dual-stack hosts ([#124](https://github.com/piotr-agier/google-drive-mcp/pull/124)). Desktop-app OAuth clients (the recommended type) are unaffected; "Web application" clients that registered a `http://localhost:<port>` redirect must re-register it as `http://127.0.0.1:<port>` or auth fails with `redirect_uri_mismatch` — see README Troubleshooting
-
 ### Performance Improvements
 
 - **docs:** `applyParagraphStyle` with `textToFind` + `tabId` now resolves the matched range and its enclosing paragraph from a single `documents.get`, instead of two full unmasked `includeTabsContent` fetches of the same document. The non-tab path is unchanged ([#114](https://github.com/piotr-agier/google-drive-mcp/issues/114), [#127](https://github.com/piotr-agier/google-drive-mcp/pull/127))
+### Migration
+
+- **Automatic.** First boot on 3.0 reads a pre-existing v1 `tokens.json`, writes the v2 equivalent in place, saves the old file as `tokens.json.v1-backup-<timestamp>`, and registers the migrated credentials under the alias `default`. The account is marked `pendingIdentity: true` — its email and Google `sub` are populated the next time you re-add or re-consent.
+- **Reserved aliases:** `default`, `all`, `*`, `stdio`, `service-account`, `external-token`, `test` — cannot be used with `manage_accounts add`.
+### Known Limitations
+
+- Cross-account read fanout (`account: string[]`) is planned but not yet shipped.
+- The Streamable HTTP transport shares one active-default account across all sessions on the same process; per-session isolation is a planned follow-up.
+- `manage_accounts remove` deletes local credentials but does not yet revoke the refresh token server-side — revoke manually via [Google Account Permissions](https://myaccount.google.com/permissions) if needed.
 
 ## [2.2.0](https://github.com/piotr-agier/google-drive-mcp/compare/v2.1.0...v2.2.0) (2026-04-20)
 

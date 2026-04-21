@@ -1,12 +1,21 @@
 // Main authentication module that re-exports and orchestrates the modular components
+import { OAuth2Client } from 'google-auth-library';
+import { AccountClientFactory } from './auth/accountClientFactory.js';
+import { AccountResolver } from './auth/accountResolver.js';
+import { AccountStore } from './auth/accountStore.js';
 import { initializeOAuth2Client } from './auth/client.js';
-import { AuthServer } from './auth/server.js';
-import { TokenManager } from './auth/tokenManager.js';
 import {
-  isServiceAccountMode, createServiceAccountAuth,
-  isExternalTokenMode, validateExternalTokenConfig,
   createExternalOAuth2Client,
+  createServiceAccountAuth,
+  isExternalTokenMode,
+  isServiceAccountMode,
+  validateExternalTokenConfig,
 } from './auth/externalAuth.js';
+import { resolveOAuthScopes } from './auth/scopes.js';
+import { AuthServer } from './auth/server.js';
+import { SessionStore } from './auth/sessionStore.js';
+import { TokenManager } from './auth/tokenManager.js';
+import { AccountRecord, AuthMode } from './auth/types.js';
 
 export { TokenManager } from './auth/tokenManager.js';
 export { initializeOAuth2Client } from './auth/client.js';
@@ -17,65 +26,138 @@ export {
   isExternalTokenMode, validateExternalTokenConfig,
   createExternalOAuth2Client,
 } from './auth/externalAuth.js';
+export { AccountStore } from './auth/accountStore.js';
+export { AccountResolver } from './auth/accountResolver.js';
+export { AccountClientFactory } from './auth/accountClientFactory.js';
+export { SessionStore, STDIO_SESSION_ID } from './auth/sessionStore.js';
+export type {
+  AccountRecord,
+  AccountTargeting,
+  AuthMode,
+  RedactedAccountView,
+  SessionState,
+  ToolOpKind,
+} from './auth/types.js';
+
+export interface AuthSystem {
+  mode: AuthMode;
+  store: AccountStore;
+  factory: AccountClientFactory;
+  resolver: AccountResolver;
+  sessions: SessionStore;
+}
 
 /**
- * Authenticate and return OAuth2 client
- * This is the main entry point for authentication in the MCP server
+ * Build the multi-account auth system.
+ *
+ * - Detects mode from env (service account > external token > local OAuth).
+ * - Constructs AccountStore/Factory/Resolver/Sessions.
+ * - Seeds synthetic accounts for non-local-OAuth modes.
+ * - For local OAuth: loads v2 tokens.json (or migrates v1).
+ *   If no accounts are registered, runs the interactive auth flow via AuthServer.
  */
-export async function authenticate(): Promise<any> {
+export async function buildAuthSystem(): Promise<AuthSystem> {
   console.error('Initializing authentication...');
 
-  // Priority 1: Service account
   if (isServiceAccountMode()) {
-    return await createServiceAccountAuth();
+    const client = await createServiceAccountAuth();
+    const store = new AccountStore({ mode: 'service-account' });
+    await store.reload();
+    store.setSyntheticAccount(buildSyntheticRecord('service-account'), client);
+    return assembleSystem('service-account', store);
   }
 
-  // Priority 2: External OAuth tokens
+  if (isExternalTokenMode()) {
+    validateExternalTokenConfig();
+    const client = createExternalOAuth2Client();
+    const store = new AccountStore({ mode: 'external-token' });
+    await store.reload();
+    store.setSyntheticAccount(buildSyntheticRecord('external-token'), client);
+    return assembleSystem('external-token', store);
+  }
+
+  // Local OAuth mode
+  const store = new AccountStore({ mode: 'local-oauth' });
+  await store.reload();
+
+  if (store.list().length === 0) {
+    // First-time auth: run the interactive browser flow.
+    const oauth2Client = await initializeOAuth2Client();
+    const tokenManager = new TokenManager(oauth2Client);
+    const authServer = new AuthServer(oauth2Client);
+    const started = await authServer.start(true);
+    if (!started) {
+      throw new Error('Authentication failed. Please check your credentials and try again.');
+    }
+    // Wait for the OAuth callback to populate tokens.json.
+    await new Promise<void>((resolve) => {
+      const poll = setInterval(async () => {
+        if (authServer.authCompletedSuccessfully) {
+          clearInterval(poll);
+          await authServer.stop();
+          resolve();
+        }
+      }, 1000);
+    });
+    // Validate + refresh, then re-read tokens.json (now in v1 shape) and migrate to v2.
+    await tokenManager.validateTokens();
+    await store.reload();
+  } else {
+    console.error(`Authentication: loaded ${store.list().length} account(s) from ${store.getFilePath()}`);
+  }
+
+  return assembleSystem('local-oauth', store);
+}
+
+function assembleSystem(mode: AuthMode, store: AccountStore): AuthSystem {
+  const sessions = new SessionStore();
+  const factory = new AccountClientFactory(store);
+  const resolver = new AccountResolver(store, sessions);
+  return { mode, store, factory, resolver, sessions };
+}
+
+function buildSyntheticRecord(alias: 'service-account' | 'external-token'): AccountRecord {
+  const scope = resolveOAuthScopes().join(' ');
+  const now = new Date().toISOString();
+  return {
+    alias,
+    email: 'unknown',
+    sub: `synthetic:${alias}`,
+    accessToken: '',
+    refreshToken: '',
+    scope,
+    tokenType: 'Bearer',
+    expiryDate: 0,
+    addedAt: now,
+    lastRefreshedAt: now,
+    pendingIdentity: true,
+  };
+}
+
+/**
+ * Authenticate and return the active OAuth2Client.
+ *
+ * Back-compat shim: callers that only want the raw client (e.g. tests, the
+ * service-account priority test) keep working. New callers should use
+ * `buildAuthSystem()` and pull clients from the factory per-alias.
+ */
+export async function authenticate(): Promise<OAuth2Client> {
+  // Preserve legacy fast paths used by tests: synthetic-mode callers expect
+  // the mode-specific client directly without touching AccountStore.
+  if (isServiceAccountMode()) {
+    return (await createServiceAccountAuth()) as OAuth2Client;
+  }
   if (isExternalTokenMode()) {
     validateExternalTokenConfig();
     return createExternalOAuth2Client();
   }
 
-  // Priority 3: Existing local OAuth flow
-
-  // Initialize OAuth2 client
-  const oauth2Client = await initializeOAuth2Client();
-  const tokenManager = new TokenManager(oauth2Client);
-  
-  // Try to validate existing tokens
-  if (await tokenManager.validateTokens()) {
-    console.error('Authentication successful - using existing tokens');
-    console.error('OAuth2Client credentials:', {
-      hasAccessToken: !!oauth2Client.credentials?.access_token,
-      hasRefreshToken: !!oauth2Client.credentials?.refresh_token,
-      expiryDate: oauth2Client.credentials?.expiry_date
-    });
-    return oauth2Client;
+  const system = await buildAuthSystem();
+  const defaultAlias = system.store.getDefault() ?? system.store.list()[0]?.alias;
+  if (!defaultAlias) {
+    throw new Error('Authentication completed but no active account is available.');
   }
-  
-  // No valid tokens, need to authenticate
-  console.error('\n🔐 No valid authentication tokens found.');
-  console.error('Starting authentication flow...\n');
-  
-  const authServer = new AuthServer(oauth2Client);
-  const authSuccess = await authServer.start(true);
-  
-  if (!authSuccess) {
-    throw new Error('Authentication failed. Please check your credentials and try again.');
-  }
-  
-  // Wait for authentication to complete
-  await new Promise<void>((resolve) => {
-    const checkInterval = setInterval(async () => {
-      if (authServer.authCompletedSuccessfully) {
-        clearInterval(checkInterval);
-        await authServer.stop();
-        resolve();
-      }
-    }, 1000);
-  });
-  
-  return oauth2Client;
+  return system.factory.getClient(defaultAlias);
 }
 
 /**
@@ -86,16 +168,16 @@ export async function runAuthCommand(): Promise<void> {
   try {
     console.error('Google Drive MCP - Manual Authentication');
     console.error('════════════════════════════════════════\n');
-    
+
     // Initialize OAuth client
     const oauth2Client = await initializeOAuth2Client();
-    
+
     // Create and start the auth server
     const authServer = new AuthServer(oauth2Client);
-    
+
     // Start with browser opening (true by default)
     const success = await authServer.start(true);
-    
+
     if (!success && !authServer.authCompletedSuccessfully) {
       // Failed to start and tokens weren't already valid
       console.error(
@@ -108,12 +190,12 @@ export async function runAuthCommand(): Promise<void> {
       console.error("You can now use the Google Drive MCP server.");
       process.exit(0); // Exit cleanly if auth is already done
     }
-    
+
     // If we reach here, the server started and is waiting for the browser callback
     console.error(
       "Authentication server started. Please complete the authentication in your browser..."
     );
-    
+
     // Wait for completion
     const intervalId = setInterval(() => {
       if (authServer.authCompletedSuccessfully) {

@@ -26,6 +26,17 @@ export const DEFAULT_SCOPES: readonly string[] = [
 ].map((s) => SCOPE_ALIASES[s]);
 
 /**
+ * Scopes requested in addition to the user's DEFAULT_SCOPES when adding a new
+ * account via `manage_accounts add`, so we can discover the account's email
+ * and Google-stable subject id immediately after consent. Never added to
+ * DEFAULT_SCOPES to avoid forcing re-consent on existing users.
+ */
+export const USERINFO_SCOPES: readonly string[] = [
+  'openid',
+  'https://www.googleapis.com/auth/userinfo.email',
+];
+
+/**
  * Resolve OAuth scopes from `GOOGLE_DRIVE_MCP_SCOPES` env var.
  * Accepts comma-separated aliases (e.g. "drive,documents") or full URLs.
  * Throws on unknown aliases so mis-configurations surface immediately.

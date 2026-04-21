@@ -13,6 +13,7 @@ A Model Context Protocol (MCP) server that provides secure integration with Goog
 - **Google Calendar**: Full calendar management — list calendars, create/update/delete events, Google Meet integration
 - **MCP Resource Protocol**: Files accessible as MCP resources for reading content
 - **Secure Authentication**: OAuth 2.0 with automatic token refresh
+- **Multi-Account Support**: Connect multiple Google accounts (e.g. personal + Workspace) in a single server and target tool calls per-account with an optional `account` parameter
 
 ## Example Usage
 
@@ -314,8 +315,11 @@ Authentication tokens are stored securely following the XDG Base Directory speci
 | 2 | XDG Config | `$XDG_CONFIG_HOME/google-drive-mcp/tokens.json` |
 | 3 | Default | `~/.config/google-drive-mcp/tokens.json` |
 
+**Token file format (v2):** `tokens.json` uses a versioned schema that holds all connected accounts keyed by alias, plus the global default. A `tokens.json` from versions before 3.0 is auto-migrated on first boot and a `tokens.json.v1-backup-<timestamp>` is written alongside in case you need to roll back. No user action is required.
+
 **Security Notes:**
 - Tokens are created with secure permissions (0600)
+- Each token-file write is an atomic rename; concurrent refreshes from different accounts serialize through an in-process queue
 - Never commit tokens to version control
 - Tokens auto-refresh before expiration
 - Google OAuth apps in "Testing" status have refresh tokens that expire after 7 days (Google's policy)
@@ -1005,6 +1009,22 @@ When binding to `127.0.0.1` (default), DNS rebinding protection is automatically
   - `calendarId`: Calendar ID (optional, default: primary)
   - `sendUpdates`: Send cancellation notifications (optional, default: none)
 
+### Account Management
+
+These admin tools manage the multi-account state and are always available regardless of tool filtering. They do **not** accept the `account` parameter — see [Multi-Account Support](#multi-account-support) for the full model.
+
+- **manage_accounts** - Add, list, remove, or set the default Google account connection (local OAuth mode only)
+  - `action`: one of `list`, `add`, `remove`, `set_default`
+  - `account_id`: alias for the account (required for `add`, `remove`, `set_default`). Must match `/^[a-z0-9][a-z0-9_-]{0,31}$/` and not be a reserved name. For `set_default`, pass the literal string `"null"` to clear the default.
+- **authGetStatus** - Show authentication and token status plus scope diagnostics for the current active account
+- **authListScopes** - List configured/requested OAuth scopes and currently granted scopes
+- **authTestFileAccess** - Run a live Drive API check against the current active account
+  - `fileId`: Optional specific file ID to probe; when omitted, performs a generic visibility check
+
+### Per-tool `account` parameter
+
+Every non-admin tool carries an optional top-level `account` field. Pass the alias of a connected account to route that specific call there; omit it to fall back to the session/global default or the sole eligible account. See [Multi-Account Support](#multi-account-support).
+
 ## External Authentication
 
 For hosted, containerized, or CI/CD deployments where a browser-based OAuth flow is not available, the server supports two alternative authentication modes. They are checked in priority order before falling back to the default local OAuth flow.
@@ -1098,7 +1118,76 @@ Provide a pre-obtained OAuth access token via `GOOGLE_DRIVE_MCP_ACCESS_TOKEN`. T
 
 ### 3. Local OAuth Flow (Default)
 
-If neither of the above modes is configured, the server uses the existing browser-based OAuth flow. See below for details.
+If neither of the above modes is configured, the server uses the existing browser-based OAuth flow. In local OAuth mode the server supports multiple connected accounts — see **[Multi-Account Support](#multi-account-support)** below. Service-account and external-token modes are single-identity by design and do not support the multi-account tools.
+
+## Multi-Account Support
+
+The server can hold credentials for multiple Google accounts simultaneously — for example a personal Gmail plus a Google Workspace account — and route each tool call to the right one. This is available in the default **local OAuth mode**; service-account and external-token modes remain single-identity.
+
+### The `manage_accounts` tool
+
+One admin tool drives the whole lifecycle. It ignores the `account` parameter and is always available regardless of tool filtering.
+
+| Action | `account_id` | What it does |
+|---|---|---|
+| `list` | — | Returns all connected accounts with alias, email, `sub`, scopes, expiry, and which is the default. Never returns tokens. |
+| `add` | required (alias) | Starts an OAuth flow in your browser with `prompt=consent select_account` and `access_type=offline`, so Google shows an account picker and always returns a refresh token. On success, the new record is written to `tokens.json`. If it's the first account, it also becomes the default. |
+| `remove` | required (alias) | Deletes the account's credentials from `tokens.json` and clears it from the default if applicable. The token is **not** revoked server-side — see [Revoking OAuth Access](#revoking-oauth-access). |
+| `set_default` | required (alias, or `"null"` to clear) | Picks which account is used when a tool call omits `account`. |
+
+**Alias rules:** lowercase alphanumerics with hyphens or underscores, 1–32 characters, starting with a letter or digit. Reserved names (`default`, `all`, `*`, `stdio`, `service-account`, `external-token`, `test`) are rejected.
+
+### Picking an account per tool call
+
+Every non-admin tool accepts an optional `account` parameter whose value is one of the connected aliases. When omitted, the server resolves the target in this order:
+
+1. The explicit `account` parameter on the call.
+2. The global default set via `manage_accounts set_default`.
+3. If exactly one connected account can satisfy the call's scope requirements, it is selected automatically.
+
+**Writes refuse ambiguity.** If two accounts both satisfy a write, the server errors out with the list of eligible aliases and a pointer at `manage_accounts set_default`. Be explicit or pick a default. Reads on an ambiguous call currently require the same explicit choice; cross-account read fanout is planned for a future release.
+
+### Typical flow
+
+```
+# In the MCP client:
+Use manage_accounts to add my personal and work Google accounts.
+
+# The assistant can now call:
+manage_accounts(action="add", account_id="personal")   # browser flow
+manage_accounts(action="add", account_id="work")       # browser flow
+manage_accounts(action="set_default", account_id="work")
+search(query="Q1 budget")                              # uses work (default)
+search(query="wedding photos", account="personal")     # explicit override
+manage_accounts(action="list")                         # review what's connected
+manage_accounts(action="remove", account_id="personal")
+```
+
+### Migration from single-account installs
+
+If you are upgrading from a pre-3.0 release that stored one account in `tokens.json`, your credentials are migrated to the v2 schema automatically on first boot. The migrated account is assigned the alias `default` (reserved — you can `manage_accounts set_default` it but not re-create it) and a backup of the old file is written to `tokens.json.v1-backup-<timestamp>`. No re-consent is required.
+
+### Scopes for identity discovery
+
+When you run `manage_accounts add`, the auth URL asks Google for the OpenID `openid` and `https://www.googleapis.com/auth/userinfo.email` scopes in addition to the Drive/Docs/Sheets/Slides/Calendar scopes. This lets the server populate the account's `email` and stable `sub` automatically. These two scopes are *not* added to the process-wide `DEFAULT_SCOPES`, so existing accounts migrated from pre-3.0 installs never see an unexpected consent screen — their record carries `pendingIdentity: true` and the email stays `unknown` until you explicitly re-add the account.
+
+### Scope mismatches and error messages
+
+If the resolver picks an account that doesn't hold a scope the tool needs — e.g. you connected a `personal` account with `drive.readonly` only and call a write tool — the call fails with:
+
+```
+Account 'personal' is connected but lacks the required scope for this
+operation: https://www.googleapis.com/auth/drive. To re-consent
+with broader scopes, run:
+  manage_accounts remove personal
+  manage_accounts add personal
+```
+
+The fastest fix is exactly what the error tells you: remove and re-add the alias; the second call shows Google's consent screen with the current scopes.
+
+### Per-session caveat (HTTP transport)
+
+With the Streamable HTTP transport, multiple MCP sessions sharing the same server process also share the same active default account. A `set_default` in one session is visible to the others. Per-session isolation of the default is a planned follow-up; until then, treat the HTTP transport as single-user.
 
 ## Authentication Flow
 
@@ -1119,7 +1208,7 @@ The server uses OAuth 2.0 for secure authentication:
 ### Manual Re-authentication
 
 Run the auth command when you need to:
-- Switch Google accounts
+- Bootstrap the very first account on a fresh install (subsequent accounts use `manage_accounts add` — see [Multi-Account Support](#multi-account-support))
 - Refresh expired tokens (Google expires refresh tokens after 7 days for apps in "Testing" status)
 - Recover from revoked access
 

@@ -6,7 +6,9 @@ import {
   isServiceAccountMode,
   validateExternalTokenConfig,
   createExternalOAuth2Client,
+  buildServiceAccountAuthOptions,
 } from '../src/auth/externalAuth.js';
+import { SCOPE_ALIASES } from '../src/auth/scopes.js';
 
 // ---------------------------------------------------------------------------
 // Helpers — save & restore env vars around each test
@@ -17,6 +19,8 @@ const EXTERNAL_VARS = [
   'GOOGLE_DRIVE_MCP_CLIENT_ID',
   'GOOGLE_DRIVE_MCP_CLIENT_SECRET',
   'GOOGLE_APPLICATION_CREDENTIALS',
+  'GOOGLE_DRIVE_MCP_SUBJECT',
+  'GOOGLE_DRIVE_MCP_SCOPES',
 ] as const;
 
 function clearExternalEnv() {
@@ -64,6 +68,64 @@ test('isServiceAccountMode returns true when GOOGLE_APPLICATION_CREDENTIALS is s
 test('isServiceAccountMode returns false when not set', withEnv(
   {},
   () => { assert.equal(isServiceAccountMode(), false); },
+));
+
+// ---------------------------------------------------------------------------
+// buildServiceAccountAuthOptions
+// ---------------------------------------------------------------------------
+test('buildServiceAccountAuthOptions returns keyFile + default scopes when only GOOGLE_APPLICATION_CREDENTIALS is set', withEnv(
+  { GOOGLE_APPLICATION_CREDENTIALS: '/tmp/sa-key.json' },
+  () => {
+    const opts = buildServiceAccountAuthOptions();
+    assert.equal(opts.keyFile, '/tmp/sa-key.json');
+    assert.ok(Array.isArray(opts.scopes), 'scopes should be an array');
+    assert.ok((opts.scopes as string[]).length > 0, 'default scopes should be non-empty');
+    assert.equal(opts.clientOptions, undefined, 'clientOptions must be omitted when no subject is set');
+  },
+));
+
+test('buildServiceAccountAuthOptions sets clientOptions.subject for domain-wide delegation', withEnv(
+  {
+    GOOGLE_APPLICATION_CREDENTIALS: '/tmp/sa-key.json',
+    GOOGLE_DRIVE_MCP_SUBJECT: 'bot@example.com',
+  },
+  () => {
+    const opts = buildServiceAccountAuthOptions();
+    assert.deepEqual(opts.clientOptions, { subject: 'bot@example.com' });
+  },
+));
+
+test('buildServiceAccountAuthOptions trims whitespace around the subject', withEnv(
+  {
+    GOOGLE_APPLICATION_CREDENTIALS: '/tmp/sa-key.json',
+    GOOGLE_DRIVE_MCP_SUBJECT: '  bot@example.com  ',
+  },
+  () => {
+    const opts = buildServiceAccountAuthOptions();
+    assert.deepEqual(opts.clientOptions, { subject: 'bot@example.com' });
+  },
+));
+
+test('buildServiceAccountAuthOptions omits clientOptions when GOOGLE_DRIVE_MCP_SUBJECT is blank', withEnv(
+  {
+    GOOGLE_APPLICATION_CREDENTIALS: '/tmp/sa-key.json',
+    GOOGLE_DRIVE_MCP_SUBJECT: '   ',
+  },
+  () => {
+    const opts = buildServiceAccountAuthOptions();
+    assert.equal(opts.clientOptions, undefined);
+  },
+));
+
+test('buildServiceAccountAuthOptions honors GOOGLE_DRIVE_MCP_SCOPES', withEnv(
+  {
+    GOOGLE_APPLICATION_CREDENTIALS: '/tmp/sa-key.json',
+    GOOGLE_DRIVE_MCP_SCOPES: 'drive.file,documents',
+  },
+  () => {
+    const opts = buildServiceAccountAuthOptions();
+    assert.deepEqual(opts.scopes, [SCOPE_ALIASES['drive.file'], SCOPE_ALIASES['documents']]);
+  },
 ));
 
 // ---------------------------------------------------------------------------

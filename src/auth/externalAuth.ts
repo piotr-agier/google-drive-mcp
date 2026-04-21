@@ -3,8 +3,8 @@
 // ---------------------------------------------------------------------------
 
 import { OAuth2Client } from 'google-auth-library';
-import { GoogleAuth } from 'google-auth-library';
-import { DEFAULT_SCOPES } from './scopes.js';
+import { GoogleAuth, GoogleAuthOptions } from 'google-auth-library';
+import { resolveOAuthScopes } from './scopes.js';
 
 // ---------------------------------------------------------------------------
 // Service Account mode
@@ -16,18 +16,48 @@ export function isServiceAccountMode(): boolean {
 }
 
 /**
+ * Build `GoogleAuth` options from the current environment.
+ *
+ * When `GOOGLE_DRIVE_MCP_SUBJECT` is set, the returned options include
+ * `clientOptions.subject`, which instructs `GoogleAuth` to mint a JWT that
+ * impersonates the given user via domain-wide delegation. The Workspace admin
+ * must have authorized the service account's client ID for the requested
+ * scopes under Security → API controls → Manage Domain-wide Delegation.
+ *
+ * Scopes are resolved via {@link resolveOAuthScopes}, so `GOOGLE_DRIVE_MCP_SCOPES`
+ * narrows the SA's authority the same way it does for interactive OAuth.
+ *
+ * Exported so tests can assert the shape without hitting the filesystem.
+ */
+export function buildServiceAccountAuthOptions(): GoogleAuthOptions {
+  const keyFile = process.env.GOOGLE_APPLICATION_CREDENTIALS!;
+  const subject = process.env.GOOGLE_DRIVE_MCP_SUBJECT?.trim();
+
+  const options: GoogleAuthOptions = {
+    keyFile,
+    scopes: resolveOAuthScopes(),
+  };
+
+  if (subject) {
+    options.clientOptions = { subject };
+  }
+
+  return options;
+}
+
+/**
  * Create an authorized client from a service account JSON key file.
  * `GoogleAuth` handles JWT signing and token refresh automatically.
  */
 export async function createServiceAccountAuth(): Promise<any> {
-  const keyFile = process.env.GOOGLE_APPLICATION_CREDENTIALS!;
-  console.error(`Using service account credentials from ${keyFile}`);
+  const options = buildServiceAccountAuthOptions();
+  const subject = (options.clientOptions as { subject?: string } | undefined)?.subject;
+  console.error(
+    `Using service account credentials from ${options.keyFile}` +
+      (subject ? ` (impersonating ${subject} via domain-wide delegation)` : ''),
+  );
 
-  const auth = new GoogleAuth({
-    keyFile,
-    scopes: [...DEFAULT_SCOPES],
-  });
-
+  const auth = new GoogleAuth(options);
   const client = await auth.getClient();
   console.error('Service account authentication successful');
   return client;

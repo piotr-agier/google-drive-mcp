@@ -249,6 +249,11 @@ const AuthTestFileAccessSchema = z.object({
   fileId: z.string().optional(),
 });
 
+const ManageAccountsSchema = z.object({
+  action: z.enum(['list', 'add', 'remove', 'set_default']),
+  account_id: z.string().optional(),
+});
+
 function getGrantedScopesFromAuthClient(ctx: ToolContext): string[] {
   const scopeRaw = ctx.authClient?.credentials?.scope;
   if (!scopeRaw || typeof scopeRaw !== 'string') return [];
@@ -574,6 +579,27 @@ export const toolDefinitions: ToolDefinition[] = [
         confirm: { type: "boolean", description: "Safety flag. Must be true to execute restore." }
       },
       required: ["fileId", "revisionId"]
+    }
+  },
+  {
+    name: "manage_accounts",
+    description:
+      "Manage connected Google accounts. action='list' shows all connected accounts (no secrets). action='add' starts an OAuth flow for a new account identified by account_id (alias). action='remove' deletes local tokens for an account. action='set_default' picks which account is used when tool calls omit the `account` parameter.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list", "add", "remove", "set_default"],
+          description: "Which account-lifecycle operation to perform."
+        },
+        account_id: {
+          type: "string",
+          description:
+            "Account alias. Required for add/remove/set_default. Must match /^[a-z0-9][a-z0-9_-]{0,31}$/ and not be reserved (e.g. 'default', 'all', '*'). Set to null with set_default to clear the default."
+        }
+      },
+      required: ["action"]
     }
   },
   {
@@ -1945,6 +1971,87 @@ export async function handleTool(
           isError: true,
         };
       }
+    }
+
+    case "manage_accounts": {
+      const validation = ManageAccountsSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const { action, account_id } = validation.data;
+
+      try {
+        switch (action) {
+          case 'list': {
+            const payload = {
+              mode: ctx.accountOps.mode,
+              defaultAccount: ctx.accountOps.getDefault() ?? null,
+              accounts: ctx.accountOps.list(),
+            };
+            return {
+              content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+              isError: false,
+            };
+          }
+
+          case 'add': {
+            if (!account_id) return errorResponse(`action 'add' requires account_id (alias).`);
+            const { authUrl, completion } = await ctx.accountOps.add(account_id);
+            // Give the user up to 5 minutes to complete consent.
+            const timeoutMs = 5 * 60 * 1000;
+            let timer: ReturnType<typeof setTimeout> | null = null;
+            const timeout = new Promise<never>((_resolve, reject) => {
+              timer = setTimeout(
+                () => reject(new Error(`Timed out after ${timeoutMs / 1000}s waiting for OAuth consent.`)),
+                timeoutMs,
+              );
+            });
+            try {
+              const record = await Promise.race([completion, timeout]);
+              const payload = {
+                added: {
+                  alias: record.alias,
+                  email: record.email,
+                  sub: record.sub,
+                  pendingIdentity: !!record.pendingIdentity,
+                },
+                authUrl,
+              };
+              return {
+                content: [{
+                  type: 'text',
+                  text: `Account added.\n${JSON.stringify(payload, null, 2)}`,
+                }],
+                isError: false,
+              };
+            } finally {
+              if (timer) clearTimeout(timer);
+            }
+          }
+
+          case 'remove': {
+            if (!account_id) return errorResponse(`action 'remove' requires account_id.`);
+            await ctx.accountOps.remove(account_id);
+            return {
+              content: [{ type: 'text', text: `Removed account '${account_id}'.` }],
+              isError: false,
+            };
+          }
+
+          case 'set_default': {
+            const next = account_id && account_id !== 'null' ? account_id : null;
+            await ctx.accountOps.setDefault(next);
+            return {
+              content: [{
+                type: 'text',
+                text: next === null ? 'Cleared default account.' : `Set default account to '${next}'.`,
+              }],
+              isError: false,
+            };
+          }
+        }
+      } catch (e: unknown) {
+        return errorResponse(e instanceof Error ? e.message : String(e));
+      }
+      return null;
     }
 
     default:

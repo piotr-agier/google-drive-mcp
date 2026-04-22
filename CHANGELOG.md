@@ -4,11 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Breaking Changes
+Substantial internal refactor to introduce **multi-account support**: one running server can now hold OAuth credentials for several Google accounts (e.g. personal + Workspace) and route each tool call to the right identity. The change is strictly additive at the contract level — existing single-account users upgrade with no re-consent, no config changes, and no user-visible behavior change.
 
-- **Multi-account support** — `tokens.json` has migrated to a versioned multi-account schema (v2). Existing single-account installs are upgraded automatically on first boot; a `tokens.json.v1-backup-<timestamp>` is left alongside for rollback. Downgrading to 2.x after running 3.x will not read the new file without manual restoration of the backup.
-- **Tool input schemas** — every non-admin tool now carries an optional top-level `account` parameter. MCP clients that cache schemas should refresh. Existing calls that omit `account` continue to work against the default/sole account.
-- **Admin-tool access** — `authGetStatus`, `authListScopes`, and `authTestFileAccess` no longer accept the `account` parameter (they always report on the active account); the new `manage_accounts` tool is the supported surface for per-account operations.
+
 ### Features
 
 - **sheets:** add `ONE_OF_RANGE` to `addDataValidation` condition types, enabling dropdowns sourced from a cell range (Data validation → "Dropdown (from a range)"). Takes exactly one value — the source range in A1 notation; a leading `=` is added automatically if omitted. Lets dropdown option lists be maintained in one place (including a separate master spreadsheet via an `IMPORTRANGE` staging range)
@@ -22,19 +20,31 @@ All notable changes to this project will be documented in this file.
 - **auth:** connect identity discovery — `manage_accounts add` requests `openid` and `userinfo.email` scopes so new accounts record their Google stable `sub` and email at consent time. Existing accounts are left untouched (no forced re-consent).
 - **auth:** atomic-rename writes for `tokens.json` plus a process-wide write queue that serializes concurrent refreshes from different accounts.
 - **auth:** per-alias refresh dedupe — N concurrent tool calls on the same account fire at most one refresh request to Google.
+
 ### Bug Fixes
 
+<<<<<<< HEAD
 - **drive:** `addPermission` no longer forces `emailAddress` for `type: "anyone"` and `type: "domain"` — the Drive API rejected the field for those principals, making both unusable. Added a `domain` parameter so domain-wide grants work, and per-type requirements are now validated up front (`emailAddress` for `user`/`group`, `domain` for `domain`, neither for `anyone`). Also added an optional `allowFileDiscovery` flag for `anyone`/`domain` grants — `false` (default) keeps a file link-only, `true` makes it discoverable in search ([#131](https://github.com/piotr-agier/google-drive-mcp/issues/131))
 - **resources:** raise the `resources/list` page size from 10 to 1000 (Drive API max) so clients that eagerly enumerate the entire Drive (e.g. Gemini CLI) no longer hang during initialization ([#111](https://github.com/piotr-agier/google-drive-mcp/issues/111), [#128](https://github.com/piotr-agier/google-drive-mcp/pull/128))
 - **docs:** honor `tabId` in `insertTable`, `editTableCell`, `insertSmartChip`, `createFootnote`, `applyTextStyle`/`formatGoogleDocText`, `applyParagraphStyle`/`formatGoogleDocParagraph`, and `createParagraphBullets` — these previously ignored `tabId` and silently edited the default tab of multi-tab documents while reporting success ([#114](https://github.com/piotr-agier/google-drive-mcp/issues/114), [#126](https://github.com/piotr-agier/google-drive-mcp/pull/126))
 - **auth:** use loopback IP `127.0.0.1` instead of `localhost` for the OAuth callback redirect URI, matching the IPv4-only callback-server bind so the redirect resolves to the bound address on dual-stack hosts ([#124](https://github.com/piotr-agier/google-drive-mcp/pull/124)). Desktop-app OAuth clients (the recommended type) are unaffected; "Web application" clients that registered a `http://localhost:<port>` redirect must re-register it as `http://127.0.0.1:<port>` or auth fails with `redirect_uri_mismatch` — see README Troubleshooting
+
 ### Performance Improvements
 
 - **docs:** `applyParagraphStyle` with `textToFind` + `tabId` now resolves the matched range and its enclosing paragraph from a single `documents.get`, instead of two full unmasked `includeTabsContent` fetches of the same document. The non-tab path is unchanged ([#114](https://github.com/piotr-agier/google-drive-mcp/issues/114), [#127](https://github.com/piotr-agier/google-drive-mcp/pull/127))
-### Migration
 
-- **Automatic.** First boot on 3.0 reads a pre-existing v1 `tokens.json`, writes the v2 equivalent in place, saves the old file as `tokens.json.v1-backup-<timestamp>`, and registers the migrated credentials under the alias `default`. The account is marked `pendingIdentity: true` — its email and Google `sub` are populated the next time you re-add or re-consent.
-- **Reserved aliases:** `default`, `all`, `*`, `stdio`, `service-account`, `external-token`, `test` — cannot be used with `manage_accounts add`.
+### Token file format
+
+`tokens.json` now uses a versioned v2 schema that keys multiple accounts by alias. The upgrade from v1 is **automatic** on first boot: the v2 file is written in place, the previous file is preserved as `tokens.json.v1-backup-<timestamp>` in case you need to roll back, and the migrated credentials are registered under the alias `default` (which is reserved — you cannot re-create it with `manage_accounts add`). The record is initially marked `pendingIdentity: true`; its email and Google `sub` populate the next time you re-consent.
+
+Note: downgrading to 2.2.x or earlier after running 2.3.0+ requires manually restoring the `.v1-backup-*` file in place of the v2 `tokens.json`. The new file is not readable by older versions.
+
+
+### Reserved aliases
+
+`default`, `all`, `*`, `stdio`, `service-account`, `external-token`, `test` cannot be used with `manage_accounts add`.
+
+
 ### Known Limitations
 
 - Cross-account read fanout (`account: string[]`) is planned but not yet shipped.
@@ -43,17 +53,20 @@ All notable changes to this project will be documented in this file.
 
 ## [2.2.0](https://github.com/piotr-agier/google-drive-mcp/compare/v2.1.0...v2.2.0) (2026-04-20)
 
+
 ### Features
 
 - **docs:** add optional `tabId` to `insertText`, `deleteRange`, `findAndReplaceInDoc`, and `updateGoogleDoc` for targeting specific tabs ([e2b5748](https://github.com/piotr-agier/google-drive-mcp/commit/e2b5748), [3bbf24f](https://github.com/piotr-agier/google-drive-mcp/commit/3bbf24f), [6d29b04](https://github.com/piotr-agier/google-drive-mcp/commit/6d29b04))
 - **auth:** add `GOOGLE_DRIVE_MCP_AUTH_PORT` env var for configurable OAuth callback port ([95615b3](https://github.com/piotr-agier/google-drive-mcp/commit/95615b3), [f16fc3f](https://github.com/piotr-agier/google-drive-mcp/commit/f16fc3f))
 - **drive:** add `emailMessage` support to `addPermission` and `shareFile` ([2fa3f52](https://github.com/piotr-agier/google-drive-mcp/commit/2fa3f52))
 
+
 ### Bug Fixes
 
 - **docs:** fix `renameDocumentTab` ([e2b5748](https://github.com/piotr-agier/google-drive-mcp/commit/e2b5748))
 
 ## [2.1.0](https://github.com/piotr-agier/google-drive-mcp/compare/v2.0.2...v2.1.0) (2026-04-14)
+
 
 ### Features
 
@@ -62,6 +75,7 @@ All notable changes to this project will be documented in this file.
 
 ## [2.0.2](https://github.com/piotr-agier/google-drive-mcp/compare/v2.0.1...v2.0.2) (2026-04-04)
 
+
 ### Bug Fixes
 
 - **docs:** use correct API field name for tab creation ([08caa89](https://github.com/piotr-agier/google-drive-mcp/commit/08caa89))
@@ -69,31 +83,37 @@ All notable changes to this project will be documented in this file.
 
 ## [2.0.1](https://github.com/piotr-agier/google-drive-mcp/compare/v2.0.0...v2.0.1) (2026-04-01)
 
+
 ### Bug Fixes
 
 - **slides:** skip deleteText for empty speaker notes in Google Slides ([8f02fd1](https://github.com/piotr-agier/google-drive-mcp/commit/8f02fd1))
 
 ## [2.0.0](https://github.com/piotr-agier/google-drive-mcp/compare/v1.7.6...v2.0.0) (2026-03-28)
 
+
 ### Breaking Changes
 
 - The server now supports two transport modes: **stdio** (default, unchanged) and **Streamable HTTP**. CLI arguments have been restructured to accommodate this — see README for details.
+
 
 ### Features
 
 - **transport:** add Streamable HTTP transport mode (`--transport http`) with session management, SSE streaming, and configurable host/port ([f9aa097](https://github.com/piotr-agier/google-drive-mcp/commit/f9aa097))
 - **auth:** support service account (`--service-account`) and external OAuth token (`--oauth-token`) authentication ([395ef05](https://github.com/piotr-agier/google-drive-mcp/commit/395ef05))
 
+
 ### Bug Fixes
 
 - **transport:** add error handling to HTTP routes and extract shared route setup ([497e809](https://github.com/piotr-agier/google-drive-mcp/commit/497e809))
 - **transport:** add session idle timeout, proper server cleanup, and security warning for non-localhost binding ([71ac0cb](https://github.com/piotr-agier/google-drive-mcp/commit/71ac0cb))
+
 
 ### Tests
 
 - **transport:** add comprehensive HTTP transport and CLI argument tests ([03120c3](https://github.com/piotr-agier/google-drive-mcp/commit/03120c3))
 
 ## [1.7.6](https://github.com/piotr-agier/google-drive-mcp/compare/v1.7.5...v1.7.6) (2026-03-18)
+
 
 ### Features
 
@@ -102,6 +122,7 @@ All notable changes to this project will be documented in this file.
 - **docs:** extract inline elements in getGoogleDocContent ([7c7218e](https://github.com/piotr-agier/google-drive-mcp/commit/7c7218e))
 - **drive:** add lockFile and unlockFile tools ([0a8b62b](https://github.com/piotr-agier/google-drive-mcp/commit/0a8b62b))
 - **drive:** add createShortcut tool ([3b1efac](https://github.com/piotr-agier/google-drive-mcp/commit/3b1efac))
+
 
 ### Bug Fixes
 
@@ -113,9 +134,11 @@ All notable changes to this project will be documented in this file.
 
 ## [1.7.5](https://github.com/piotr-agier/google-drive-mcp/compare/v1.7.4...v1.7.5) (2026-03-14)
 
+
 ### Features
 
 - **docker:** add wrapper script to reuse running container ([4945378](https://github.com/piotr-agier/google-drive-mcp/commit/4945378))
+
 
 ### Bug Fixes
 
@@ -125,9 +148,11 @@ All notable changes to this project will be documented in this file.
 
 ## [1.7.4](https://github.com/piotr-agier/google-drive-mcp/compare/v1.7.3...v1.7.4) (2026-03-11)
 
+
 ### Bug Fixes
 
 - **auth:** use stable config directory for credentials lookup ([50377ed](https://github.com/piotr-agier/google-drive-mcp/commit/50377ed))
+
 
 ### Refactors
 
@@ -135,16 +160,19 @@ All notable changes to this project will be documented in this file.
 
 ## [1.7.3](https://github.com/piotr-agier/google-drive-mcp/compare/v1.7.2...v1.7.3) (2026-03-06)
 
+
 ### Features
 
 - **docs:** add comment position context to listComments ([7a31c6f](https://github.com/piotr-agier/google-drive-mcp/commit/7a31c6f))
 
 ## [1.7.2](https://github.com/piotr-agier/google-drive-mcp/compare/v1.7.1...v1.7.2) (2026-03-03)
 
+
 ### Features
 
 - **drive:** add convertToGoogleFormat param to uploadFile for native Google Workspace conversion ([4d7fc6d](https://github.com/piotr-agier/google-drive-mcp/commit/4d7fc6d))
 - **docs:** add support for nested tabs to readGoogleDoc and getGoogleDocContent ([b0543a6](https://github.com/piotr-agier/google-drive-mcp/commit/b0543a6))
+
 
 ### Bug Fixes
 
@@ -152,10 +180,12 @@ All notable changes to this project will be documented in this file.
 
 ## [1.7.1](https://github.com/piotr-agier/google-drive-mcp/compare/v1.7.0...v1.7.1) (2026-02-27)
 
+
 ### Features
 
 - **search:** resolve folder paths in search results ([b10452b](https://github.com/piotr-agier/google-drive-mcp/commit/b10452b))
 - **search:** add rawQuery for direct Google Drive API queries ([1da8349](https://github.com/piotr-agier/google-drive-mcp/commit/1da8349))
+
 
 ### Bug Fixes
 
@@ -164,6 +194,7 @@ All notable changes to this project will be documented in this file.
 
 ## [1.7.0](https://github.com/piotr-agier/google-drive-mcp/compare/v1.6.1...v1.7.0) (2026-02-26)
 
+
 ### Features
 
 - add auth diagnostics and scope preset tools ([b5faad5](https://github.com/piotr-agier/google-drive-mcp/commit/b5faad5))
@@ -171,16 +202,19 @@ All notable changes to this project will be documented in this file.
 
 ## [1.6.1](https://github.com/piotr-agier/google-drive-mcp/compare/v1.6.0...v1.6.1) (2026-02-26)
 
+
 ### Bug Fixes
 
 - **search:** add corpora=allDrives so search returns Shared Drive results ([c0b9d6b](https://github.com/piotr-agier/google-drive-mcp/commit/c0b9d6b))
 
 ## [1.6.0](https://github.com/piotr-agier/google-drive-mcp/compare/v1.5.0...v1.6.0) (2026-02-26)
 
+
 ### Features
 
 - add PDF ingestion and docs tab/chip transformation tools ([70ccca7](https://github.com/piotr-agier/google-drive-mcp/commit/70ccca7))
 - implement real PDF splitting for uploadPdfWithSplit ([53f2b19](https://github.com/piotr-agier/google-drive-mcp/commit/53f2b19))
+
 
 ### Bug Fixes
 
@@ -188,17 +222,20 @@ All notable changes to this project will be documented in this file.
 
 ## [1.5.0](https://github.com/piotr-agier/google-drive-mcp/compare/v1.4.0...v1.5.0) (2026-02-26)
 
+
 ### Features
 
 - add sheet governance and slide lifecycle tools ([9bc2563](https://github.com/piotr-agier/google-drive-mcp/commit/9bc2563))
 - add sheets tab lifecycle and slides lifecycle/template helpers ([0af2a55](https://github.com/piotr-agier/google-drive-mcp/commit/0af2a55))
 - add addSheet alias and slide thumbnail export ([d3c12d5](https://github.com/piotr-agier/google-drive-mcp/commit/d3c12d5))
 
+
 ### Bug Fixes
 
 - **drive:** show inherited marker in listPermissions output ([b0423d2](https://github.com/piotr-agier/google-drive-mcp/commit/b0423d2))
 
 ## [1.4.0](https://github.com/piotr-agier/google-drive-mcp/compare/v1.3.3...v1.4.0) (2026-02-24)
+
 
 ### Features
 
@@ -208,16 +245,19 @@ All notable changes to this project will be documented in this file.
 
 ## [1.3.3](https://github.com/piotr-agier/google-drive-mcp/compare/v1.3.2...v1.3.3) (2026-02-24)
 
+
 ### Bug Fixes
 
 - **docs:** support multi-tab documents in readGoogleDoc ([cd46227](https://github.com/piotr-agier/google-drive-mcp/commit/cd46227))
 
 ## [1.3.2](https://github.com/piotr-agier/google-drive-mcp/compare/v1.3.1...v1.3.2) (2026-02-24)
 
+
 ### Features
 
 - **drive:** add listSharedDrives tool ([dc1dd78](https://github.com/piotr-agier/google-drive-mcp/commit/dc1dd78))
 - **auth:** allow OAuth scope override via env var ([45f42cb](https://github.com/piotr-agier/google-drive-mcp/commit/45f42cb))
+
 
 ### Bug Fixes
 
@@ -225,11 +265,13 @@ All notable changes to this project will be documented in this file.
 
 ## [1.3.1](https://github.com/piotr-agier/google-drive-mcp/compare/v1.3.0...v1.3.1) (2026-02-24)
 
+
 ### Bug Fixes
 
 - CI/CD publishing fixes for npm OIDC trusted publishing ([160c0aa](https://github.com/piotr-agier/google-drive-mcp/commit/160c0aa))
 
 ## [1.3.0](https://github.com/piotr-agier/google-drive-mcp/compare/v1.2.0...v1.3.0) (2026-02-24)
+
 
 ### Features
 
@@ -240,12 +282,14 @@ All notable changes to this project will be documented in this file.
 - add 5 Phase 2 tools (Sheets management + copyFile) ([446f856](https://github.com/piotr-agier/google-drive-mcp/commit/446f856))
 - add downloadFile tool ([95b70a5](https://github.com/piotr-agier/google-drive-mcp/commit/95b70a5))
 
+
 ### Bug Fixes
 
 - bump @modelcontextprotocol/sdk to ^1.24.0 (CVE-2025-66414) ([4cf6024](https://github.com/piotr-agier/google-drive-mcp/commit/4cf6024))
 - stop making uploaded images public by default in insertLocalImage ([a4d8df4](https://github.com/piotr-agier/google-drive-mcp/commit/a4d8df4))
 
 ## [1.2.0](https://github.com/piotr-agier/google-drive-mcp/compare/v1.1.2...v1.2.0) (2026-02-15)
+
 
 ### Features
 
@@ -257,11 +301,13 @@ All notable changes to this project will be documented in this file.
 
 ## [1.1.2](https://github.com/piotr-agier/google-drive-mcp/releases/tag/v1.1.2) (2025-11-26)
 
+
 ### Features
 
 - add pagination support to search tool ([b599b27](https://github.com/piotr-agier/google-drive-mcp/commit/b599b27))
 - add comprehensive Google Sheets, Slides, and Docs formatting tools
 - add Docker support with comprehensive documentation
+
 
 ### Bug Fixes
 

@@ -315,7 +315,7 @@ Authentication tokens are stored securely following the XDG Base Directory speci
 | 2 | XDG Config | `$XDG_CONFIG_HOME/google-drive-mcp/tokens.json` |
 | 3 | Default | `~/.config/google-drive-mcp/tokens.json` |
 
-**Token file format (v2):** `tokens.json` uses a versioned schema that holds all connected accounts keyed by alias, plus the global default. A `tokens.json` from versions before 3.0 is auto-migrated on first boot and a `tokens.json.v1-backup-<timestamp>` is written alongside in case you need to roll back. No user action is required.
+**Token file format (v2):** `tokens.json` uses a versioned schema that holds all connected accounts keyed by alias, plus the global default. A `tokens.json` from versions before 2.3 is auto-migrated on first boot and a `tokens.json.v1-backup-<timestamp>` is written alongside in case you need to roll back. No user action is required.
 
 **Security Notes:**
 - Tokens are created with secure permissions (0600)
@@ -1165,11 +1165,11 @@ manage_accounts(action="remove", account_id="personal")
 
 ### Migration from single-account installs
 
-If you are upgrading from a pre-3.0 release that stored one account in `tokens.json`, your credentials are migrated to the v2 schema automatically on first boot. The migrated account is assigned the alias `default` (reserved — you can `manage_accounts set_default` it but not re-create it) and a backup of the old file is written to `tokens.json.v1-backup-<timestamp>`. No re-consent is required.
+If you are upgrading from a pre-2.3 release that stored one account in `tokens.json`, your credentials are migrated to the v2 schema automatically on first boot. The migrated account is assigned the alias `default` (reserved — you can `manage_accounts set_default` it but not re-create it) and a backup of the old file is written to `tokens.json.v1-backup-<timestamp>`. No re-consent is required.
 
 ### Scopes for identity discovery
 
-When you run `manage_accounts add`, the auth URL asks Google for the OpenID `openid` and `https://www.googleapis.com/auth/userinfo.email` scopes in addition to the Drive/Docs/Sheets/Slides/Calendar scopes. This lets the server populate the account's `email` and stable `sub` automatically. These two scopes are *not* added to the process-wide `DEFAULT_SCOPES`, so existing accounts migrated from pre-3.0 installs never see an unexpected consent screen — their record carries `pendingIdentity: true` and the email stays `unknown` until you explicitly re-add the account.
+When you run `manage_accounts add`, the auth URL asks Google for the OpenID `openid` and `https://www.googleapis.com/auth/userinfo.email` scopes in addition to the Drive/Docs/Sheets/Slides/Calendar scopes. This lets the server populate the account's `email` and stable `sub` automatically. These two scopes are *not* added to the process-wide `DEFAULT_SCOPES`, so existing accounts migrated from pre-2.3 installs never see an unexpected consent screen — their record carries `pendingIdentity: true` and the email stays `unknown` until you explicitly re-add the account.
 
 ### Scope mismatches and error messages
 

@@ -1155,6 +1155,73 @@ export function _setAuthClientForTesting(client: any) {
   _calendarByAlias.clear();
 }
 
+/**
+ * Read-only accessor for the test-mode AuthSystem. Tests use this to inspect
+ * SessionStore lifecycle and AccountStore state without exporting either.
+ */
+export function _getAuthSystemForTesting(): AuthSystem | null {
+  return authSystem;
+}
+
+/**
+ * Add a second (or Nth) synthetic account to the test-mode auth system.
+ *
+ * Must be called *after* `_setAuthClientForTesting`. Lets multi-account
+ * dispatch tests verify per-alias routing without standing up a real OAuth
+ * flow. The supplied `client` is what `factory.getClient(alias)` will return,
+ * so test-side instrumentation on it (markers, spies) flows into the
+ * per-account ctx that handlers receive.
+ */
+export function _addSyntheticAccountForTesting(
+  alias: string,
+  client: any,
+  opts?: { setDefault?: boolean; scope?: string },
+): void {
+  if (!authSystem) {
+    throw new Error('_setAuthClientForTesting must be called before _addSyntheticAccountForTesting');
+  }
+  const record: AccountRecord = {
+    alias,
+    email: `${alias}@example.com`,
+    sub: `synthetic:${alias}`,
+    accessToken: `test-access-${alias}`,
+    refreshToken: `test-refresh-${alias}`,
+    scope: opts?.scope ?? [
+      'https://www.googleapis.com/auth/drive',
+      'https://www.googleapis.com/auth/drive.file',
+      'https://www.googleapis.com/auth/drive.readonly',
+      'https://www.googleapis.com/auth/documents',
+      'https://www.googleapis.com/auth/spreadsheets',
+      'https://www.googleapis.com/auth/presentations',
+      'https://www.googleapis.com/auth/calendar',
+      'https://www.googleapis.com/auth/calendar.events',
+    ].join(' '),
+    tokenType: 'Bearer',
+    expiryDate: Date.now() + 60 * 60 * 1000,
+    addedAt: new Date().toISOString(),
+    lastRefreshedAt: new Date().toISOString(),
+  };
+  authSystem.store.setSyntheticAccount(record, client);
+  // setSyntheticAccount unconditionally promotes its arg to default; restore
+  // unless the caller explicitly wanted a default switch.
+  if (!opts?.setDefault) {
+    // setSyntheticAccount last writer wins on default — re-pin the original.
+    // Look up the first non-this-alias account and pin it back.
+    const others = authSystem.store.list().filter((a) => a.alias !== alias);
+    if (others.length > 0) {
+      // Mutate via the underlying data — synchronous, no disk in test mode.
+      // Use the public setDefault path to keep semantics consistent.
+      // Note: setDefault enqueues; in test mode it's a no-op write so safe.
+      void authSystem.store.setDefault(others[0].alias);
+    }
+  }
+  // Evict any cached drive/calendar services for the new alias so subsequent
+  // ctx access rebuilds them through the factory (which returns the synthetic
+  // client we just registered).
+  _driveByAlias.delete(alias);
+  _calendarByAlias.delete(alias);
+}
+
 // Run the CLI (skip when imported by tests)
 if (!process.env.MCP_TESTING) {
   main().catch((error) => {

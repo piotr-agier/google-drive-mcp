@@ -64,6 +64,80 @@ function findTabById(tabs: any[], targetId: string): any | null {
   return null;
 }
 
+// Extract plain text from body content (paragraphs + tables)
+function extractText(bodyContent: any[]): string {
+  let result = '';
+  for (const element of bodyContent) {
+    if (element.paragraph?.elements) {
+      for (const elem of element.paragraph.elements) {
+        if (elem.textRun?.content) {
+          result += elem.textRun.content;
+        }
+      }
+    } else if (element.table) {
+      for (const row of element.table.tableRows || []) {
+        for (const cell of row.tableCells || []) {
+          for (const cellContent of cell.content || []) {
+            if (cellContent.paragraph?.elements) {
+              for (const elem of cellContent.paragraph.elements) {
+                if (elem.textRun?.content) {
+                  result += elem.textRun.content;
+                }
+              }
+            }
+          }
+          result += '\t';
+        }
+        result += '\n';
+      }
+    }
+  }
+  return result;
+}
+
+// Extract full text from a Google Doc, handling tabs and optional tabId filtering
+function extractDocText(doc: any, tabId?: string): { text: string; error?: string } {
+  let text = '';
+  const tabs = doc.tabs as any[] | undefined;
+
+  if (tabs && tabs.length > 0) {
+    if (tabId) {
+      const tab = findTabById(tabs, tabId);
+      if (!tab) {
+        return { text: '', error: `Tab with ID "${tabId}" not found. Use listDocumentTabs to see available tabs.` };
+      }
+      const bodyContent = tab.documentTab?.body?.content;
+      if (bodyContent) {
+        text = extractText(bodyContent);
+      }
+    } else {
+      const allTabs = collectAllTabsWithLevel(tabs);
+      const isMultiTab = allTabs.length > 1;
+      for (const { tab, level } of allTabs) {
+        const bodyContent = tab.documentTab?.body?.content;
+        if (isMultiTab) {
+          const title = tab.tabProperties?.title || 'Untitled';
+          const indent = '  '.repeat(level);
+          text += `${indent}=== Tab: ${title} ===\n`;
+        }
+        if (bodyContent) {
+          text += extractText(bodyContent);
+        }
+        if (isMultiTab) {
+          text += '\n';
+        }
+      }
+    }
+  } else {
+    const body = doc.body;
+    if (body?.content) {
+      text = extractText(body.content);
+    }
+  }
+
+  return { text };
+}
+
 // Execute batch update for Google Docs
 async function executeBatchUpdate(ctx: ToolContext, documentId: string, requests: any[]): Promise<any> {
   if (!requests || requests.length === 0) {
@@ -489,6 +563,254 @@ export interface DocxContextResult {
 }
 
 /**
+ * Build formatted content with indices from a Google Doc document data object.
+ * Returns the formatted string and total character length.
+ */
+function buildDocFormattedContent(
+  docData: any,
+  withFormatting: boolean
+): { formattedContent: string; totalLength: number } {
+  interface Segment {
+    text: string;
+    startIndex: number;
+    endIndex: number;
+    fontFamily?: string;
+    fontSize?: number;
+    bold?: boolean;
+    italic?: boolean;
+    underline?: boolean;
+    strikethrough?: boolean;
+    foregroundColor?: string;
+    backgroundColor?: string;
+  }
+
+  function resolveInlineElementText(el: any, inlineObjects?: any): string | null {
+    if (el.person?.personProperties) {
+      const p = el.person.personProperties;
+      if (p.name && p.email) return `@${p.name} (${p.email})`;
+      return `@${p.name || p.email || ''}`;
+    }
+    if (el.richLink?.richLinkProperties) {
+      const rl = el.richLink.richLinkProperties;
+      const title = (rl.title || rl.uri || '').replace(/[\[\]]/g, '\\$&');
+      const uri = rl.uri;
+      return title && uri ? `[${title}](${uri})` : title || null;
+    }
+    if (el.inlineObjectElement?.inlineObjectId) {
+      if (inlineObjects) {
+        const obj = inlineObjects[el.inlineObjectElement.inlineObjectId];
+        const desc = obj?.inlineObjectProperties?.embeddedObject?.description
+                  || obj?.inlineObjectProperties?.embeddedObject?.title;
+        return desc ? `[image: ${desc}]` : '[image]';
+      }
+      return '[image]';
+    }
+    if (el.footnoteReference) {
+      return `[^${el.footnoteReference.footnoteNumber || ''}]`;
+    }
+    if (el.horizontalRule) {
+      return '---\n';
+    }
+    return null;
+  }
+
+  function extractSegments(bodyContent: any[], inlineObjects?: any): Segment[] {
+    const segments: Segment[] = [];
+
+    function getCellText(cellContent: any[]): string {
+      const before = segments.length;
+      processContent(cellContent);
+      const cellSegs = segments.splice(before);
+      return cellSegs
+        .map(s => s.text.replace(/\n$/g, ''))
+        .join(' ')
+        .replace(/\|/g, '\\|')
+        .trim();
+    }
+
+    function processContent(content: any[]) {
+      for (const element of content) {
+        if (element.paragraph?.elements) {
+          for (const textElement of element.paragraph.elements) {
+            if (textElement.textRun?.content && textElement.startIndex != null && textElement.endIndex != null) {
+              const seg: Segment = {
+                text: textElement.textRun.content,
+                startIndex: textElement.startIndex,
+                endIndex: textElement.endIndex,
+              };
+              if (withFormatting) {
+                const ts = textElement.textRun.textStyle;
+                if (ts) {
+                  if (ts.weightedFontFamily?.fontFamily) seg.fontFamily = ts.weightedFontFamily.fontFamily;
+                  if (ts.fontSize?.magnitude != null) seg.fontSize = ts.fontSize.magnitude;
+                  if (ts.bold) seg.bold = true;
+                  if (ts.italic) seg.italic = true;
+                  if (ts.underline) seg.underline = true;
+                  if (ts.strikethrough) seg.strikethrough = true;
+                  const fg = rgbColorToHex(ts.foregroundColor);
+                  const bg = rgbColorToHex(ts.backgroundColor);
+                  if (fg) seg.foregroundColor = fg;
+                  if (bg) seg.backgroundColor = bg;
+                }
+              }
+              segments.push(seg);
+            } else {
+              const inlineText = resolveInlineElementText(textElement, inlineObjects);
+              if (inlineText && textElement.startIndex != null && textElement.endIndex != null) {
+                segments.push({
+                  text: inlineText,
+                  startIndex: textElement.startIndex,
+                  endIndex: textElement.endIndex,
+                });
+              }
+            }
+          }
+        } else if (element.table?.tableRows) {
+          const rows: string[] = [];
+          for (let rowIdx = 0; rowIdx < element.table.tableRows.length; rowIdx++) {
+            const row = element.table.tableRows[rowIdx];
+            if (!row.tableCells) continue;
+            const cellTexts: string[] = [];
+            for (const cell of row.tableCells) {
+              cellTexts.push(cell.content ? getCellText(cell.content) : '');
+            }
+            rows.push('| ' + cellTexts.join(' | ') + ' |');
+            if (rowIdx === 0) {
+              rows.push('| ' + cellTexts.map(() => '---').join(' | ') + ' |');
+            }
+          }
+          const md = rows.join('\n') + '\n\n';
+          if (element.startIndex != null && element.endIndex != null) {
+            segments.push({
+              text: md,
+              startIndex: element.startIndex,
+              endIndex: element.endIndex,
+            });
+          }
+        } else if (element.tableOfContents?.content) {
+          processContent(element.tableOfContents.content);
+        }
+      }
+    }
+
+    processContent(bodyContent);
+    return segments;
+  }
+
+  function formatSegments(segments: Segment[]): string {
+    let result = '';
+    for (const segment of segments) {
+      const hasMeta = withFormatting && hasFormattingInfo(segment);
+      const meta = hasMeta ? buildMetaLine(segment) : null;
+      const lines = segment.text.split('\n');
+      let offset = segment.startIndex;
+      for (const line of lines) {
+        if (line.trim()) {
+          if (meta) {
+            result += `[${offset}-${offset + line.length}] ${meta}\n  ${line}\n`;
+          } else {
+            result += `[${offset}-${offset + line.length}] ${line}\n`;
+          }
+        }
+        offset += line.length + 1;
+      }
+    }
+    return result;
+  }
+
+  function hasFormattingInfo(seg: Segment): boolean {
+    return !!(seg.fontFamily || seg.fontSize || seg.bold || seg.italic || seg.underline || seg.strikethrough || seg.foregroundColor || seg.backgroundColor);
+  }
+
+  function buildMetaLine(seg: Segment): string {
+    const parts: string[] = [];
+    if (seg.fontFamily) parts.push(`font="${seg.fontFamily}"`);
+    if (seg.fontSize) parts.push(`size=${seg.fontSize}pt`);
+    const styles: string[] = [];
+    if (seg.bold) styles.push('bold');
+    if (seg.italic) styles.push('italic');
+    if (seg.underline) styles.push('underline');
+    if (seg.strikethrough) styles.push('strikethrough');
+    if (styles.length > 0) parts.push(`style=${styles.join(',')}`);
+    if (seg.foregroundColor) parts.push(`color=${seg.foregroundColor}`);
+    if (seg.backgroundColor) parts.push(`bg=${seg.backgroundColor}`);
+    return parts.join(', ');
+  }
+
+  interface FontInfo { sizes: Set<number>; styles: Set<string>; charCount: number }
+
+  const fontUsage: Map<string, FontInfo> = new Map();
+  function trackFonts(segments: Segment[]) {
+    if (!withFormatting) return;
+    for (const seg of segments) {
+      if (seg.fontFamily) {
+        let info = fontUsage.get(seg.fontFamily);
+        if (!info) {
+          info = { sizes: new Set(), styles: new Set(), charCount: 0 };
+          fontUsage.set(seg.fontFamily, info);
+        }
+        if (seg.fontSize) info.sizes.add(seg.fontSize);
+        if (seg.bold) info.styles.add('bold');
+        if (seg.italic) info.styles.add('italic');
+        if (seg.underline) info.styles.add('underline');
+        if (seg.strikethrough) info.styles.add('strikethrough');
+        info.charCount += seg.endIndex - seg.startIndex;
+      }
+    }
+  }
+
+  const tabs = docData.tabs as any[] | undefined;
+  let formattedContent = 'Document content with indices:\n\n';
+  let totalLength = 0;
+
+  if (tabs && tabs.length > 0) {
+    const allTabs = collectAllTabsWithLevel(tabs);
+    const isMultiTab = allTabs.length > 1;
+    for (const { tab, level } of allTabs) {
+      const bodyContent = tab.documentTab?.body?.content;
+      if (isMultiTab) {
+        const title = tab.tabProperties?.title || 'Untitled';
+        const indent = '  '.repeat(level);
+        formattedContent += `${indent}=== Tab: ${title} ===\n`;
+      }
+      if (bodyContent) {
+        const tabInlineObjects = tab.documentTab?.inlineObjects;
+        const segments = extractSegments(bodyContent, tabInlineObjects);
+        trackFonts(segments);
+        formattedContent += formatSegments(segments);
+        if (segments.length > 0) {
+          totalLength += segments[segments.length - 1].endIndex;
+        }
+      }
+      if (isMultiTab) {
+        formattedContent += '\n';
+      }
+    }
+  } else {
+    const bodyContent = docData.body?.content;
+    if (bodyContent) {
+      const legacyInlineObjects = docData.inlineObjects;
+      const segments = extractSegments(bodyContent, legacyInlineObjects);
+      trackFonts(segments);
+      formattedContent += formatSegments(segments);
+      totalLength = segments.length > 0 ? segments[segments.length - 1].endIndex : 0;
+    }
+  }
+
+  if (withFormatting && fontUsage.size > 0) {
+    formattedContent += '\n--- Fonts summary ---\n';
+    const sorted = [...fontUsage.entries()].sort((a, b) => b[1].charCount - a[1].charCount);
+    for (const [font, info] of sorted) {
+      const sizesStr = info.sizes.size > 0 ? [...info.sizes].sort((a, b) => a - b).join(', ') + ' pt' : 'default size';
+      const stylesStr = info.styles.size > 0 ? [...info.styles].sort().join(', ') : 'normal';
+      formattedContent += `${font}: sizes [${sizesStr}], styles [${stylesStr}], ~${info.charCount} chars\n`;
+    }
+  }
+
+  return { formattedContent, totalLength };
+}
+
+/**
  * Parse a DOCX export to extract comment positions and surrounding context.
  * Returns DOCX comment metadata and context maps keyed by DOCX comment ID.
  */
@@ -742,6 +1064,21 @@ const ReadGoogleDocSchema = z.object({
   format: z.enum(['text', 'json', 'markdown']).optional().default('text'),
   maxLength: z.number().int().min(1).optional(),
   tabId: z.string().optional()
+});
+
+const ReadGoogleDocPaginatedSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  format: z.enum(['text', 'json', 'markdown']).optional().default('text'),
+  offset: z.number().int().min(0).optional().default(0),
+  limit: z.number().int().min(1).max(100000).optional().default(50000),
+  tabId: z.string().optional()
+});
+
+const GetGoogleDocContentPaginatedSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  includeFormatting: z.boolean().optional(),
+  offset: z.number().int().min(0).optional().default(0),
+  limit: z.number().int().min(1).max(100000).optional().default(50000),
 });
 
 const ListDocumentTabsSchema = z.object({
@@ -998,6 +1335,21 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
   {
+    name: "readGoogleDocPaginated",
+    description: "Read a portion of a Google Doc with pagination support. Use offset and limit to read large documents in chunks, avoiding output size limits.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentId: { type: "string", description: "The document ID" },
+        format: { type: "string", enum: ["text", "json", "markdown"], description: "Output format (default: text)" },
+        offset: { type: "number", description: "Character offset to start reading from (0-based, default: 0)" },
+        limit: { type: "number", description: "Maximum characters to return (default: 50000, max: 100000)" },
+        tabId: { type: "string", description: "Read a specific tab by ID (from listDocumentTabs). If omitted, all tabs are returned." }
+      },
+      required: ["documentId"]
+    }
+  },
+  {
     name: "listDocumentTabs",
     description: "List all tabs in a Google Doc with their IDs and hierarchy",
     inputSchema: {
@@ -1209,6 +1561,20 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         documentId: { type: "string", description: "Document ID" },
         includeFormatting: { type: "boolean", description: "Include font, style, and color info for each text span (default: false)" },
+      },
+      required: ["documentId"]
+    }
+  },
+  {
+    name: "getGoogleDocContentPaginated",
+    description: "Get a portion of a Google Doc with text indices for formatting, with pagination support. Use offset and limit to read large documents in chunks.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentId: { type: "string", description: "Document ID" },
+        includeFormatting: { type: "boolean", description: "Include font, style, and color info for each text span (default: false)" },
+        offset: { type: "number", description: "Character offset to start reading from (0-based, default: 0)" },
+        limit: { type: "number", description: "Maximum characters to return (default: 50000, max: 100000)" }
       },
       required: ["documentId"]
     }
@@ -1570,262 +1936,49 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         includeTabsContent: true,
       });
 
-      interface Segment {
-        text: string;
-        startIndex: number;
-        endIndex: number;
-        fontFamily?: string;
-        fontSize?: number;
-        bold?: boolean;
-        italic?: boolean;
-        underline?: boolean;
-        strikethrough?: boolean;
-        foregroundColor?: string;
-        backgroundColor?: string;
-      }
-
-      // Helper to resolve inline element text for non-textRun elements
-      function resolveInlineElementText(el: any, inlineObjects?: any): string | null {
-        if (el.person?.personProperties) {
-          const p = el.person.personProperties;
-          if (p.name && p.email) return `@${p.name} (${p.email})`;
-          return `@${p.name || p.email || ''}`;
-        }
-        if (el.richLink?.richLinkProperties) {
-          const rl = el.richLink.richLinkProperties;
-          const title = (rl.title || rl.uri || '').replace(/[\[\]]/g, '\\$&');
-          const uri = rl.uri;
-          return title && uri ? `[${title}](${uri})` : title || null;
-        }
-        if (el.inlineObjectElement?.inlineObjectId) {
-          if (inlineObjects) {
-            const obj = inlineObjects[el.inlineObjectElement.inlineObjectId];
-            const desc = obj?.inlineObjectProperties?.embeddedObject?.description
-                      || obj?.inlineObjectProperties?.embeddedObject?.title;
-            return desc ? `[image: ${desc}]` : '[image]';
-          }
-          return '[image]';
-        }
-        if (el.footnoteReference) {
-          return `[^${el.footnoteReference.footnoteNumber || ''}]`;
-        }
-        if (el.horizontalRule) {
-          return '---\n';
-        }
-        return null;
-      }
-
-      // Helper to extract segments from body content
-      // Table cell extraction reuses processContent so that any element handling
-      // (inline elements, formatting, etc.) automatically applies inside table
-      // cells as well.
-      function extractSegments(bodyContent: any[], inlineObjects?: any): Segment[] {
-        const segments: Segment[] = [];
-
-        // Extract plain text from a table cell by running its content through
-        // processContent and collecting the text from the produced segments.
-        function getCellText(cellContent: any[]): string {
-          const before = segments.length;
-          processContent(cellContent);
-          const cellSegs = segments.splice(before);
-          // Strip trailing newlines, join paragraphs with space, then escape
-          // pipe characters so they don't create extra markdown columns.
-          return cellSegs
-            .map(s => s.text.replace(/\n$/g, ''))
-            .join(' ')
-            .replace(/\|/g, '\\|')
-            .trim();
-        }
-
-        function processContent(content: any[]) {
-          for (const element of content) {
-            if (element.paragraph?.elements) {
-              for (const textElement of element.paragraph.elements) {
-                if (textElement.textRun?.content && textElement.startIndex != null && textElement.endIndex != null) {
-                  const seg: Segment = {
-                    text: textElement.textRun.content,
-                    startIndex: textElement.startIndex,
-                    endIndex: textElement.endIndex,
-                  };
-                  if (withFormatting) {
-                    const ts = textElement.textRun.textStyle;
-                    if (ts) {
-                      if (ts.weightedFontFamily?.fontFamily) seg.fontFamily = ts.weightedFontFamily.fontFamily;
-                      if (ts.fontSize?.magnitude != null) seg.fontSize = ts.fontSize.magnitude;
-                      if (ts.bold) seg.bold = true;
-                      if (ts.italic) seg.italic = true;
-                      if (ts.underline) seg.underline = true;
-                      if (ts.strikethrough) seg.strikethrough = true;
-                      const fg = rgbColorToHex(ts.foregroundColor);
-                      const bg = rgbColorToHex(ts.backgroundColor);
-                      if (fg) seg.foregroundColor = fg;
-                      if (bg) seg.backgroundColor = bg;
-                    }
-                  }
-                  segments.push(seg);
-                } else {
-                  // Handle non-textRun inline elements (person chips, rich links, images, footnotes, horizontal rules)
-                  const inlineText = resolveInlineElementText(textElement, inlineObjects);
-                  if (inlineText && textElement.startIndex != null && textElement.endIndex != null) {
-                    segments.push({
-                      text: inlineText,
-                      startIndex: textElement.startIndex,
-                      endIndex: textElement.endIndex,
-                    });
-                  }
-                }
-              }
-            } else if (element.table?.tableRows) {
-              const rows: string[] = [];
-              for (let rowIdx = 0; rowIdx < element.table.tableRows.length; rowIdx++) {
-                const row = element.table.tableRows[rowIdx];
-                if (!row.tableCells) continue;
-                const cellTexts: string[] = [];
-                for (const cell of row.tableCells) {
-                  cellTexts.push(cell.content ? getCellText(cell.content) : '');
-                }
-                rows.push('| ' + cellTexts.join(' | ') + ' |');
-                if (rowIdx === 0) {
-                  rows.push('| ' + cellTexts.map(() => '---').join(' | ') + ' |');
-                }
-              }
-              const md = rows.join('\n') + '\n\n';
-              if (element.startIndex != null && element.endIndex != null) {
-                segments.push({
-                  text: md,
-                  startIndex: element.startIndex,
-                  endIndex: element.endIndex,
-                });
-              }
-            } else if (element.tableOfContents?.content) {
-              processContent(element.tableOfContents.content);
-            }
-          }
-        }
-
-        processContent(bodyContent);
-        return segments;
-      }
-
-      // Helper to format segments into indexed text
-      function formatSegments(segments: Segment[]): string {
-        let result = '';
-        for (const segment of segments) {
-          const hasMeta = withFormatting && hasFormattingInfo(segment);
-          const meta = hasMeta ? buildMetaLine(segment) : null;
-          const lines = segment.text.split('\n');
-          let offset = segment.startIndex;
-          for (const line of lines) {
-            if (line.trim()) {
-              if (meta) {
-                result += `[${offset}-${offset + line.length}] ${meta}\n  ${line}\n`;
-              } else {
-                result += `[${offset}-${offset + line.length}] ${line}\n`;
-              }
-            }
-            offset += line.length + 1;
-          }
-        }
-        return result;
-      }
-
-      function hasFormattingInfo(seg: Segment): boolean {
-        return !!(seg.fontFamily || seg.fontSize || seg.bold || seg.italic || seg.underline || seg.strikethrough || seg.foregroundColor || seg.backgroundColor);
-      }
-
-      function buildMetaLine(seg: Segment): string {
-        const parts: string[] = [];
-        if (seg.fontFamily) parts.push(`font="${seg.fontFamily}"`);
-        if (seg.fontSize) parts.push(`size=${seg.fontSize}pt`);
-        const styles: string[] = [];
-        if (seg.bold) styles.push('bold');
-        if (seg.italic) styles.push('italic');
-        if (seg.underline) styles.push('underline');
-        if (seg.strikethrough) styles.push('strikethrough');
-        if (styles.length > 0) parts.push(`style=${styles.join(',')}`);
-        if (seg.foregroundColor) parts.push(`color=${seg.foregroundColor}`);
-        if (seg.backgroundColor) parts.push(`bg=${seg.backgroundColor}`);
-        return parts.join(', ');
-      }
-
-      // Accumulate font usage across all segments
-      interface FontInfo { sizes: Set<number>; styles: Set<string>; charCount: number }
-      const fontUsage: Map<string, FontInfo> = new Map();
-      function trackFonts(segments: Segment[]) {
-        if (!withFormatting) return;
-        for (const seg of segments) {
-          if (seg.fontFamily) {
-            let info = fontUsage.get(seg.fontFamily);
-            if (!info) {
-              info = { sizes: new Set(), styles: new Set(), charCount: 0 };
-              fontUsage.set(seg.fontFamily, info);
-            }
-            if (seg.fontSize) info.sizes.add(seg.fontSize);
-            if (seg.bold) info.styles.add('bold');
-            if (seg.italic) info.styles.add('italic');
-            if (seg.underline) info.styles.add('underline');
-            if (seg.strikethrough) info.styles.add('strikethrough');
-            info.charCount += seg.endIndex - seg.startIndex;
-          }
-        }
-      }
-
-      const tabs = (document.data as any).tabs as any[] | undefined;
-      let formattedContent = 'Document content with indices:\n\n';
-      let totalLength = 0;
-
-      if (tabs && tabs.length > 0) {
-        const allTabs = collectAllTabsWithLevel(tabs);
-        const isMultiTab = allTabs.length > 1;
-        for (const { tab, level } of allTabs) {
-          const bodyContent = tab.documentTab?.body?.content;
-          // Multi-tab: include all tabs with headers
-          if (isMultiTab) {
-            const title = tab.tabProperties?.title || 'Untitled';
-            const indent = '  '.repeat(level);
-            formattedContent += `${indent}=== Tab: ${title} ===\n`;
-          }
-          if (bodyContent) {
-            const tabInlineObjects = tab.documentTab?.inlineObjects;
-            const segments = extractSegments(bodyContent, tabInlineObjects);
-            trackFonts(segments);
-            formattedContent += formatSegments(segments);
-            if (segments.length > 0) {
-              totalLength += segments[segments.length - 1].endIndex;
-            }
-          }
-          // Multi-tab: add new line between tabs
-          if (isMultiTab) {
-            formattedContent += '\n';
-          }
-        }
-      } else {
-        // Fallback to legacy body content
-        const bodyContent = document.data.body?.content;
-        if (bodyContent) {
-          const legacyInlineObjects = (document.data as any).inlineObjects;
-          const segments = extractSegments(bodyContent, legacyInlineObjects);
-          trackFonts(segments);
-          formattedContent += formatSegments(segments);
-          totalLength = segments.length > 0 ? segments[segments.length - 1].endIndex : 0;
-        }
-      }
-
-      if (withFormatting && fontUsage.size > 0) {
-        formattedContent += '\n--- Fonts summary ---\n';
-        const sorted = [...fontUsage.entries()].sort((a, b) => b[1].charCount - a[1].charCount);
-        for (const [font, info] of sorted) {
-          const sizesStr = info.sizes.size > 0 ? [...info.sizes].sort((a, b) => a - b).join(', ') + ' pt' : 'default size';
-          const stylesStr = info.styles.size > 0 ? [...info.styles].sort().join(', ') : 'normal';
-          formattedContent += `${font}: sizes [${sizesStr}], styles [${stylesStr}], ~${info.charCount} chars\n`;
-        }
-      }
+      const { formattedContent, totalLength } = buildDocFormattedContent(document.data, withFormatting);
 
       return {
         content: [{
           type: "text",
           text: formattedContent + `\nTotal length: ${totalLength} characters`
         }],
+        isError: false
+      };
+    }
+
+    case "getGoogleDocContentPaginated": {
+      const validation = GetGoogleDocContentPaginatedSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const a = validation.data;
+      const withFormatting = a.includeFormatting === true;
+
+      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+      const document = await docs.documents.get({
+        documentId: a.documentId,
+        includeTabsContent: true,
+      });
+
+      const { formattedContent, totalLength } = buildDocFormattedContent(document.data, withFormatting);
+
+      const offset = a.offset;
+      const limit = a.limit;
+      const slicedContent = formattedContent.slice(offset, offset + limit);
+      const hasMore = offset + limit < formattedContent.length;
+
+      const result = {
+        totalLength: formattedContent.length,
+        docTotalLength: totalLength,
+        offset,
+        limit,
+        hasMore,
+        content: slicedContent,
+      };
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         isError: false
       };
     }
@@ -1923,89 +2076,67 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         };
       }
 
-      // Helper to extract plain text from body content
-      function extractText(bodyContent: any[]): string {
-        let result = '';
-        for (const element of bodyContent) {
-          if (element.paragraph?.elements) {
-            for (const elem of element.paragraph.elements) {
-              if (elem.textRun?.content) {
-                result += elem.textRun.content;
-              }
-            }
-          } else if (element.table) {
-            for (const row of element.table.tableRows || []) {
-              for (const cell of row.tableCells || []) {
-                for (const cellContent of cell.content || []) {
-                  if (cellContent.paragraph?.elements) {
-                    for (const elem of cellContent.paragraph.elements) {
-                      if (elem.textRun?.content) {
-                        result += elem.textRun.content;
-                      }
-                    }
-                  }
-                }
-                result += '\t';
-              }
-              result += '\n';
-            }
-          }
-        }
-        return result;
+      const { text, error } = extractDocText(doc, a.tabId);
+      if (error) {
+        return errorResponse(error);
       }
 
-      let text = '';
-      const tabs = (doc as any).tabs as any[] | undefined;
-
-      if (tabs && tabs.length > 0) {
-        if (a.tabId) {
-          // Find the specific tab (recursively through childTabs)
-          const tab = findTabById(tabs, a.tabId);
-          if (!tab) {
-            return errorResponse(`Tab with ID "${a.tabId}" not found. Use listDocumentTabs to see available tabs.`);
-          }
-          const bodyContent = tab.documentTab?.body?.content;
-          if (bodyContent) {
-            text = extractText(bodyContent);
-          }
-        } else {
-          const allTabs = collectAllTabsWithLevel(tabs);
-          const isMultiTab = allTabs.length > 1;
-          for (const { tab, level } of allTabs) {
-            const bodyContent = tab.documentTab?.body?.content;
-            // Multi-tab: include all tabs with headers
-            if (isMultiTab) {
-              const title = tab.tabProperties?.title || 'Untitled';
-              const indent = '  '.repeat(level);
-              text += `${indent}=== Tab: ${title} ===\n`;
-            }
-            if (bodyContent) {
-              text += extractText(bodyContent);
-            }
-            // Multi-tab: add new line between tabs
-            if (isMultiTab) {
-              text += '\n';
-            }
-          }
-        }
-      } else {
-        // Fallback to legacy body content
-        const body = doc.body;
-        if (body?.content) {
-          text = extractText(body.content);
-        }
-      }
-
+      let resultText = text;
       if (format === 'markdown') {
-        text = `# ${doc.title}\n\n${text}`;
+        resultText = `# ${doc.title}\n\n${resultText}`;
       }
 
-      if (a.maxLength && text.length > a.maxLength) {
-        text = text.substring(0, a.maxLength) + '\n... (truncated)';
+      if (a.maxLength && resultText.length > a.maxLength) {
+        resultText = resultText.substring(0, a.maxLength) + '\n... (truncated)';
       }
 
       return {
-        content: [{ type: "text", text }],
+        content: [{ type: "text", text: resultText }],
+        isError: false
+      };
+    }
+
+    case "readGoogleDocPaginated": {
+      const validation = ReadGoogleDocPaginatedSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const a = validation.data;
+
+      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+      const docResponse = await docs.documents.get({
+        documentId: a.documentId,
+        includeTabsContent: true,
+      });
+
+      const doc = docResponse.data;
+      const format = a.format || 'text';
+
+      const { text, error } = extractDocText(doc, a.tabId);
+      if (error) {
+        return errorResponse(error);
+      }
+
+      let fullText = text;
+      if (format === 'markdown') {
+        fullText = `# ${doc.title}\n\n${fullText}`;
+      }
+
+      const offset = a.offset;
+      const limit = a.limit;
+      const slicedText = fullText.slice(offset, offset + limit);
+      const hasMore = offset + limit < fullText.length;
+
+      const result = {
+        totalLength: fullText.length,
+        offset,
+        limit,
+        hasMore,
+        content: slicedText,
+      };
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         isError: false
       };
     }

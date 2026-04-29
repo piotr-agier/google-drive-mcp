@@ -13,6 +13,8 @@ export interface ToolDefinition {
   inputSchema: Record<string, unknown>;
 }
 
+import { RuntimeConfig } from './utils/cliArgs.js';
+
 export interface ToolContext {
   authClient: any;
   google: typeof GoogleApisType;
@@ -23,6 +25,7 @@ export interface ToolContext {
   resolveFolderId: (input: string | undefined) => Promise<string>;
   checkFileExists: (name: string, parentFolderId?: string) => Promise<string | null>;
   validateTextFileExtension: (name: string) => void;
+  runtimeConfig: RuntimeConfig;
 }
 
 export function errorResponse(message: string): ToolResult {

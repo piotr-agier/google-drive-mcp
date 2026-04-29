@@ -1,3 +1,5 @@
+## Runtime Configuration (CLI args or env vars)
+
 # Google Drive MCP Server
 
 A Model Context Protocol (MCP) server that provides secure integration with Google Drive, Docs, Sheets, Slides, and Calendar. It allows Claude Desktop and other MCP clients to manage files in Google Drive and calendar events through a standardized interface.
@@ -317,6 +319,38 @@ Authentication tokens are stored securely following the XDG Base Directory speci
 - Never commit tokens to version control
 - Tokens auto-refresh before expiration
 - Google OAuth apps in "Testing" status have refresh tokens that expire after 7 days (Google's policy)
+
+## Runtime Configuration (CLI args or env vars)
+
+Configure timeouts and retry behavior via CLI flags (preferred) or environment variables.
+CLI flags take priority over env vars.
+
+### CLI flags
+
+| Flag                      | Default | Description                                              |
+| ------------------------- | ------- | -------------------------------------------------------- |
+| `--api-timeout=<ms>`      | 120000  | Timeout for individual Google API calls                  |
+| `--retry-max=<N>`         | 3       | Max retry attempts on retryable errors (429/503/timeout) |
+| `--retry-base-delay=<ms>` | 1000    | Base delay for exponential backoff                       |
+
+### Environment variables (fallback)
+
+- `GOOGLE_DRIVE_MCP_API_TIMEOUT`
+- `GOOGLE_DRIVE_MCP_RETRY_MAX`
+- `GOOGLE_DRIVE_MCP_RETRY_BASE_DELAY`
+
+### Example (Claude Desktop config)
+
+```json
+{
+  "mcpServers": {
+    "google-drive": {
+      "command": "npx",
+      "args": ["@piotr-agier/google-drive-mcp", "--api-timeout=180000", "--retry-max=5"]
+    }
+  }
+}
+```
 
 ## Usage with Claude Desktop
 

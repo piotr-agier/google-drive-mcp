@@ -24,6 +24,7 @@ import {
 } from './utils.js';
 import type { ToolContext } from './types.js';
 import { errorResponse } from './types.js';
+import { loadRuntimeConfig } from './utils/cliArgs.js';
 
 import * as driveTools from './tools/drive.js';
 import * as docsTools from './tools/docs.js';
@@ -64,6 +65,9 @@ const __dirname = dirname(__filename);
 const packageJsonPath = join(__dirname, '..', 'package.json');
 const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
 const VERSION = packageJson.version;
+
+const runtimeConfig = loadRuntimeConfig();
+log('Runtime config:', runtimeConfig);
 
 // -----------------------------------------------------------------------------
 // LOGGING UTILITY
@@ -200,6 +204,7 @@ function buildToolContext(): ToolContext {
     resolveFolderId,
     checkFileExists,
     validateTextFileExtension,
+    runtimeConfig,
   };
 }
 

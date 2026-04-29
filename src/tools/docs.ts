@@ -4,6 +4,7 @@ import type { ToolDefinition, ToolContext, ToolResult } from '../types.js';
 import { errorResponse } from '../types.js';
 import { escapeDriveQuery } from '../utils.js';
 import { uploadImageToDrive } from '../utils/driveImageUpload.js';
+import { withRetry } from '../utils/retry.js';
 
 // ---------------------------------------------------------------------------
 // Helper functions
@@ -1398,57 +1399,73 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
 
       // Create empty doc
-      let docResponse;
-      try {
-        docResponse = await ctx.getDrive().files.create({
-          requestBody: {
-            name: a.name,
-            mimeType: 'application/vnd.google-apps.document',
-            parents: [parentFolderId]
-          },
-          fields: 'id, name, webViewLink',
-          supportsAllDrives: true
-        });
-      } catch (createError: any) {
-        ctx.log('Drive files.create error details:', {
-          message: createError.message,
-          code: createError.code,
-          errors: createError.errors,
-          status: createError.status
-        });
-        throw createError;
-      }
-      const doc = docResponse.data;
-
-      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-      await docs.documents.batchUpdate({
-        documentId: doc.id!,
+    let docResponse;
+    try {
+      docResponse = await ctx.getDrive().files.create({
         requestBody: {
-          requests: [
-            {
-              insertText: { location: { index: 1 }, text: a.content }
-            },
-            // Ensure the text is formatted as normal text, not as a header
-            {
-              updateParagraphStyle: {
-                range: {
-                  startIndex: 1,
-                  endIndex: a.content.length + 1
-                },
-                paragraphStyle: {
-                  namedStyleType: 'NORMAL_TEXT'
-                },
-                fields: 'namedStyleType'
-              }
-            }
-          ]
-        }
+          name: a.name,
+          mimeType: 'application/vnd.google-apps.document',
+          parents: [parentFolderId]
+        },
+        fields: 'id, name, webViewLink',
+        supportsAllDrives: true
       });
+    } catch (createError: any) {
+      ctx.log('Drive files.create error details:', {
+        message: createError.message,
+        code: createError.code,
+        errors: createError.errors,
+        status: createError.status
+      });
+      throw createError;
+    }
+    const doc = docResponse.data;
 
+    const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+
+    try {
+      await withRetry(
+        () => docs.documents.batchUpdate({
+          documentId: doc.id!,
+          requestBody: {
+            requests: [
+              {
+                insertText: { location: { index: 1 }, text: a.content }
+              },
+              // Ensure the text is formatted as normal text, not as a header
+              {
+                updateParagraphStyle: {
+                  range: {
+                    startIndex: 1,
+                    endIndex: a.content.length + 1
+                  },
+                  paragraphStyle: {
+                    namedStyleType: 'NORMAL_TEXT'
+                  },
+                  fields: 'namedStyleType'
+                }
+              }
+            ]
+          }
+        }),
+        ctx.runtimeConfig,
+        `createGoogleDoc.batchUpdate(${a.name})`
+      );
+    } catch (batchErr: any) {
+      ctx.log('batchUpdate failed after retries, doc exists empty:', batchErr);
       return {
-        content: [{ type: "text", text: `Created Google Doc: ${doc.name}\nID: ${doc.id}\nLink: ${doc.webViewLink}` }],
+        content: [{
+          type: "text",
+          text: `Created Google Doc (content insertion failed): ${doc.name}\nID: ${doc.id}\nLink: ${doc.webViewLink}\nError: ${batchErr.message}\nYou can retry content insertion with updateGoogleDoc.`
+        }],
         isError: false
       };
+    }
+
+    return {
+      content: [{ type: "text", text: `Created Google Doc: ${doc.name}\nID: ${doc.id}\nLink: ${doc.webViewLink}` }],
+      isError: false
+    };
     }
 
     case "updateGoogleDoc": {

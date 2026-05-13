@@ -174,8 +174,12 @@ export class AuthServer {
     for (let port = this.portRange.start; port <= this.portRange.end; port++) {
       try {
         await new Promise<void>((resolve, reject) => {
-          // Create a temporary server instance to test the port
-          const testServer = this.app.listen(port, () => {
+          // Create a temporary server instance to test the port.
+          // Bind to the loopback interface explicitly: the OAuth redirect URI
+          // is hard-coded to `http://localhost:<port>/oauth2callback`, so we
+          // never need to accept connections from other interfaces, and doing
+          // so would expose the short-lived auth server to the LAN.
+          const testServer = this.app.listen(port, '127.0.0.1', () => {
             this.server = testServer; // Assign to class property *only* if successful
             console.error(`Authentication server listening on http://localhost:${port}`);
             resolve();

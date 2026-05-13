@@ -8,6 +8,17 @@ import { resolveOAuthScopes } from './scopes.js';
 
 const SCOPES = resolveOAuthScopes();
 
+// Escape user-influenced strings before embedding them in HTML responses.
+// Covers both element content and double-quoted attribute contexts.
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export class AuthServer {
   private baseOAuth2Client: OAuth2Client; // Used by TokenManager for validation/refresh
   private flowOAuth2Client: OAuth2Client | null = null; // Used specifically for the auth code flow
@@ -41,7 +52,7 @@ export class AuthServer {
         scope: SCOPES,
         prompt: 'consent'
       });
-      res.send(`<h1>Google Drive Authentication</h1><a href="${authUrl}">Authenticate with Google</a>`);
+      res.send(`<h1>Google Drive Authentication</h1><a href="${escapeHtml(authUrl)}">Authenticate with Google</a>`);
     });
 
     this.app.get('/oauth2callback', async (req, res) => {
@@ -84,7 +95,7 @@ export class AuthServer {
               <div class="container">
                   <h1>Authentication Successful!</h1>
                   <p>Your authentication tokens have been saved successfully to:</p>
-                  <p><code>${tokenPath}</code></p>
+                  <p><code>${escapeHtml(tokenPath)}</code></p>
                   <p>You can now close this browser window.</p>
               </div>
           </body>
@@ -112,7 +123,7 @@ export class AuthServer {
               <div class="container">
                   <h1>Authentication Failed</h1>
                   <p>An error occurred during authentication:</p>
-                  <p><code>${message}</code></p>
+                  <p><code>${escapeHtml(message)}</code></p>
                   <p>Please try again or check the server logs.</p>
               </div>
           </body>

@@ -1084,7 +1084,7 @@ const ReadGoogleDocPaginatedSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
   format: z.enum(['text', 'markdown']).optional().default('text'),
   offset: z.number().int().min(0).optional().default(0),
-  limit: z.number().int().min(1).max(100000).optional().default(50000),
+  limit: z.number().int().min(1).max(80000).optional().default(50000),
   tabId: z.string().optional()
 });
 
@@ -1092,7 +1092,7 @@ const GetGoogleDocContentPaginatedSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
   includeFormatting: z.boolean().optional(),
   offset: z.number().int().min(0).optional().default(0),
-  limit: z.number().int().min(1).max(100000).optional().default(50000),
+  limit: z.number().int().min(1).max(80000).optional().default(50000),
 });
 
 const ListDocumentTabsSchema = z.object({
@@ -1357,7 +1357,7 @@ export const toolDefinitions: ToolDefinition[] = [
         documentId: { type: "string", description: "The document ID" },
         format: { type: "string", enum: ["text", "markdown"], description: "Output format (default: text)" },
         offset: { type: "number", description: "Character offset into the output text, not raw doc characters (with format=markdown the title prefix counts). 0-based, default: 0. Pass the previous response's nextOffset to get the following page." },
-        limit: { type: "number", description: "Maximum characters to return per page (default: 50000, max: 100000; the gap below the host's ~100K limit leaves room for the JSON response envelope)" },
+        limit: { type: "number", description: "Maximum characters to return per page (default: 50000, max: 80000; kept below the host's ~100K output cap to leave room for the JSON envelope and newline escaping)" },
         tabId: { type: "string", description: "Read a specific tab by ID (from listDocumentTabs). If omitted, all tabs are returned." }
       },
       required: ["documentId"]
@@ -1588,7 +1588,7 @@ export const toolDefinitions: ToolDefinition[] = [
         documentId: { type: "string", description: "Document ID" },
         includeFormatting: { type: "boolean", description: "Include font, style, and color info for each text span (default: false)" },
         offset: { type: "number", description: "Character offset into the formatted indexed output (not raw doc characters). 0-based, default: 0. Pass the previous response's nextOffset to get the following page." },
-        limit: { type: "number", description: "Maximum characters to return per page (default: 50000, max: 100000; the gap below the host's ~100K limit leaves room for the JSON response envelope). The page end is snapped back to a line boundary so [start-end] index prefixes are never split." }
+        limit: { type: "number", description: "Maximum characters to return per page (default: 50000, max: 80000; kept below the host's ~100K output cap to leave room for the JSON envelope and newline escaping). The page end is snapped back to a line boundary where possible; a single line longer than limit is hard-cut to guarantee forward progress." }
       },
       required: ["documentId"]
     }

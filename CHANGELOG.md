@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Features
+
+- **auth:** support Workspace domain-wide delegation via `GOOGLE_DRIVE_MCP_SUBJECT`; `GOOGLE_DRIVE_MCP_SCOPES` is now honored in service-account mode ([#107](https://github.com/piotr-agier/google-drive-mcp/pull/107))
+
 ## [2.2.0](https://github.com/piotr-agier/google-drive-mcp/compare/v2.1.0...v2.2.0) (2026-04-20)
 
 ### Features

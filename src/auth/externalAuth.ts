@@ -51,7 +51,7 @@ export function buildServiceAccountAuthOptions(): GoogleAuthOptions {
  */
 export async function createServiceAccountAuth(): Promise<any> {
   const options = buildServiceAccountAuthOptions();
-  const subject = (options.clientOptions as { subject?: string } | undefined)?.subject;
+  const subject = process.env.GOOGLE_DRIVE_MCP_SUBJECT?.trim();
   console.error(
     `Using service account credentials from ${options.keyFile}` +
       (subject ? ` (impersonating ${subject} via domain-wide delegation)` : ''),

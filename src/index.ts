@@ -394,6 +394,9 @@ Environment Variables:
   GOOGLE_DRIVE_MCP_TOKEN_PATH           Path to store authentication tokens
   GOOGLE_DRIVE_MCP_AUTH_PORT            Starting port for OAuth callback server (default: 3000, uses 5 consecutive ports)
 
+  Common Configuration:
+  GOOGLE_DRIVE_MCP_SCOPES               Comma-separated scopes to request (aliases or full URLs; defaults to all Drive/Docs/Sheets/Slides/Calendar scopes). Applies to local OAuth, external OAuth, and service account modes.
+
   Transport Configuration:
   MCP_TRANSPORT                         Transport mode: stdio or http (default: stdio)
   MCP_HTTP_PORT                         HTTP listen port (default: 3100)
@@ -402,7 +405,6 @@ Environment Variables:
   Service Account Mode:
   GOOGLE_APPLICATION_CREDENTIALS        Path to service account JSON key file
   GOOGLE_DRIVE_MCP_SUBJECT              Workspace user to impersonate via domain-wide delegation (optional)
-  GOOGLE_DRIVE_MCP_SCOPES               Comma-separated scopes to request (aliases or full URLs; defaults to all Drive/Docs/Sheets/Slides/Calendar scopes)
 
   External OAuth Token Mode:
   GOOGLE_DRIVE_MCP_ACCESS_TOKEN         Pre-obtained Google OAuth access token

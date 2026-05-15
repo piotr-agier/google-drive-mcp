@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import { describe, it, before, after } from 'node:test';
 import { setupTestServer, type TestContext } from '../helpers/setup-server.js';
 
-const EXPECTED_TOOL_COUNT = 104;
+const EXPECTED_TOOL_COUNT = 106;
 
 const EXPECTED_TOOLS = [
   'search', 'createTextFile', 'updateTextFile', 'createFolder', 'listFolder', 'listSharedDrives',
   'deleteItem', 'renameItem', 'moveItem',
   'createGoogleDoc', 'updateGoogleDoc', 'insertText', 'deleteRange',
-  'readGoogleDoc', 'listDocumentTabs', 'applyTextStyle', 'applyParagraphStyle', 'formatGoogleDocText', 'formatGoogleDocParagraph', 'createParagraphBullets', 'findAndReplaceInDoc',
+  'readGoogleDoc', 'readGoogleDocPaginated', 'listDocumentTabs', 'applyTextStyle', 'applyParagraphStyle', 'formatGoogleDocText', 'formatGoogleDocParagraph', 'createParagraphBullets', 'findAndReplaceInDoc',
   'listComments', 'getComment', 'addComment', 'replyToComment', 'deleteComment',
   'createGoogleSheet', 'updateGoogleSheet', 'getGoogleSheetContent',
   'formatGoogleSheetCells', 'formatGoogleSheetText', 'formatGoogleSheetNumbers',
@@ -16,7 +16,7 @@ const EXPECTED_TOOLS = [
   'getSpreadsheetInfo', 'appendSpreadsheetRows', 'addSpreadsheetSheet', 'addSheet', 'listSheets', 'renameSheet', 'deleteSheet', 'addDataValidation', 'protectRange', 'addNamedRange',
   'listGoogleSheets', 'copyFile',
   'createGoogleSlides', 'updateGoogleSlides',
-  'getGoogleDocContent', 'getGoogleSlidesContent',
+  'getGoogleDocContent', 'getGoogleDocContentPaginated', 'getGoogleSlidesContent',
   'formatGoogleSlidesText', 'formatGoogleSlidesParagraph',
   'styleGoogleSlidesShape', 'setGoogleSlidesBackground',
   'createGoogleSlidesTextBox', 'createGoogleSlidesShape',

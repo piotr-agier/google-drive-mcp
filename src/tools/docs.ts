@@ -811,6 +811,19 @@ function buildDocFormattedContent(
   return { formattedContent, totalLength };
 }
 
+// Slice [offset, offset+limit) but snap the end back to a line boundary so a
+// structural line prefix (e.g. "[start-end] ...") is never cut mid-line.
+// When a single line is longer than `limit` no newline exists in the window;
+// keep the hard cut so pagination always makes forward progress.
+function sliceByLine(content: string, offset: number, limit: number): { slice: string; end: number } {
+  let end = Math.min(offset + limit, content.length);
+  if (end < content.length) {
+    const nl = content.lastIndexOf('\n', end);
+    if (nl > offset) end = nl + 1;
+  }
+  return { slice: content.slice(offset, end), end };
+}
+
 /**
  * Parse a DOCX export to extract comment positions and surrounding context.
  * Returns DOCX comment metadata and context maps keyed by DOCX comment ID.
@@ -1069,7 +1082,7 @@ const ReadGoogleDocSchema = z.object({
 
 const ReadGoogleDocPaginatedSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
-  format: z.enum(['text', 'json', 'markdown']).optional().default('text'),
+  format: z.enum(['text', 'markdown']).optional().default('text'),
   offset: z.number().int().min(0).optional().default(0),
   limit: z.number().int().min(1).max(100000).optional().default(50000),
   tabId: z.string().optional()
@@ -1342,9 +1355,9 @@ export const toolDefinitions: ToolDefinition[] = [
       type: "object",
       properties: {
         documentId: { type: "string", description: "The document ID" },
-        format: { type: "string", enum: ["text", "json", "markdown"], description: "Output format (default: text)" },
-        offset: { type: "number", description: "Character offset to start reading from (0-based, default: 0)" },
-        limit: { type: "number", description: "Maximum characters to return (default: 50000, max: 100000)" },
+        format: { type: "string", enum: ["text", "markdown"], description: "Output format (default: text)" },
+        offset: { type: "number", description: "Character offset into the output text, not raw doc characters (with format=markdown the title prefix counts). 0-based, default: 0. Pass the previous response's nextOffset to get the following page." },
+        limit: { type: "number", description: "Maximum characters to return per page (default: 50000, max: 100000; the gap below the host's ~100K limit leaves room for the JSON response envelope)" },
         tabId: { type: "string", description: "Read a specific tab by ID (from listDocumentTabs). If omitted, all tabs are returned." }
       },
       required: ["documentId"]
@@ -1574,8 +1587,8 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         documentId: { type: "string", description: "Document ID" },
         includeFormatting: { type: "boolean", description: "Include font, style, and color info for each text span (default: false)" },
-        offset: { type: "number", description: "Character offset to start reading from (0-based, default: 0)" },
-        limit: { type: "number", description: "Maximum characters to return (default: 50000, max: 100000)" }
+        offset: { type: "number", description: "Character offset into the formatted indexed output (not raw doc characters). 0-based, default: 0. Pass the previous response's nextOffset to get the following page." },
+        limit: { type: "number", description: "Maximum characters to return per page (default: 50000, max: 100000; the gap below the host's ~100K limit leaves room for the JSON response envelope). The page end is snapped back to a line boundary so [start-end] index prefixes are never split." }
       },
       required: ["documentId"]
     }
@@ -1987,14 +2000,15 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
 
       const offset = a.offset;
       const limit = a.limit;
-      const slicedContent = formattedContent.slice(offset, offset + limit);
-      const hasMore = offset + limit < formattedContent.length;
+      const { slice: slicedContent, end } = sliceByLine(formattedContent, offset, limit);
+      const hasMore = end < formattedContent.length;
 
       const result = {
-        totalLength: formattedContent.length,
-        docTotalLength: totalLength,
+        outputLength: formattedContent.length,
+        documentLength: totalLength,
         offset,
         limit,
+        nextOffset: end,
         hasMore,
         content: slicedContent,
       };
@@ -2146,13 +2160,15 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
 
       const offset = a.offset;
       const limit = a.limit;
-      const slicedText = fullText.slice(offset, offset + limit);
-      const hasMore = offset + limit < fullText.length;
+      const { slice: slicedText, end } = sliceByLine(fullText, offset, limit);
+      const hasMore = end < fullText.length;
 
       const result = {
-        totalLength: fullText.length,
+        outputLength: fullText.length,
+        documentLength: text.length,
         offset,
         limit,
+        nextOffset: end,
         hasMore,
         content: slicedText,
       };

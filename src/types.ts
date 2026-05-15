@@ -1,5 +1,6 @@
 import type { drive_v3, calendar_v3 } from 'googleapis';
 import type { google as GoogleApisType } from 'googleapis';
+import type { RuntimeConfig } from './utils/cliArgs.js';
 
 export interface ToolResult {
   [key: string]: unknown;
@@ -12,8 +13,6 @@ export interface ToolDefinition {
   description: string;
   inputSchema: Record<string, unknown>;
 }
-
-import { RuntimeConfig } from './utils/cliArgs.js';
 
 export interface ToolContext {
   authClient: any;

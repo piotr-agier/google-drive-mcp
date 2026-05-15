@@ -1,5 +1,3 @@
-## Runtime Configuration (CLI args or env vars)
-
 # Google Drive MCP Server
 
 A Model Context Protocol (MCP) server that provides secure integration with Google Drive, Docs, Sheets, Slides, and Calendar. It allows Claude Desktop and other MCP clients to manage files in Google Drive and calendar events through a standardized interface.
@@ -325,13 +323,17 @@ Authentication tokens are stored securely following the XDG Base Directory speci
 Configure timeouts and retry behavior via CLI flags (preferred) or environment variables.
 CLI flags take priority over env vars.
 
+> **Scope:** these settings currently apply to the `createGoogleDoc` content-insertion
+> call (the `documents.batchUpdate` that was prone to silent timeouts). They are not
+> yet wired into every Google API call.
+
 ### CLI flags
 
-| Flag                      | Default | Description                                              |
-| ------------------------- | ------- | -------------------------------------------------------- |
-| `--api-timeout=<ms>`      | 120000  | Timeout for individual Google API calls                  |
-| `--retry-max=<N>`         | 3       | Max retry attempts on retryable errors (429/503/timeout) |
-| `--retry-base-delay=<ms>` | 1000    | Base delay for exponential backoff                       |
+| Flag                      | Default | Description                                                                 |
+| ------------------------- | ------- | --------------------------------------------------------------------------- |
+| `--api-timeout=<ms>`      | 120000  | Per-attempt timeout for the retry-wrapped call; `0` disables the timeout     |
+| `--retry-max=<N>`         | 3       | Max retry attempts on retryable errors (429/503/504, timeouts, network); `0` disables retries |
+| `--retry-base-delay=<ms>` | 1000    | Base delay for exponential backoff (capped at 30s, with jitter)             |
 
 ### Environment variables (fallback)
 

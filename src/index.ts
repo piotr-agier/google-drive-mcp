@@ -66,9 +66,6 @@ const packageJsonPath = join(__dirname, '..', 'package.json');
 const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
 const VERSION = packageJson.version;
 
-const runtimeConfig = loadRuntimeConfig();
-log('Runtime config:', runtimeConfig);
-
 // -----------------------------------------------------------------------------
 // LOGGING UTILITY
 // -----------------------------------------------------------------------------
@@ -79,6 +76,9 @@ function log(message: string, data?: any) {
     : `[${timestamp}] ${message}`;
   console.error(logMessage);
 }
+
+const runtimeConfig = loadRuntimeConfig();
+log('Runtime config:', runtimeConfig);
 
 // -----------------------------------------------------------------------------
 // HELPER FUNCTIONS

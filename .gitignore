@@ -2,7 +2,7 @@
 node_modules/
 
 # Build outputs
-# dist/ intentionally not ignored — committed for npx github: support
+dist/
 
 # Logs
 *.log

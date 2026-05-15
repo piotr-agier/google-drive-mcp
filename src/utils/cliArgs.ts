@@ -14,7 +14,8 @@ const DEFAULTS: RuntimeConfig = {
 function parseIntOr(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const n = parseInt(value, 10);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
+  // Allow 0: retryMax=0 disables retries, apiTimeout=0 disables the timeout.
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
 export function loadRuntimeConfig(argv: string[] = process.argv.slice(2)): RuntimeConfig {

@@ -579,9 +579,22 @@ When binding to `127.0.0.1` (default), DNS rebinding protection is automatically
   - `format`: Output format — `text`, `json`, or `markdown` (optional, default: text)
   - `maxLength`: Maximum characters to return (optional)
 
+- **readGoogleDocPaginated** - Read a large Google Doc one page at a time (avoids host output-size truncation)
+  - `documentId`: Document ID
+  - `format`: Output format — `text` or `markdown` (optional, default: text)
+  - `offset`: Character offset into the output text (optional, default: 0; pass the previous response's `nextOffset`)
+  - `limit`: Maximum characters per page (optional, default: 50000, max: 100000)
+  - `tabId`: Read a specific tab by ID (optional)
+
 - **getGoogleDocContent** - Get document content with text indices for formatting
   - `documentId`: Document ID
   - `includeFormatting`: Include font, style, and color info for each text span (optional, default: false)
+
+- **getGoogleDocContentPaginated** - Paginated `getGoogleDocContent`; page ends snap to a line boundary so `[start-end]` index prefixes are never split
+  - `documentId`: Document ID
+  - `includeFormatting`: Include font, style, and color info for each text span (optional, default: false)
+  - `offset`: Character offset into the formatted output (optional, default: 0; pass the previous response's `nextOffset`)
+  - `limit`: Maximum characters per page (optional, default: 50000, max: 100000)
 
 - **listDocumentTabs** - List all tabs in a Google Doc with their IDs and hierarchy
   - `documentId`: Document ID

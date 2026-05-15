@@ -1326,6 +1326,147 @@ describe('Docs tools', () => {
     });
   });
 
+  // --- readGoogleDocPaginated ---
+  describe('readGoogleDocPaginated', () => {
+    const longDoc = (text: string) => ({
+      documentId: 'doc-1', title: 'Big Doc',
+      body: { content: [{ paragraph: { elements: [{ textRun: { content: text } }] } }] },
+    });
+
+    it('returns first page with hasMore and nextOffset', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: longDoc('X'.repeat(120)) }));
+      const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', offset: 0, limit: 50 });
+      assert.equal(res.isError, false);
+      const r = JSON.parse(res.content[0].text);
+      assert.equal(r.content.length, 50);
+      assert.equal(r.outputLength, 120);
+      assert.equal(r.documentLength, 120);
+      assert.equal(r.hasMore, true);
+      assert.equal(r.nextOffset, 50);
+    });
+
+    it('last page reports hasMore false and nextOffset at end', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: longDoc('Y'.repeat(40)) }));
+      const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', offset: 0, limit: 50000 });
+      const r = JSON.parse(res.content[0].text);
+      assert.equal(r.content.length, 40);
+      assert.equal(r.hasMore, false);
+      assert.equal(r.nextOffset, 40);
+    });
+
+    it('offset beyond document returns empty content', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: longDoc('Z'.repeat(30)) }));
+      const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', offset: 9999, limit: 50 });
+      const r = JSON.parse(res.content[0].text);
+      assert.equal(r.content, '');
+      assert.equal(r.hasMore, false);
+      assert.equal(r.nextOffset, 30);
+    });
+
+    it('markdown format includes the title in the first page', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: longDoc('Body text\n') }));
+      const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', format: 'markdown', offset: 0, limit: 50000 });
+      const r = JSON.parse(res.content[0].text);
+      assert.ok(r.content.startsWith('# Big Doc'), 'first page should start with the markdown title');
+      assert.ok(r.outputLength > r.documentLength, 'outputLength includes the title prefix, documentLength does not');
+    });
+
+    it('reads a specific tab by tabId', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: mockDocs.multiTab() }));
+      const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', tabId: 'tab-2', offset: 0, limit: 50000 });
+      const r = JSON.parse(res.content[0].text);
+      assert.ok(r.content.includes('Second tab'));
+      assert.ok(!r.content.includes('First tab'));
+    });
+
+    it('returns error for unknown tabId', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: mockDocs.multiTab() }));
+      const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', tabId: 'nope' });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.includes('not found'));
+    });
+
+    it('rejects the removed json format', async () => {
+      const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', format: 'json' });
+      assert.equal(res.isError, true);
+    });
+
+    it('validation error when documentId missing', async () => {
+      const res = await callTool(ctx.client, 'readGoogleDocPaginated', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- getGoogleDocContentPaginated ---
+  describe('getGoogleDocContentPaginated', () => {
+    const indexedDoc = () => ({
+      documentId: 'doc-1', title: 'Indexed Doc',
+      body: { content: [
+        { paragraph: { elements: [{ textRun: { content: 'Alpha\n' }, startIndex: 1, endIndex: 7 }] } },
+        { paragraph: { elements: [{ textRun: { content: 'Bravo\n' }, startIndex: 7, endIndex: 13 }] } },
+        { paragraph: { elements: [{ textRun: { content: 'Charlie\n' }, startIndex: 13, endIndex: 21 }] } },
+      ] },
+    });
+    const oneLongLine = () => ({
+      documentId: 'doc-1', title: 'One Long Line',
+      body: { content: [{ paragraph: { elements: [{ textRun: { content: 'Q'.repeat(200) + '\n' }, startIndex: 1, endIndex: 202 }] } }] },
+    });
+
+    it('returns indexed content with hasMore and nextOffset', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: indexedDoc() }));
+      const res = await callTool(ctx.client, 'getGoogleDocContentPaginated', { documentId: 'doc-1', offset: 0, limit: 50000 });
+      assert.equal(res.isError, false);
+      const r = JSON.parse(res.content[0].text);
+      assert.ok(r.content.includes('[1-6] Alpha'));
+      assert.ok(r.content.includes('[7-12] Bravo'));
+      assert.equal(r.hasMore, false);
+      assert.equal(typeof r.outputLength, 'number');
+      assert.equal(typeof r.documentLength, 'number');
+    });
+
+    it('snaps the page end to a line boundary so index prefixes are never split', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: indexedDoc() }));
+      const page1 = await callTool(ctx.client, 'getGoogleDocContentPaginated', { documentId: 'doc-1', offset: 0, limit: 50 });
+      const r1 = JSON.parse(page1.content[0].text);
+      assert.ok(r1.content.endsWith('\n'), 'snapped page must end on a newline');
+      assert.ok(r1.content.includes('[1-6] Alpha'), 'the Alpha line must be whole');
+      assert.ok(!r1.content.includes('[7-12'), 'the Bravo prefix must not be partially included');
+      assert.equal(r1.hasMore, true);
+
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: indexedDoc() }));
+      const page2 = await callTool(ctx.client, 'getGoogleDocContentPaginated', { documentId: 'doc-1', offset: r1.nextOffset, limit: 50 });
+      const r2 = JSON.parse(page2.content[0].text);
+      assert.ok(r2.content.startsWith('[7-12] Bravo'), 'next page must start at a clean index prefix');
+    });
+
+    it('makes forward progress when a single line exceeds the limit', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: oneLongLine() }));
+      const page1 = await callTool(ctx.client, 'getGoogleDocContentPaginated', { documentId: 'doc-1', offset: 0, limit: 50 });
+      const r1 = JSON.parse(page1.content[0].text);
+
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: oneLongLine() }));
+      const page2 = await callTool(ctx.client, 'getGoogleDocContentPaginated', { documentId: 'doc-1', offset: r1.nextOffset, limit: 50 });
+      const r2 = JSON.parse(page2.content[0].text);
+      assert.ok(r2.nextOffset > r1.nextOffset, 'pagination must advance even with no newline in the window');
+      assert.ok(r2.content.length > 0, 'page must not be empty');
+      assert.equal(r2.hasMore, true);
+    });
+
+    it('offset beyond document returns empty content', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: indexedDoc() }));
+      const res = await callTool(ctx.client, 'getGoogleDocContentPaginated', { documentId: 'doc-1', offset: 999999, limit: 50 });
+      const r = JSON.parse(res.content[0].text);
+      assert.equal(r.content, '');
+      assert.equal(r.hasMore, false);
+      assert.equal(r.nextOffset, r.outputLength);
+    });
+
+    it('validation error when documentId missing', async () => {
+      const res = await callTool(ctx.client, 'getGoogleDocContentPaginated', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
   describe('deleteComment', () => {
     it('happy path', async () => {
       const res = await callTool(ctx.client, 'deleteComment', { documentId: 'doc-1', commentId: 'c1' });

@@ -972,6 +972,29 @@ Set the standard `GOOGLE_APPLICATION_CREDENTIALS` environment variable to point 
 
 **Note:** The service account must have access to the Google Drive files/folders you want to work with. For Shared Drives, grant the service account's email address the appropriate permissions.
 
+#### Domain-Wide Delegation (impersonating a user)
+
+By default a service account acts as itself. Some Google APIs (for example Drive reads scoped to a user's "My Drive", or Calendar ACL writes against a personal calendar) require acting as a real Workspace user. Set `GOOGLE_DRIVE_MCP_SUBJECT` to the email of the user to impersonate:
+
+```json
+{
+  "mcpServers": {
+    "google-drive": {
+      "command": "npx",
+      "args": ["@piotr-agier/google-drive-mcp"],
+      "env": {
+        "GOOGLE_APPLICATION_CREDENTIALS": "/path/to/service-account-key.json",
+        "GOOGLE_DRIVE_MCP_SUBJECT": "user@your-domain.com"
+      }
+    }
+  }
+}
+```
+
+**Prerequisite:** a Workspace admin must authorize the service account's client ID for the requested scopes under **Admin console > Security > API controls > Manage Domain-wide Delegation**. The scopes granted there must cover the scopes the server requests (see [OAuth Scope Configuration](#oauth-scope-configuration)).
+
+`GOOGLE_DRIVE_MCP_SCOPES` applies in service-account mode too, so you can narrow the JWT to a subset of the delegated scopes.
+
 ### 2. External OAuth Token Mode
 
 Provide a pre-obtained OAuth access token via `GOOGLE_DRIVE_MCP_ACCESS_TOKEN`. This is useful when an external service handles the OAuth flow (e.g., a web app that obtains tokens on behalf of the user).
@@ -1329,6 +1352,7 @@ npm run typecheck # Type checking without compilation
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to service account JSON key file | `/path/to/service-account.json` |
+| `GOOGLE_DRIVE_MCP_SUBJECT` | Workspace user to impersonate via domain-wide delegation (optional, service account mode) | `user@your-domain.com` |
 | `GOOGLE_DRIVE_MCP_ACCESS_TOKEN` | Pre-obtained OAuth access token | `ya29.a0AfH6SM...` |
 | `GOOGLE_DRIVE_MCP_REFRESH_TOKEN` | Refresh token for auto-refresh (optional) | `1//0dx...` |
 | `GOOGLE_DRIVE_MCP_CLIENT_ID` | OAuth client ID (required with refresh token) | `123456789.apps.googleusercontent.com` |

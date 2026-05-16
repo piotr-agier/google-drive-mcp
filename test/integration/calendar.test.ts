@@ -49,6 +49,14 @@ describe('Calendar tools', () => {
       const res = await callTool(ctx.client, 'getCalendarEvent', {});
       assert.equal(res.isError, true);
     });
+
+    it('surfaces attachments in the response', async () => {
+      const res = await callTool(ctx.client, 'getCalendarEvent', { eventId: 'event-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Attachments:'));
+      assert.ok(res.content[0].text.includes('Agenda.pdf'));
+      assert.ok(res.content[0].text.includes('https://drive.google.com/file/d/file-1/view'));
+    });
   });
 
   // --- createCalendarEvent ---
@@ -67,6 +75,32 @@ describe('Calendar tools', () => {
       const res = await callTool(ctx.client, 'createCalendarEvent', {});
       assert.equal(res.isError, true);
     });
+
+    it('forwards attachments and supportsAttachments to events.insert', async () => {
+      const res = await callTool(ctx.client, 'createCalendarEvent', {
+        summary: 'Event with attachment',
+        start: { dateTime: '2025-06-01T10:00:00Z' },
+        end: { dateTime: '2025-06-01T11:00:00Z' },
+        attachments: [{ fileUrl: 'https://drive.google.com/file/d/abc/view', title: 'Spec' }],
+      });
+      assert.equal(res.isError, false);
+      const call = ctx.mocks.calendar.tracker.getCalls('events.insert').at(-1);
+      assert.ok(call, 'events.insert should have been called');
+      assert.equal(call!.args[0].supportsAttachments, true);
+      assert.deepEqual(call!.args[0].requestBody.attachments, [
+        { fileUrl: 'https://drive.google.com/file/d/abc/view', title: 'Spec' },
+      ]);
+    });
+
+    it('rejects an attachment without fileUrl', async () => {
+      const res = await callTool(ctx.client, 'createCalendarEvent', {
+        summary: 'Bad attachment',
+        start: { dateTime: '2025-06-01T10:00:00Z' },
+        end: { dateTime: '2025-06-01T11:00:00Z' },
+        attachments: [{ title: 'no url' }],
+      });
+      assert.equal(res.isError, true);
+    });
   });
 
   // --- updateCalendarEvent ---
@@ -82,6 +116,32 @@ describe('Calendar tools', () => {
     it('validation error', async () => {
       const res = await callTool(ctx.client, 'updateCalendarEvent', {});
       assert.equal(res.isError, true);
+    });
+
+    it('preserves existing attachments when not overridden', async () => {
+      const res = await callTool(ctx.client, 'updateCalendarEvent', {
+        eventId: 'event-1', summary: 'Renamed, attachments untouched',
+      });
+      assert.equal(res.isError, false);
+      const call = ctx.mocks.calendar.tracker.getCalls('events.update').at(-1);
+      assert.ok(call, 'events.update should have been called');
+      assert.equal(call!.args[0].supportsAttachments, true);
+      // The existing event (from events.get) carries one attachment — it must
+      // be forwarded so the update does not wipe it.
+      assert.equal(call!.args[0].requestBody.attachments.length, 1);
+      assert.equal(call!.args[0].requestBody.attachments[0].fileId, 'file-1');
+    });
+
+    it('replaces attachments when explicitly provided', async () => {
+      const res = await callTool(ctx.client, 'updateCalendarEvent', {
+        eventId: 'event-1',
+        attachments: [{ fileUrl: 'https://drive.google.com/file/d/new/view', title: 'New' }],
+      });
+      assert.equal(res.isError, false);
+      const call = ctx.mocks.calendar.tracker.getCalls('events.update').at(-1);
+      assert.deepEqual(call!.args[0].requestBody.attachments, [
+        { fileUrl: 'https://drive.google.com/file/d/new/view', title: 'New' },
+      ]);
     });
   });
 

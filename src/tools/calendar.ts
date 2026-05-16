@@ -21,6 +21,7 @@ interface CalendarEventInfo {
   attendees?: { email: string; displayName?: string; responseStatus?: string }[];
   organizer?: { email?: string; displayName?: string };
   recurrence?: string[];
+  attachments?: { fileUrl?: string; title?: string; mimeType?: string; fileId?: string; iconLink?: string }[];
   created?: string;
   updated?: string;
 }
@@ -87,6 +88,16 @@ function formatCalendarEvent(event: any): CalendarEventInfo {
     result.recurrence = event.recurrence;
   }
 
+  if (event.attachments) {
+    result.attachments = event.attachments.map((a: any) => ({
+      fileUrl: a.fileUrl,
+      title: a.title,
+      mimeType: a.mimeType,
+      fileId: a.fileId,
+      iconLink: a.iconLink,
+    }));
+  }
+
   return result;
 }
 
@@ -112,6 +123,13 @@ function formatEventForDisplay(event: CalendarEventInfo): string {
   }
   if (event.attendees && event.attendees.length > 0) {
     lines.push(`Attendees: ${event.attendees.map(a => a.email).join(', ')}`);
+  }
+  if (event.attachments && event.attachments.length > 0) {
+    const items = event.attachments.map(a => {
+      const label = a.title || a.fileUrl || '(untitled)';
+      return a.fileUrl ? `${label} (${a.fileUrl})` : label;
+    });
+    lines.push(`Attachments: ${items.join(', ')}`);
   }
   if (event.htmlLink) lines.push(`Link: ${event.htmlLink}`);
   lines.push(`Event ID: ${event.id}`);
@@ -142,6 +160,21 @@ const GetCalendarEventSchema = z.object({
   calendarId: z.string().optional().default("primary").describe("Calendar ID (default: primary)")
 });
 
+// Google Calendar allows at most 25 attachments per event. `fileUrl` is the
+// only required input; `fileId`/`mimeType` are output-only and derived by the
+// API (Drive files: use the Drive file's share URL as `fileUrl`).
+const AttachmentInputSchema = z
+  .array(
+    z.object({
+      fileUrl: z.string().min(1, "Attachment fileUrl is required").describe("URL of the file to attach; for Drive files use the file's share URL"),
+      title: z.string().optional().describe("Attachment title"),
+      mimeType: z.string().optional().describe("MIME type (optional; ignored for Drive files, which the API resolves)"),
+    }),
+  )
+  .max(25, "A calendar event can have at most 25 attachments")
+  .optional()
+  .describe("File attachments for the event (max 25). Replaces existing attachments on update.");
+
 const CreateCalendarEventSchema = z.object({
   summary: z.string().min(1, "Event title is required"),
   calendarId: z.string().optional().default("primary").describe("Calendar ID (default: primary)"),
@@ -161,7 +194,8 @@ const CreateCalendarEventSchema = z.object({
   sendUpdates: z.enum(["all", "externalOnly", "none"]).optional().default("none").describe("Send notifications to attendees (default: none)"),
   conferenceType: z.enum(["hangoutsMeet"]).optional().describe("Add Google Meet link"),
   recurrence: z.array(z.string()).optional().describe("RRULE strings for recurring events"),
-  visibility: z.enum(["default", "public", "private", "confidential"]).optional().describe("Event visibility")
+  visibility: z.enum(["default", "public", "private", "confidential"]).optional().describe("Event visibility"),
+  attachments: AttachmentInputSchema
 });
 
 const UpdateCalendarEventSchema = z.object({
@@ -181,6 +215,7 @@ const UpdateCalendarEventSchema = z.object({
     timeZone: z.string().optional()
   }).optional().describe("New end time"),
   attendees: z.array(z.string()).optional().describe("Updated attendee emails (replaces existing)"),
+  attachments: AttachmentInputSchema,
   sendUpdates: z.enum(["all", "externalOnly", "none"]).optional().default("none").describe("Send notifications about the update (default: none)")
 });
 
@@ -265,7 +300,20 @@ export const toolDefinitions: ToolDefinition[] = [
         sendUpdates: { type: "string", enum: ["all", "externalOnly", "none"], description: "Send notifications (default: none)" },
         conferenceType: { type: "string", enum: ["hangoutsMeet"], description: "Add Google Meet link" },
         recurrence: { type: "array", items: { type: "string" }, description: "RRULE strings for recurring events" },
-        visibility: { type: "string", enum: ["default", "public", "private", "confidential"], description: "Event visibility" }
+        visibility: { type: "string", enum: ["default", "public", "private", "confidential"], description: "Event visibility" },
+        attachments: {
+          type: "array",
+          description: "File attachments (max 25). For Drive files use the file's share URL as fileUrl.",
+          items: {
+            type: "object",
+            properties: {
+              fileUrl: { type: "string", description: "URL of the file to attach (required)" },
+              title: { type: "string", description: "Attachment title" },
+              mimeType: { type: "string", description: "MIME type (optional; ignored for Drive files)" }
+            },
+            required: ["fileUrl"]
+          }
+        }
       },
       required: ["summary", "start", "end"]
     }
@@ -298,6 +346,19 @@ export const toolDefinitions: ToolDefinition[] = [
           }
         },
         attendees: { type: "array", items: { type: "string" }, description: "Updated attendee emails (replaces existing)" },
+        attachments: {
+          type: "array",
+          description: "File attachments (max 25). Replaces existing attachments; omit to keep them. For Drive files use the file's share URL as fileUrl.",
+          items: {
+            type: "object",
+            properties: {
+              fileUrl: { type: "string", description: "URL of the file to attach (required)" },
+              title: { type: "string", description: "Attachment title" },
+              mimeType: { type: "string", description: "MIME type (optional; ignored for Drive files)" }
+            },
+            required: ["fileUrl"]
+          }
+        },
         sendUpdates: { type: "string", enum: ["all", "externalOnly", "none"], description: "Send notifications (default: none)" }
       },
       required: ["eventId"]
@@ -433,6 +494,10 @@ export async function handleTool(
         eventResource.recurrence = parsed.recurrence;
       }
 
+      if (parsed.attachments && parsed.attachments.length > 0) {
+        eventResource.attachments = parsed.attachments;
+      }
+
       let conferenceDataVersion = 0;
       if (parsed.conferenceType === 'hangoutsMeet') {
         eventResource.conferenceData = {
@@ -447,7 +512,9 @@ export async function handleTool(
       const insertParams: any = {
         calendarId: parsed.calendarId || 'primary',
         requestBody: eventResource,
-        sendUpdates: parsed.sendUpdates
+        sendUpdates: parsed.sendUpdates,
+        // Required by the Calendar API to persist `attachments`; harmless otherwise.
+        supportsAttachments: true
       };
 
       if (conferenceDataVersion > 0) {
@@ -483,7 +550,10 @@ export async function handleTool(
         calendarId: parsed.calendarId || 'primary',
         eventId: parsed.eventId,
         requestBody: eventResource,
-        sendUpdates: parsed.sendUpdates
+        sendUpdates: parsed.sendUpdates,
+        // Required so forwarded/overridden `attachments` are persisted rather
+        // than wiped; without it the API ignores attachment changes.
+        supportsAttachments: true
       });
 
       const updated = formatCalendarEvent(response.data);

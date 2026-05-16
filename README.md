@@ -972,6 +972,7 @@ When binding to `127.0.0.1` (default), DNS rebinding protection is automatically
 - **getCalendarEvent** - Get a single calendar event by ID
   - `eventId`: Event ID
   - `calendarId`: Calendar ID (optional, default: primary)
+  - Response includes the event's file `attachments` (title and URL) when present
 
 - **createCalendarEvent** - Create a new calendar event with Google Meet support
   - `summary`: Event title
@@ -985,6 +986,7 @@ When binding to `127.0.0.1` (default), DNS rebinding protection is automatically
   - `conferenceType`: `hangoutsMeet` to add Google Meet link (optional)
   - `recurrence`: Array of RRULE strings for recurring events (optional)
   - `visibility`: `default`, `public`, `private`, or `confidential` (optional)
+  - `attachments`: Array of `{ fileUrl, title?, mimeType? }` (optional, max 25; for Drive files use the file's share URL as `fileUrl`)
 
 - **updateCalendarEvent** - Update an existing calendar event
   - `eventId`: Event ID
@@ -992,6 +994,7 @@ When binding to `127.0.0.1` (default), DNS rebinding protection is automatically
   - `summary`, `description`, `location`: Updated fields (optional)
   - `start`, `end`: Updated times (optional)
   - `attendees`: Updated attendee emails, replaces existing (optional)
+  - `attachments`: Array of `{ fileUrl, title?, mimeType? }`, replaces existing (optional, max 25); omit to keep current attachments
   - `sendUpdates`: `all`, `externalOnly`, or `none` (optional, default: none)
 
 - **deleteCalendarEvent** - Delete a calendar event

@@ -162,18 +162,45 @@ async function executeBatchUpdate(ctx: ToolContext, documentId: string, requests
   }
 }
 
+// Resolve a specific tab's body content array. A narrow `fields` projection
+// that names only `body(...)` would exclude `tabs` from the response even with
+// includeTabsContent, so we omit `fields` here (same precedent as
+// updateGoogleDoc / readGoogleDoc). Returns the standard not-found error when
+// the tabId can't be resolved (consistent with updateGoogleDoc's tab path).
+async function getTabBodyContent(
+  ctx: ToolContext,
+  documentId: string,
+  tabId: string,
+): Promise<{ content?: any[]; error?: string }> {
+  const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+  const res = await docs.documents.get({ documentId, includeTabsContent: true });
+  const tabs = (res.data as any).tabs as any[] | undefined;
+  const tab = tabs ? findTabById(tabs, tabId) : null;
+  if (!tab) {
+    return { error: `Tab with ID "${tabId}" not found. Use listDocumentTabs to see available tabs.` };
+  }
+  return { content: tab.documentTab?.body?.content ?? [] };
+}
+
 // Find text in a document and return the range indices
-async function findTextRange(ctx: ToolContext, documentId: string, textToFind: string, instance: number = 1): Promise<{ startIndex: number; endIndex: number } | null> {
+async function findTextRange(ctx: ToolContext, documentId: string, textToFind: string, instance: number = 1, tabId?: string): Promise<{ startIndex: number; endIndex: number } | { error: string } | null> {
   const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
 
   try {
-    const res = await docs.documents.get({
-      documentId,
-      fields: 'body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,startIndex,endIndex))',
-    });
-
-    if (!res.data.body?.content) {
-      return null;
+    let content: any[];
+    if (tabId) {
+      const resolved = await getTabBodyContent(ctx, documentId, tabId);
+      if (resolved.error) return { error: resolved.error };
+      content = resolved.content!;
+    } else {
+      const res = await docs.documents.get({
+        documentId,
+        fields: 'body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,startIndex,endIndex))',
+      });
+      if (!res.data.body?.content) {
+        return null;
+      }
+      content = res.data.body.content;
     }
 
     // Collect all text segments with their positions
@@ -207,7 +234,7 @@ async function findTextRange(ctx: ToolContext, documentId: string, textToFind: s
       });
     };
 
-    collectTextFromContent(res.data.body.content);
+    collectTextFromContent(content);
     segments.sort((a, b) => a.start - b.start);
 
     // Find the specified instance
@@ -260,17 +287,24 @@ async function findTextRange(ctx: ToolContext, documentId: string, textToFind: s
 }
 
 // Get paragraph range containing a specific index
-async function getParagraphRange(ctx: ToolContext, documentId: string, indexWithin: number): Promise<{ startIndex: number; endIndex: number } | null> {
+async function getParagraphRange(ctx: ToolContext, documentId: string, indexWithin: number, tabId?: string): Promise<{ startIndex: number; endIndex: number } | { error: string } | null> {
   const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
 
   try {
-    const res = await docs.documents.get({
-      documentId,
-      fields: 'body(content(startIndex,endIndex,paragraph,table))',
-    });
-
-    if (!res.data.body?.content) {
-      return null;
+    let content: any[];
+    if (tabId) {
+      const resolved = await getTabBodyContent(ctx, documentId, tabId);
+      if (resolved.error) return { error: resolved.error };
+      content = resolved.content!;
+    } else {
+      const res = await docs.documents.get({
+        documentId,
+        fields: 'body(content(startIndex,endIndex,paragraph,table))',
+      });
+      if (!res.data.body?.content) {
+        return null;
+      }
+      content = res.data.body.content;
     }
 
     const findParagraphInContent = (content: any[]): { startIndex: number; endIndex: number } | null => {
@@ -300,7 +334,7 @@ async function getParagraphRange(ctx: ToolContext, documentId: string, indexWith
       return null;
     };
 
-    return findParagraphInContent(res.data.body.content);
+    return findParagraphInContent(content);
   } catch (error: any) {
     ctx.log('Error getting paragraph range:', error.message);
     throw new Error(`Failed to find paragraph: ${error.message}`);
@@ -321,7 +355,8 @@ function buildUpdateTextStyleRequest(
     foregroundColor?: string;
     backgroundColor?: string;
     linkUrl?: string;
-  }
+  },
+  tabId?: string
 ): { request: any; fields: string[] } | null {
   const textStyle: any = {};
   const fieldsToUpdate: string[] = [];
@@ -354,10 +389,13 @@ function buildUpdateTextStyleRequest(
 
   if (fieldsToUpdate.length === 0) return null;
 
+  const range: { startIndex: number; endIndex: number; tabId?: string } = { startIndex, endIndex };
+  if (tabId) range.tabId = tabId;
+
   return {
     request: {
       updateTextStyle: {
-        range: { startIndex, endIndex },
+        range,
         textStyle,
         fields: fieldsToUpdate.join(','),
       }
@@ -378,7 +416,8 @@ function buildUpdateParagraphStyleRequest(
     spaceBelow?: number;
     namedStyleType?: string;
     keepWithNext?: boolean;
-  }
+  },
+  tabId?: string
 ): { request: any; fields: string[] } | null {
   const paragraphStyle: any = {};
   const fieldsToUpdate: string[] = [];
@@ -393,10 +432,13 @@ function buildUpdateParagraphStyleRequest(
 
   if (fieldsToUpdate.length === 0) return null;
 
+  const range: { startIndex: number; endIndex: number; tabId?: string } = { startIndex, endIndex };
+  if (tabId) range.tabId = tabId;
+
   return {
     request: {
       updateParagraphStyle: {
-        range: { startIndex, endIndex },
+        range,
         paragraphStyle,
         fields: fieldsToUpdate.join(','),
       }
@@ -1121,7 +1163,8 @@ const ApplyTextStyleSchema = z.object({
   fontFamily: z.string().optional(),
   foregroundColor: z.string().optional(),
   backgroundColor: z.string().optional(),
-  linkUrl: z.string().url().optional()
+  linkUrl: z.string().url().optional(),
+  tabId: z.string().optional()
 });
 
 const ApplyParagraphStyleSchema = z.object({
@@ -1137,7 +1180,8 @@ const ApplyParagraphStyleSchema = z.object({
   spaceAbove: z.number().min(0).optional(),
   spaceBelow: z.number().min(0).optional(),
   namedStyleType: z.enum(['NORMAL_TEXT', 'TITLE', 'SUBTITLE', 'HEADING_1', 'HEADING_2', 'HEADING_3', 'HEADING_4', 'HEADING_5', 'HEADING_6']).optional(),
-  keepWithNext: z.boolean().optional()
+  keepWithNext: z.boolean().optional(),
+  tabId: z.string().optional()
 });
 
 const CreateParagraphBulletsSchema = z.object({
@@ -1161,7 +1205,8 @@ const CreateParagraphBulletsSchema = z.object({
     'NUMBERED_UPPERROMAN_UPPERALPHA_DECIMAL',
     'NUMBERED_ZERODECIMAL_ALPHA_ROMAN',
     'NONE'
-  ]).default('BULLET_DISC_CIRCLE_SQUARE')
+  ]).default('BULLET_DISC_CIRCLE_SQUARE'),
+  tabId: z.string().optional()
 });
 
 const ListCommentsSchema = z.object({
@@ -1199,7 +1244,8 @@ const InsertTableSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
   rows: z.number().int().min(1, "Must have at least 1 row"),
   columns: z.number().int().min(1, "Must have at least 1 column"),
-  index: z.number().int().min(1, "Index must be at least 1 (1-based)")
+  index: z.number().int().min(1, "Index must be at least 1 (1-based)"),
+  tabId: z.string().optional()
 });
 
 const EditTableCellSchema = z.object({
@@ -1211,7 +1257,8 @@ const EditTableCellSchema = z.object({
   bold: z.boolean().optional(),
   italic: z.boolean().optional(),
   fontSize: z.number().optional(),
-  alignment: z.enum(["START", "CENTER", "END", "JUSTIFIED"]).optional()
+  alignment: z.enum(["START", "CENTER", "END", "JUSTIFIED"]).optional(),
+  tabId: z.string().optional()
 });
 
 const InsertImageFromUrlSchema = z.object({
@@ -1267,6 +1314,7 @@ const InsertSmartChipSchema = z.object({
   index: z.number().int().min(1, "Index must be at least 1"),
   chipType: z.enum(["person"]),
   personEmail: z.string().email("Valid email is required for person chip"),
+  tabId: z.string().optional(),
 });
 
 const ReadSmartChipsSchema = z.object({
@@ -1278,6 +1326,7 @@ const CreateFootnoteSchema = z.object({
   index: z.number().int().min(1, "Index must be at least 1").optional(),
   endOfSegment: z.boolean().optional(),
   content: z.string().optional(),
+  tabId: z.string().optional(),
 }).refine(data => data.index !== undefined || data.endOfSegment === true, {
   message: "Either 'index' or 'endOfSegment: true' must be provided",
 });
@@ -1414,7 +1463,8 @@ export const toolDefinitions: ToolDefinition[] = [
         fontFamily: { type: "string", description: "Font family name" },
         foregroundColor: { type: "string", description: "Hex color (e.g., #FF0000)" },
         backgroundColor: { type: "string", description: "Hex background color" },
-        linkUrl: { type: "string", description: "URL for hyperlink" }
+        linkUrl: { type: "string", description: "URL for hyperlink" },
+        tabId: { type: "string", description: "Optional. Tab ID to format within (from listDocumentTabs). If omitted, operates on the first/default tab." }
       },
       required: ["documentId"]
     }
@@ -1437,7 +1487,8 @@ export const toolDefinitions: ToolDefinition[] = [
         spaceAbove: { type: "number", description: "Space above in points" },
         spaceBelow: { type: "number", description: "Space below in points" },
         namedStyleType: { type: "string", enum: ["NORMAL_TEXT", "TITLE", "SUBTITLE", "HEADING_1", "HEADING_2", "HEADING_3", "HEADING_4", "HEADING_5", "HEADING_6"], description: "Named paragraph style" },
-        keepWithNext: { type: "boolean", description: "Keep with next paragraph" }
+        keepWithNext: { type: "boolean", description: "Keep with next paragraph" },
+        tabId: { type: "string", description: "Optional. Tab ID to format within (from listDocumentTabs). If omitted, operates on the first/default tab." }
       },
       required: ["documentId"]
     }
@@ -1461,7 +1512,8 @@ export const toolDefinitions: ToolDefinition[] = [
         fontFamily: { type: "string", description: "Font family name" },
         foregroundColor: { type: "string", description: "Hex color (e.g., #FF0000)" },
         backgroundColor: { type: "string", description: "Hex background color" },
-        linkUrl: { type: "string", description: "URL for hyperlink" }
+        linkUrl: { type: "string", description: "URL for hyperlink" },
+        tabId: { type: "string", description: "Optional. Tab ID to format within (from listDocumentTabs). If omitted, operates on the first/default tab." }
       },
       required: ["documentId"]
     }
@@ -1484,7 +1536,8 @@ export const toolDefinitions: ToolDefinition[] = [
         spaceAbove: { type: "number", description: "Space above in points" },
         spaceBelow: { type: "number", description: "Space below in points" },
         namedStyleType: { type: "string", enum: ["NORMAL_TEXT", "TITLE", "SUBTITLE", "HEADING_1", "HEADING_2", "HEADING_3", "HEADING_4", "HEADING_5", "HEADING_6"], description: "Named paragraph style" },
-        keepWithNext: { type: "boolean", description: "Keep with next paragraph" }
+        keepWithNext: { type: "boolean", description: "Keep with next paragraph" },
+        tabId: { type: "string", description: "Optional. Tab ID to format within (from listDocumentTabs). If omitted, operates on the first/default tab." }
       },
       required: ["documentId"]
     }
@@ -1500,7 +1553,8 @@ export const toolDefinitions: ToolDefinition[] = [
         endIndex: { type: "number", description: "End index (exclusive) - use with startIndex" },
         textToFind: { type: "string", description: "Text within the target paragraph(s) to bulletize" },
         matchInstance: { type: "number", description: "Which instance of textToFind (default: 1)" },
-        bulletPreset: { type: "string", enum: ["BULLET_DISC_CIRCLE_SQUARE", "BULLET_DIAMONDX_ARROW3D_SQUARE", "BULLET_CHECKBOX", "BULLET_ARROW_DIAMOND_DISC", "BULLET_STAR_CIRCLE_SQUARE", "BULLET_ARROW3D_CIRCLE_SQUARE", "BULLET_LEFTTRIANGLE_DIAMOND_DISC", "NUMBERED_DECIMAL_ALPHA_ROMAN", "NUMBERED_DECIMAL_ALPHA_ROMAN_PARENS", "NUMBERED_DECIMAL_NESTED", "NUMBERED_UPPERALPHA_ALPHA_ROMAN", "NUMBERED_UPPERROMAN_UPPERALPHA_DECIMAL", "NUMBERED_ZERODECIMAL_ALPHA_ROMAN", "NONE"], description: "Bullet style preset. Use NONE to remove bullets. Default: BULLET_DISC_CIRCLE_SQUARE" }
+        bulletPreset: { type: "string", enum: ["BULLET_DISC_CIRCLE_SQUARE", "BULLET_DIAMONDX_ARROW3D_SQUARE", "BULLET_CHECKBOX", "BULLET_ARROW_DIAMOND_DISC", "BULLET_STAR_CIRCLE_SQUARE", "BULLET_ARROW3D_CIRCLE_SQUARE", "BULLET_LEFTTRIANGLE_DIAMOND_DISC", "NUMBERED_DECIMAL_ALPHA_ROMAN", "NUMBERED_DECIMAL_ALPHA_ROMAN_PARENS", "NUMBERED_DECIMAL_NESTED", "NUMBERED_UPPERALPHA_ALPHA_ROMAN", "NUMBERED_UPPERROMAN_UPPERALPHA_DECIMAL", "NUMBERED_ZERODECIMAL_ALPHA_ROMAN", "NONE"], description: "Bullet style preset. Use NONE to remove bullets. Default: BULLET_DISC_CIRCLE_SQUARE" },
+        tabId: { type: "string", description: "Optional. Tab ID to operate within (from listDocumentTabs). If omitted, operates on the first/default tab." }
       },
       required: ["documentId"]
     }
@@ -1615,21 +1669,22 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "insertTable",
-    description: "Insert a new table with the specified dimensions at a given index",
+    description: "Insert a new table with the specified dimensions at a given index. For multi-tab docs, specify tabId to target a specific tab.",
     inputSchema: {
       type: "object",
       properties: {
         documentId: { type: "string", description: "The document ID" },
         rows: { type: "number", description: "Number of rows for the new table" },
         columns: { type: "number", description: "Number of columns for the new table" },
-        index: { type: "number", description: "The index (1-based) where the table should be inserted" }
+        index: { type: "number", description: "The index (1-based) where the table should be inserted" },
+        tabId: { type: "string", description: "Optional. Tab ID to insert the table into (from listDocumentTabs). If omitted, inserts into the first/default tab." }
       },
       required: ["documentId", "rows", "columns", "index"]
     }
   },
   {
     name: "editTableCell",
-    description: "Edit the content and/or style of a specific table cell. Requires knowing the table start index.",
+    description: "Edit the content and/or style of a specific table cell. Requires knowing the table start index. For multi-tab docs, specify tabId to target a table in a specific tab.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1641,7 +1696,8 @@ export const toolDefinitions: ToolDefinition[] = [
         bold: { type: "boolean", description: "Make text bold" },
         italic: { type: "boolean", description: "Make text italic" },
         fontSize: { type: "number", description: "Font size in points" },
-        alignment: { type: "string", enum: ["START", "CENTER", "END", "JUSTIFIED"], description: "Text alignment" }
+        alignment: { type: "string", enum: ["START", "CENTER", "END", "JUSTIFIED"], description: "Text alignment" },
+        tabId: { type: "string", description: "Optional. Tab ID containing the table (from listDocumentTabs). If omitted, operates on the first/default tab." }
       },
       required: ["documentId", "tableStartIndex", "rowIndex", "columnIndex"]
     }
@@ -1736,7 +1792,8 @@ export const toolDefinitions: ToolDefinition[] = [
         documentId: { type: "string", description: "Document ID" },
         index: { type: "number", description: "Insertion index (1-based)" },
         chipType: { type: "string", enum: ["person"], description: "Smart chip type (only 'person' is supported)" },
-        personEmail: { type: "string", description: "Email address for the person mention" }
+        personEmail: { type: "string", description: "Email address for the person mention" },
+        tabId: { type: "string", description: "Optional. Tab ID to insert into (from listDocumentTabs). If omitted, inserts into the first/default tab." }
       },
       required: ["documentId", "index", "chipType", "personEmail"]
     }
@@ -1754,7 +1811,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "createFootnote",
-    description: "Create a footnote in a Google Doc. Footnotes cannot be inserted inside equations, headers, footers, or other footnotes.",
+    description: "Create a footnote in a Google Doc. Footnotes cannot be inserted inside equations, headers, footers, or other footnotes. For multi-tab docs, specify tabId to target a specific tab.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1762,6 +1819,7 @@ export const toolDefinitions: ToolDefinition[] = [
         index: { type: "number", description: "1-based character index where the footnote reference should be inserted" },
         endOfSegment: { type: "boolean", description: "If true, insert footnote at the end of the document body (use instead of index)" },
         content: { type: "string", description: "Optional text content for the footnote body" },
+        tabId: { type: "string", description: "Optional. Tab ID to insert the footnote into (from listDocumentTabs). If omitted, inserts into the first/default tab." },
       },
       required: ["documentId"]
     }
@@ -2362,8 +2420,12 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           ctx,
           a.documentId,
           a.textToFind,
-          a.matchInstance || 1
+          a.matchInstance || 1,
+          a.tabId
         );
+        if (range && 'error' in range) {
+          return errorResponse(range.error);
+        }
         if (!range) {
           return errorResponse(`Text "${a.textToFind}" not found in document`);
         }
@@ -2387,7 +2449,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       };
 
       // Build the update request
-      const styleResult = buildUpdateTextStyleRequest(startIndex, endIndex, style);
+      const styleResult = buildUpdateTextStyleRequest(startIndex, endIndex, style, a.tabId);
       if (!styleResult) {
         return errorResponse("No valid style options provided");
       }
@@ -2401,7 +2463,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       });
 
       return {
-        content: [{ type: "text", text: `Successfully applied text style to range ${startIndex}-${endIndex}` }],
+        content: [{ type: "text", text: `Successfully applied text style to range ${startIndex}-${endIndex}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
         isError: false
       };
     }
@@ -2426,20 +2488,30 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           ctx,
           a.documentId,
           a.textToFind,
-          a.matchInstance || 1
+          a.matchInstance || 1,
+          a.tabId
         );
+        if (range && 'error' in range) {
+          return errorResponse(range.error);
+        }
         if (!range) {
           return errorResponse(`Text "${a.textToFind}" not found in document`);
         }
         // For paragraph style, get the full paragraph range
-        const paraRange = await getParagraphRange(ctx, a.documentId, range.startIndex);
+        const paraRange = await getParagraphRange(ctx, a.documentId, range.startIndex, a.tabId);
+        if (paraRange && 'error' in paraRange) {
+          return errorResponse(paraRange.error);
+        }
         if (!paraRange) {
           return errorResponse("Could not determine paragraph boundaries");
         }
         startIndex = paraRange.startIndex;
         endIndex = paraRange.endIndex;
       } else if (a.indexWithinParagraph !== undefined) {
-        const paraRange = await getParagraphRange(ctx, a.documentId, a.indexWithinParagraph);
+        const paraRange = await getParagraphRange(ctx, a.documentId, a.indexWithinParagraph, a.tabId);
+        if (paraRange && 'error' in paraRange) {
+          return errorResponse(paraRange.error);
+        }
         if (!paraRange) {
           return errorResponse("Could not determine paragraph boundaries");
         }
@@ -2461,7 +2533,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       };
 
       // Build the update request
-      const styleResult = buildUpdateParagraphStyleRequest(startIndex, endIndex, style);
+      const styleResult = buildUpdateParagraphStyleRequest(startIndex, endIndex, style, a.tabId);
       if (!styleResult) {
         return errorResponse("No valid style options provided");
       }
@@ -2475,7 +2547,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       });
 
       return {
-        content: [{ type: "text", text: `Successfully applied paragraph style to range ${startIndex}-${endIndex}` }],
+        content: [{ type: "text", text: `Successfully applied paragraph style to range ${startIndex}-${endIndex}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
         isError: false
       };
     }
@@ -2499,8 +2571,12 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           ctx,
           a.documentId,
           a.textToFind,
-          a.matchInstance || 1
+          a.matchInstance || 1,
+          a.tabId
         );
+        if (range && 'error' in range) {
+          return errorResponse(range.error);
+        }
         if (!range) {
           return errorResponse(`Text "${a.textToFind}" not found in document`);
         }
@@ -2510,6 +2586,9 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         return errorResponse("Must provide either startIndex+endIndex or textToFind");
       }
 
+      const range: { startIndex: number; endIndex: number; tabId?: string } = { startIndex, endIndex };
+      if (a.tabId) range.tabId = a.tabId;
+
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
 
       if (a.bulletPreset === 'NONE') {
@@ -2517,14 +2596,12 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           documentId: a.documentId,
           requestBody: {
             requests: [{
-              deleteParagraphBullets: {
-                range: { startIndex, endIndex }
-              }
+              deleteParagraphBullets: { range }
             }]
           }
         });
         return {
-          content: [{ type: "text", text: `Removed bullets from range ${startIndex}-${endIndex}` }],
+          content: [{ type: "text", text: `Removed bullets from range ${startIndex}-${endIndex}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
           isError: false
         };
       }
@@ -2534,7 +2611,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         requestBody: {
           requests: [{
             createParagraphBullets: {
-              range: { startIndex, endIndex },
+              range,
               bulletPreset: a.bulletPreset
             }
           }]
@@ -2542,7 +2619,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       });
 
       return {
-        content: [{ type: "text", text: `Applied ${a.bulletPreset} bullets to range ${startIndex}-${endIndex}` }],
+        content: [{ type: "text", text: `Applied ${a.bulletPreset} bullets to range ${startIndex}-${endIndex}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
         isError: false
       };
     }
@@ -2947,9 +3024,12 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
       const a = validation.data;
 
+      const location: { index: number; tabId?: string } = { index: a.index };
+      if (a.tabId) location.tabId = a.tabId;
+
       const request_body = {
         insertTable: {
-          location: { index: a.index },
+          location,
           rows: a.rows,
           columns: a.columns
         }
@@ -2958,7 +3038,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       await executeBatchUpdate(ctx, a.documentId, [request_body]);
 
       return {
-        content: [{ type: "text", text: `Successfully inserted ${a.rows}x${a.columns} table at index ${a.index}` }],
+        content: [{ type: "text", text: `Successfully inserted ${a.rows}x${a.columns} table at index ${a.index}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
         isError: false
       };
     }
@@ -2970,13 +3050,25 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
       const a = validation.data;
 
-      // Get the document to find the table structure
+      // Get the document to find the table structure. For a tab-scoped edit we
+      // must read that tab's body content (the default narrow fetch is
+      // structurally tab-blind); otherwise keep the cheap default-body fetch.
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
 
-      const docRes = await docs.documents.get({
-        documentId: a.documentId,
-        fields: 'body(content)'
-      });
+      let docContent: any[] | undefined;
+      if (a.tabId) {
+        const resolved = await getTabBodyContent(ctx, a.documentId, a.tabId);
+        if (resolved.error) {
+          return errorResponse(resolved.error);
+        }
+        docContent = resolved.content;
+      } else {
+        const docRes = await docs.documents.get({
+          documentId: a.documentId,
+          fields: 'body(content)'
+        });
+        docContent = docRes.data.body?.content ?? undefined;
+      }
 
       // Find the table at the specified start index
       let table: any = null;
@@ -2989,13 +3081,17 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         }
       };
 
-      if (docRes.data.body?.content) {
-        findTable(docRes.data.body.content);
+      if (docContent) {
+        findTable(docContent);
       }
 
       if (!table) {
         return errorResponse(`No table found at index ${a.tableStartIndex}`);
       }
+
+      // Thread tabId into every range/location for a tab-scoped edit.
+      const withTab = <T extends object>(r: T): T & { tabId?: string } =>
+        a.tabId ? { ...r, tabId: a.tabId } : r;
 
       // Get the cell
       const row = table.tableRows?.[a.rowIndex];
@@ -3023,7 +3119,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         if (cellContentEnd > cellContentStart) {
           requests.push({
             deleteContentRange: {
-              range: { startIndex: cellContentStart, endIndex: cellContentEnd }
+              range: withTab({ startIndex: cellContentStart, endIndex: cellContentEnd })
             }
           });
         }
@@ -3032,7 +3128,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         if (a.textContent.length > 0) {
           requests.push({
             insertText: {
-              location: { index: cellContentStart },
+              location: withTab({ index: cellContentStart }),
               text: a.textContent
             }
           });
@@ -3057,7 +3153,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
 
           requests.push({
             updateTextStyle: {
-              range: { startIndex: styleStart, endIndex: styleEnd },
+              range: withTab({ startIndex: styleStart, endIndex: styleEnd }),
               textStyle,
               fields: fields.join(',')
             }
@@ -3069,7 +3165,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       if (a.alignment !== undefined) {
         requests.push({
           updateParagraphStyle: {
-            range: { startIndex: cellStartIndex + 1, endIndex: cellEndIndex - 1 },
+            range: withTab({ startIndex: cellStartIndex + 1, endIndex: cellEndIndex - 1 }),
             paragraphStyle: { alignment: a.alignment },
             fields: 'alignment'
           }
@@ -3083,7 +3179,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       await executeBatchUpdate(ctx, a.documentId, requests);
 
       return {
-        content: [{ type: "text", text: `Successfully edited cell at row ${a.rowIndex}, column ${a.columnIndex}` }],
+        content: [{ type: "text", text: `Successfully edited cell at row ${a.rowIndex}, column ${a.columnIndex}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
         isError: false
       };
     }
@@ -3270,6 +3366,9 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       if (!validation.success) return errorResponse(validation.error.errors[0].message);
       const a = validation.data;
 
+      const location: { index: number; tabId?: string } = { index: a.index };
+      if (a.tabId) location.tabId = a.tabId;
+
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
       await docs.documents.batchUpdate({
         documentId: a.documentId,
@@ -3277,14 +3376,14 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           requests: [{
             insertPerson: {
               personProperties: { email: a.personEmail },
-              location: { index: a.index },
+              location,
             },
           // insertPerson is not yet in the googleapis TypeScript types — cast required
           } as any],
         },
       });
 
-      return { content: [{ type: 'text', text: `Inserted person smart chip for ${a.personEmail} at index ${a.index}.` }], isError: false };
+      return { content: [{ type: 'text', text: `Inserted person smart chip for ${a.personEmail} at index ${a.index}${a.tabId ? ` in tab ${a.tabId}` : ''}.` }], isError: false };
     }
 
     case "readSmartChips": {
@@ -3314,11 +3413,14 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
 
       // Build the createFootnote request
-      const createFootnoteReq: { location?: { index: number }; endOfSegmentLocation?: { segmentId: string } } = {};
+      const createFootnoteReq: {
+        location?: { index: number; tabId?: string };
+        endOfSegmentLocation?: { segmentId: string; tabId?: string };
+      } = {};
       if (a.index !== undefined) {
-        createFootnoteReq.location = { index: a.index };
+        createFootnoteReq.location = { index: a.index, ...(a.tabId ? { tabId: a.tabId } : {}) };
       } else {
-        createFootnoteReq.endOfSegmentLocation = { segmentId: "" };
+        createFootnoteReq.endOfSegmentLocation = { segmentId: "", ...(a.tabId ? { tabId: a.tabId } : {}) };
       }
 
       const res = await docs.documents.batchUpdate({
@@ -3333,7 +3435,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         return errorResponse("Failed to create footnote — no footnoteId in response.");
       }
 
-      const locationDesc = a.index !== undefined ? `at index ${a.index}` : 'at end of document';
+      const locationDesc = `${a.index !== undefined ? `at index ${a.index}` : 'at end of document'}${a.tabId ? ` in tab ${a.tabId}` : ''}`;
 
       // Optionally insert text content into the footnote body
       if (a.content) {
@@ -3343,7 +3445,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
             requestBody: {
               requests: [{
                 insertText: {
-                  location: { segmentId: footnoteId, index: 0 },
+                  location: { segmentId: footnoteId, index: 0, ...(a.tabId ? { tabId: a.tabId } : {}) },
                   text: a.content,
                 },
               }],

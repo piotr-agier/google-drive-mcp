@@ -8,6 +8,7 @@ const cfg = (o: Partial<RuntimeConfig> = {}): RuntimeConfig => ({
   apiTimeout: 0,
   retryMax: 0,
   retryBaseDelay: 0,
+  disableResources: false,
   ...o,
 });
 

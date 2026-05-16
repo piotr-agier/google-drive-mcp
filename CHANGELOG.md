@@ -15,7 +15,7 @@ All notable changes to this project will be documented in this file.
 
 ### Performance Improvements
 
-- **docs:** `applyParagraphStyle` with `textToFind` + `tabId` now resolves the matched range and its enclosing paragraph from a single `documents.get`, instead of two full unmasked `includeTabsContent` fetches of the same document. The non-tab path is unchanged ([#114](https://github.com/piotr-agier/google-drive-mcp/issues/114))
+- **docs:** `applyParagraphStyle` with `textToFind` + `tabId` now resolves the matched range and its enclosing paragraph from a single `documents.get`, instead of two full unmasked `includeTabsContent` fetches of the same document. The non-tab path is unchanged ([#114](https://github.com/piotr-agier/google-drive-mcp/issues/114), [#127](https://github.com/piotr-agier/google-drive-mcp/pull/127))
 
 ## [2.2.0](https://github.com/piotr-agier/google-drive-mcp/compare/v2.1.0...v2.2.0) (2026-04-20)
 

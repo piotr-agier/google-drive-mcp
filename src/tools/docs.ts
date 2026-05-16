@@ -189,13 +189,18 @@ function withTab<T extends object>(target: T, tabId?: string): T & { tabId?: str
   return tabId ? { ...target, tabId } : target;
 }
 
-// Find text in a document and return the range indices
-async function findTextRange(ctx: ToolContext, documentId: string, textToFind: string, instance: number = 1, tabId?: string): Promise<{ startIndex: number; endIndex: number } | { error: string } | null> {
+// Find text in a document and return the range indices.
+// Pass `preResolvedContent` to reuse an already-fetched body content array
+// (e.g. a tab body resolved once by the caller) and skip the internal GET —
+// see applyParagraphStyle's tab-scoped textToFind path (#114 follow-up).
+async function findTextRange(ctx: ToolContext, documentId: string, textToFind: string, instance: number = 1, tabId?: string, preResolvedContent?: any[]): Promise<{ startIndex: number; endIndex: number } | { error: string } | null> {
   const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
 
   try {
     let content: any[];
-    if (tabId) {
+    if (preResolvedContent !== undefined) {
+      content = preResolvedContent;
+    } else if (tabId) {
       const resolved = await getTabBodyContent(ctx, documentId, tabId);
       if (resolved.error) return { error: resolved.error };
       content = resolved.content!;
@@ -293,13 +298,17 @@ async function findTextRange(ctx: ToolContext, documentId: string, textToFind: s
   }
 }
 
-// Get paragraph range containing a specific index
-async function getParagraphRange(ctx: ToolContext, documentId: string, indexWithin: number, tabId?: string): Promise<{ startIndex: number; endIndex: number } | { error: string } | null> {
+// Get paragraph range containing a specific index.
+// `preResolvedContent` works as in findTextRange: supply an already-fetched
+// body content array to skip the internal GET (#114 follow-up).
+async function getParagraphRange(ctx: ToolContext, documentId: string, indexWithin: number, tabId?: string, preResolvedContent?: any[]): Promise<{ startIndex: number; endIndex: number } | { error: string } | null> {
   const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
 
   try {
     let content: any[];
-    if (tabId) {
+    if (preResolvedContent !== undefined) {
+      content = preResolvedContent;
+    } else if (tabId) {
       const resolved = await getTabBodyContent(ctx, documentId, tabId);
       if (resolved.error) return { error: resolved.error };
       content = resolved.content!;
@@ -2485,12 +2494,27 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         startIndex = a.startIndex;
         endIndex = a.endIndex;
       } else if (a.textToFind !== undefined) {
+        // Tab-scoped resolution needs an unmasked includeTabsContent fetch;
+        // resolve it once here and reuse it for both the text match and the
+        // enclosing-paragraph lookup instead of letting each helper fetch the
+        // whole document independently (#114 follow-up). The non-tab path
+        // keeps its two cheap narrow-field GETs unchanged.
+        let tabContent: any[] | undefined;
+        if (a.tabId) {
+          const resolved = await getTabBodyContent(ctx, a.documentId, a.tabId);
+          if (resolved.error) {
+            return errorResponse(resolved.error);
+          }
+          tabContent = resolved.content;
+        }
+
         const range = await findTextRange(
           ctx,
           a.documentId,
           a.textToFind,
           a.matchInstance || 1,
-          a.tabId
+          a.tabId,
+          tabContent
         );
         if (range && 'error' in range) {
           return errorResponse(range.error);
@@ -2499,7 +2523,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           return errorResponse(`Text "${a.textToFind}" not found in document`);
         }
         // For paragraph style, get the full paragraph range
-        const paraRange = await getParagraphRange(ctx, a.documentId, range.startIndex, a.tabId);
+        const paraRange = await getParagraphRange(ctx, a.documentId, range.startIndex, a.tabId, tabContent);
         if (paraRange && 'error' in paraRange) {
           return errorResponse(paraRange.error);
         }

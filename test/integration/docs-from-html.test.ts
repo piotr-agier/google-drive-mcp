@@ -78,4 +78,44 @@ describe('createDocFromHTML', () => {
     const res = await callTool(ctx.client, 'createDocFromHTML', { html: '<p>Hello</p>' });
     assert.equal(res.isError, true);
   });
+
+  it('resolves parentFolderId and scopes the duplicate check to it', async () => {
+    // checkFileExists builds: `name = '...' and '<folderId>' in parents and trashed = false`.
+    // Return empty only when the query targets folder-abc; a name collision in
+    // any *other* folder returns a hit — it must NOT trip the duplicate guard.
+    ctx.mocks.drive.service.files.list._setImpl(async (params: any) => {
+      if (typeof params.q === 'string' && params.q.includes("'folder-abc' in parents")) {
+        return { data: { files: [] } };
+      }
+      return {
+        data: {
+          files: [{ id: 'collision-elsewhere', name: 'Foldered Doc', mimeType: 'application/vnd.google-apps.document' }],
+        },
+      };
+    });
+    ctx.mocks.drive.service.files.create._setImpl(async () => ({
+      data: { id: 'html-doc-2', name: 'Foldered Doc', webViewLink: 'https://docs.google.com/html-doc-2' },
+    }));
+
+    const res = await callTool(ctx.client, 'createDocFromHTML', {
+      html: '<p>x</p>',
+      name: 'Foldered Doc',
+      parentFolderId: 'folder-abc',
+    });
+
+    // Collision in a different folder did not block creation.
+    assert.equal(res.isError, false);
+    assert.ok(res.content[0].text.includes('html-doc-2'));
+
+    // parentFolderId resolved (plain ID passthrough) and flowed into files.create.
+    const createArg = ctx.mocks.drive.tracker.getCalls('files.create').at(-1)!.args[0];
+    assert.deepEqual(createArg.requestBody.parents, ['folder-abc']);
+
+    // The duplicate-check files.list query was scoped to the resolved folder.
+    const listArg = ctx.mocks.drive.tracker.getCalls('files.list').at(-1)!.args[0];
+    assert.ok(
+      listArg.q.includes("'folder-abc' in parents"),
+      `files.list query not scoped to folder-abc: ${listArg.q}`,
+    );
+  });
 });

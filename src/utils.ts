@@ -13,6 +13,7 @@ export interface CalendarEventOverrides {
   start?: any;
   end?: any;
   attendees?: string[];
+  attachments?: { fileUrl: string; title?: string; mimeType?: string }[];
   [key: string]: any;
 }
 
@@ -24,6 +25,10 @@ export interface CalendarEventOverrides {
  * - User overrides win when explicitly provided (even if empty string / empty array)
  * - Existing values are preserved when the override is `undefined`
  * - Attendees are mapped from `string[]` → `{email}[]`
+ * - Attachments are preserved as-is when not overridden; passing them through
+ *   (with the read-only fileId/iconLink the API returned) is required so an
+ *   update doesn't wipe an event's existing attachments. Caller must set
+ *   `supportsAttachments: true` on the update request for this to take effect.
  * - Only mutable fields are included; read-only fields (id, kind, etag, htmlLink,
  *   iCalUID, creator, organizer, sequence, …) are never forwarded
  */
@@ -37,6 +42,9 @@ export function buildCalendarEventUpdate(existing: any, overrides: CalendarEvent
     attendees:   overrides.attendees !== undefined
       ? overrides.attendees.map((email: string) => ({ email }))
       : existing.attendees,
+    attachments: overrides.attachments !== undefined
+      ? overrides.attachments
+      : existing.attachments,
     recurrence:  existing.recurrence,
     visibility:  existing.visibility,
     reminders:   existing.reminders,

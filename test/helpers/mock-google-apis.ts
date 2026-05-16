@@ -209,6 +209,15 @@ export function createCalendarMock() {
       start: { dateTime: '2025-01-01T10:00:00Z' },
       end: { dateTime: '2025-01-01T11:00:00Z' },
       status: 'confirmed',
+      attachments: [
+        {
+          fileUrl: 'https://drive.google.com/file/d/file-1/view',
+          title: 'Agenda.pdf',
+          mimeType: 'application/pdf',
+          fileId: 'file-1',
+          iconLink: 'https://drive.google.com/icon.png',
+        },
+      ],
     }),
     insert: stub(tracker, 'events.insert', {
       id: 'event-new',

@@ -266,3 +266,23 @@ test('buildCalendarEventUpdate preserves recurrence from existing', () => {
   const result = buildCalendarEventUpdate(EXISTING_EVENT, { summary: 'Changed' });
   assert.deepEqual(result.recurrence, ['RRULE:FREQ=WEEKLY']);
 });
+
+test('buildCalendarEventUpdate preserves existing attachments when not overridden', () => {
+  const withAttachments = {
+    ...EXISTING_EVENT,
+    attachments: [{ fileUrl: 'https://drive.google.com/f/1', title: 'A', fileId: '1' }],
+  };
+  const result = buildCalendarEventUpdate(withAttachments, { summary: 'Changed' });
+  assert.deepEqual(result.attachments, withAttachments.attachments);
+});
+
+test('buildCalendarEventUpdate replaces attachments when overridden', () => {
+  const withAttachments = {
+    ...EXISTING_EVENT,
+    attachments: [{ fileUrl: 'https://drive.google.com/f/1', title: 'A' }],
+  };
+  const result = buildCalendarEventUpdate(withAttachments, {
+    attachments: [{ fileUrl: 'https://drive.google.com/f/2', title: 'B' }],
+  });
+  assert.deepEqual(result.attachments, [{ fileUrl: 'https://drive.google.com/f/2', title: 'B' }]);
+});

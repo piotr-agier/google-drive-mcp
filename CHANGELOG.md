@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- **calendar:** surface event `attachments` in `getCalendarEvent`/`getCalendarEvents` responses, and accept an `attachments` array (max 25) in `createCalendarEvent`/`updateCalendarEvent` (sets the `supportsAttachments` API flag). `updateCalendarEvent` now also preserves an event's existing attachments instead of silently dropping them when `attachments` is not supplied ([#110](https://github.com/piotr-agier/google-drive-mcp/issues/110))
 - **auth:** support Workspace domain-wide delegation via `GOOGLE_DRIVE_MCP_SUBJECT`; `GOOGLE_DRIVE_MCP_SCOPES` is now honored in service-account mode ([#107](https://github.com/piotr-agier/google-drive-mcp/pull/107))
 
 ### Bug Fixes

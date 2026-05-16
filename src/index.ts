@@ -213,6 +213,11 @@ function buildToolContext(): ToolContext {
 // -----------------------------------------------------------------------------
 
 function createMcpServer(): Server {
+  const resourcesEnabled = !runtimeConfig.disableResources;
+  if (!resourcesEnabled) {
+    log('Resources capability disabled via GOOGLE_DRIVE_MCP_DISABLE_RESOURCES');
+  }
+
   const s = new Server(
     {
       name: "google-drive-mcp",
@@ -220,16 +225,51 @@ function createMcpServer(): Server {
     },
     {
       capabilities: {
-        resources: {},
+        ...(resourcesEnabled ? { resources: {} } : {}),
         tools: {},
       },
     },
   );
 
+  if (resourcesEnabled) {
+    registerResourceHandlers(s);
+  }
+
+  s.setRequestHandler(ListToolsRequestSchema, async () => {
+    return {
+      tools: domainModules.flatMap(m => m.toolDefinitions),
+    };
+  });
+
+  s.setRequestHandler(CallToolRequestSchema, async (request) => {
+    await ensureAuthenticated();
+    log('Handling tool request', { tool: request.params.name });
+
+    const ctx = buildToolContext();
+
+    try {
+      for (const mod of domainModules) {
+        const result = await mod.handleTool(request.params.name, request.params.arguments ?? {}, ctx);
+        if (result !== null) return result;
+      }
+      return errorResponse("Tool not found");
+    } catch (error) {
+      log('Error in tool request handler', { error: (error as Error).message });
+      return errorResponse((error as Error).message);
+    }
+  });
+
+  return s;
+}
+
+// Registers the optional MCP "resources" capability handlers (gdrive:/// file
+// listing and reading). Skipped entirely when the resources capability is
+// disabled via GOOGLE_DRIVE_MCP_DISABLE_RESOURCES / --no-resources.
+function registerResourceHandlers(s: Server): void {
   s.setRequestHandler(ListResourcesRequestSchema, async (request) => {
     await ensureAuthenticated();
     log('Handling ListResources request', { params: request.params });
-    const pageSize = 10;
+    const pageSize = 1000;
     const params: {
       pageSize: number,
       fields: string,
@@ -334,32 +374,6 @@ function createMcpServer(): Server {
       }
     }
   });
-
-  s.setRequestHandler(ListToolsRequestSchema, async () => {
-    return {
-      tools: domainModules.flatMap(m => m.toolDefinitions),
-    };
-  });
-
-  s.setRequestHandler(CallToolRequestSchema, async (request) => {
-    await ensureAuthenticated();
-    log('Handling tool request', { tool: request.params.name });
-
-    const ctx = buildToolContext();
-
-    try {
-      for (const mod of domainModules) {
-        const result = await mod.handleTool(request.params.name, request.params.arguments ?? {}, ctx);
-        if (result !== null) return result;
-      }
-      return errorResponse("Tool not found");
-    } catch (error) {
-      log('Error in tool request handler', { error: (error as Error).message });
-      return errorResponse((error as Error).message);
-    }
-  });
-
-  return s;
 }
 
 // Module-level server instance (used by stdio mode and tests)
@@ -401,6 +415,7 @@ Environment Variables:
 
   Common Configuration:
   GOOGLE_DRIVE_MCP_SCOPES               Comma-separated scopes to request (aliases or full URLs; defaults to all Drive/Docs/Sheets/Slides/Calendar scopes). Applies to local OAuth, external OAuth, and service account modes.
+  GOOGLE_DRIVE_MCP_DISABLE_RESOURCES    Disable the MCP resource protocol (gdrive:/// listing/reading); tools stay available. Equivalent to the --no-resources flag. (default: enabled)
 
   Transport Configuration:
   MCP_TRANSPORT                         Transport mode: stdio or http (default: stdio)

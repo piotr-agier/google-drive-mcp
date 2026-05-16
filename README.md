@@ -1398,6 +1398,7 @@ npm run typecheck # Type checking without compilation
 |----------|-------------|---------|---------|
 | `GOOGLE_DRIVE_MCP_TOKEN_PATH` | Override token storage location | `~/.config/google-drive-mcp/tokens.json` | `/custom/path/tokens.json` |
 | `GOOGLE_DRIVE_MCP_AUTH_PORT` | Starting port for OAuth callback server (uses 5 consecutive ports) | `3000` | `3100` |
+| `GOOGLE_DRIVE_MCP_DISABLE_RESOURCES` | Disable the MCP resource protocol (`gdrive:///` listing/reading); tools stay available. For tools-only clients or clients that hang enumerating a large Drive (e.g. Gemini CLI). Also available as the `--no-resources` flag | (enabled) | `1` |
 | `DEBUG` | Enable debug logging | (disabled) | `google-drive-mcp:*` |
 
 **External Authentication** (alternative to local OAuth flow):

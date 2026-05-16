@@ -182,6 +182,13 @@ async function getTabBodyContent(
   return { content: tab.documentTab?.body?.content ?? [] };
 }
 
+// Thread an optional tabId into a Docs API range/location object. One shared
+// spelling for "scope this to a tab iff one was given", so every editing
+// handler stays consistent (#114).
+function withTab<T extends object>(target: T, tabId?: string): T & { tabId?: string } {
+  return tabId ? { ...target, tabId } : target;
+}
+
 // Find text in a document and return the range indices
 async function findTextRange(ctx: ToolContext, documentId: string, textToFind: string, instance: number = 1, tabId?: string): Promise<{ startIndex: number; endIndex: number } | { error: string } | null> {
   const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
@@ -389,13 +396,10 @@ function buildUpdateTextStyleRequest(
 
   if (fieldsToUpdate.length === 0) return null;
 
-  const range: { startIndex: number; endIndex: number; tabId?: string } = { startIndex, endIndex };
-  if (tabId) range.tabId = tabId;
-
   return {
     request: {
       updateTextStyle: {
-        range,
+        range: withTab({ startIndex, endIndex }, tabId),
         textStyle,
         fields: fieldsToUpdate.join(','),
       }
@@ -432,13 +436,10 @@ function buildUpdateParagraphStyleRequest(
 
   if (fieldsToUpdate.length === 0) return null;
 
-  const range: { startIndex: number; endIndex: number; tabId?: string } = { startIndex, endIndex };
-  if (tabId) range.tabId = tabId;
-
   return {
     request: {
       updateParagraphStyle: {
-        range,
+        range: withTab({ startIndex, endIndex }, tabId),
         paragraphStyle,
         fields: fieldsToUpdate.join(','),
       }
@@ -2586,8 +2587,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         return errorResponse("Must provide either startIndex+endIndex or textToFind");
       }
 
-      const range: { startIndex: number; endIndex: number; tabId?: string } = { startIndex, endIndex };
-      if (a.tabId) range.tabId = a.tabId;
+      const range = withTab({ startIndex, endIndex }, a.tabId);
 
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
 
@@ -3024,12 +3024,13 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
       const a = validation.data;
 
-      const location: { index: number; tabId?: string } = { index: a.index };
-      if (a.tabId) location.tabId = a.tabId;
-
+      // tabId passed through unvalidated by design: this pure batchUpdate op
+      // does no GET, so a bad tabId surfaces the raw Google API error rather
+      // than the friendly listDocumentTabs hint the format/table tools give.
+      // Validating here would add a GET to the happy path — not worth it.
       const request_body = {
         insertTable: {
-          location,
+          location: withTab({ index: a.index }, a.tabId),
           rows: a.rows,
           columns: a.columns
         }
@@ -3089,10 +3090,6 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         return errorResponse(`No table found at index ${a.tableStartIndex}`);
       }
 
-      // Thread tabId into every range/location for a tab-scoped edit.
-      const withTab = <T extends object>(r: T): T & { tabId?: string } =>
-        a.tabId ? { ...r, tabId: a.tabId } : r;
-
       // Get the cell
       const row = table.tableRows?.[a.rowIndex];
       if (!row) {
@@ -3119,7 +3116,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         if (cellContentEnd > cellContentStart) {
           requests.push({
             deleteContentRange: {
-              range: withTab({ startIndex: cellContentStart, endIndex: cellContentEnd })
+              range: withTab({ startIndex: cellContentStart, endIndex: cellContentEnd }, a.tabId)
             }
           });
         }
@@ -3128,7 +3125,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         if (a.textContent.length > 0) {
           requests.push({
             insertText: {
-              location: withTab({ index: cellContentStart }),
+              location: withTab({ index: cellContentStart }, a.tabId),
               text: a.textContent
             }
           });
@@ -3153,7 +3150,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
 
           requests.push({
             updateTextStyle: {
-              range: withTab({ startIndex: styleStart, endIndex: styleEnd }),
+              range: withTab({ startIndex: styleStart, endIndex: styleEnd }, a.tabId),
               textStyle,
               fields: fields.join(',')
             }
@@ -3165,7 +3162,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       if (a.alignment !== undefined) {
         requests.push({
           updateParagraphStyle: {
-            range: withTab({ startIndex: cellStartIndex + 1, endIndex: cellEndIndex - 1 }),
+            range: withTab({ startIndex: cellStartIndex + 1, endIndex: cellEndIndex - 1 }, a.tabId),
             paragraphStyle: { alignment: a.alignment },
             fields: 'alignment'
           }
@@ -3366,9 +3363,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       if (!validation.success) return errorResponse(validation.error.errors[0].message);
       const a = validation.data;
 
-      const location: { index: number; tabId?: string } = { index: a.index };
-      if (a.tabId) location.tabId = a.tabId;
-
+      // tabId passed through unvalidated by design (see insertTable): no GET on
+      // this pure batchUpdate path, so a bad tabId yields the raw Google error.
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
       await docs.documents.batchUpdate({
         documentId: a.documentId,
@@ -3376,7 +3372,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           requests: [{
             insertPerson: {
               personProperties: { email: a.personEmail },
-              location,
+              location: withTab({ index: a.index }, a.tabId),
             },
           // insertPerson is not yet in the googleapis TypeScript types — cast required
           } as any],
@@ -3412,15 +3408,17 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
 
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
 
-      // Build the createFootnote request
+      // Build the createFootnote request. tabId passed through unvalidated by
+      // design (see insertTable): no GET on this pure batchUpdate path, so a
+      // bad tabId yields the raw Google error.
       const createFootnoteReq: {
         location?: { index: number; tabId?: string };
         endOfSegmentLocation?: { segmentId: string; tabId?: string };
       } = {};
       if (a.index !== undefined) {
-        createFootnoteReq.location = { index: a.index, ...(a.tabId ? { tabId: a.tabId } : {}) };
+        createFootnoteReq.location = withTab({ index: a.index }, a.tabId);
       } else {
-        createFootnoteReq.endOfSegmentLocation = { segmentId: "", ...(a.tabId ? { tabId: a.tabId } : {}) };
+        createFootnoteReq.endOfSegmentLocation = withTab({ segmentId: "" }, a.tabId);
       }
 
       const res = await docs.documents.batchUpdate({
@@ -3445,7 +3443,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
             requestBody: {
               requests: [{
                 insertText: {
-                  location: { segmentId: footnoteId, index: 0, ...(a.tabId ? { tabId: a.tabId } : {}) },
+                  location: withTab({ segmentId: footnoteId, index: 0 }, a.tabId),
                   text: a.content,
                 },
               }],

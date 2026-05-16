@@ -1695,7 +1695,30 @@ describe('Docs tools', () => {
       });
     });
 
+    // The no-tabId path must stay byte-for-byte the cheap one: a narrow-field
+    // GET (never includeTabsContent) and no tabId leaking into the range. These
+    // guard the findTextRange/getParagraphRange tab/no-tab branching (#114).
+    const lastGet = () => {
+      const calls = ctx.mocks.docs.tracker.getCalls('documents.get');
+      return calls[calls.length - 1]?.args?.[0];
+    };
+    const assertNoTabGets = () => {
+      for (const c of ctx.mocks.docs.tracker.getCalls('documents.get')) {
+        assert.ok(!c.args?.[0]?.includeTabsContent, 'default path must not use includeTabsContent');
+      }
+      assert.ok(typeof lastGet()?.fields === 'string', 'default path must use a narrow field mask');
+    };
+
     describe('applyTextStyle', () => {
+      it('uses the narrow-field GET and leaks no tabId by default (textToFind)', async () => {
+        ctx.mocks.docs.service.documents.get._resetImpl(); // genuine default mock
+        const res = await callTool(ctx.client, 'applyTextStyle', { documentId: 'doc-1', textToFind: 'Hello', bold: true });
+        assert.equal(res.isError, false);
+        assert.ok(!res.content[0].text.includes('in tab'));
+        assertNoTabGets();
+        assert.equal(lastRequests()[0].updateTextStyle.range.tabId, undefined);
+      });
+
       it('threads tabId into the range (explicit-index mode)', async () => {
         const res = await callTool(ctx.client, 'applyTextStyle', { documentId: 'doc-1', startIndex: 1, endIndex: 5, bold: true, tabId: 'tab-2' });
         assert.equal(res.isError, false);
@@ -1734,6 +1757,15 @@ describe('Docs tools', () => {
     });
 
     describe('applyParagraphStyle', () => {
+      it('uses narrow-field GETs and leaks no tabId by default (textToFind)', async () => {
+        ctx.mocks.docs.service.documents.get._resetImpl(); // genuine default mock
+        const res = await callTool(ctx.client, 'applyParagraphStyle', { documentId: 'doc-1', textToFind: 'Hello', alignment: 'CENTER' });
+        assert.equal(res.isError, false);
+        assert.ok(!res.content[0].text.includes('in tab'));
+        assertNoTabGets();
+        assert.equal(lastRequests()[0].updateParagraphStyle.range.tabId, undefined);
+      });
+
       it('resolves indexWithinParagraph within the target tab', async () => {
         ctx.mocks.docs.service.documents.get._setImpl(async () => ({
           data: { tabs: [
@@ -1749,6 +1781,15 @@ describe('Docs tools', () => {
     });
 
     describe('createParagraphBullets', () => {
+      it('uses the narrow-field GET and leaks no tabId by default (textToFind)', async () => {
+        ctx.mocks.docs.service.documents.get._resetImpl(); // genuine default mock
+        const res = await callTool(ctx.client, 'createParagraphBullets', { documentId: 'doc-1', textToFind: 'Hello', bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE' });
+        assert.equal(res.isError, false);
+        assert.ok(!res.content[0].text.includes('in tab'));
+        assertNoTabGets();
+        assert.equal(lastRequests()[0].createParagraphBullets.range.tabId, undefined);
+      });
+
       it('threads tabId into the range (explicit-index mode)', async () => {
         const res = await callTool(ctx.client, 'createParagraphBullets', { documentId: 'doc-1', startIndex: 1, endIndex: 5, bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE', tabId: 'tab-2' });
         assert.equal(res.isError, false);

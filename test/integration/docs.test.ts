@@ -1778,6 +1778,44 @@ describe('Docs tools', () => {
         assert.equal(lastRequests()[0].updateParagraphStyle.range.tabId, 'tab-2');
         ctx.mocks.docs.service.documents.get._resetImpl();
       });
+
+      it('resolves tab-scoped textToFind with a single GET (#114 follow-up)', async () => {
+        ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+          data: { tabs: [
+            { tabProperties: { tabId: 'tab-2' }, documentTab: { body: { content: [
+              { startIndex: 1, endIndex: 14, paragraph: { elements: [{ textRun: { content: 'Find me here\n' }, startIndex: 1, endIndex: 14 }] } },
+            ] } } },
+          ] },
+        }));
+        const res = await callTool(ctx.client, 'applyParagraphStyle', { documentId: 'doc-1', textToFind: 'Find me', alignment: 'CENTER', tabId: 'tab-2' });
+        assert.equal(res.isError, false);
+        assert.ok(res.content[0].text.includes('in tab tab-2'));
+
+        // The whole point of the optimization: range + enclosing-paragraph
+        // resolution share one includeTabsContent fetch, not two.
+        const getCalls = ctx.mocks.docs.tracker.getCalls('documents.get');
+        assert.equal(getCalls.length, 1, 'tab-scoped textToFind must resolve from a single GET');
+        assert.equal(getCalls[0].args[0].includeTabsContent, true);
+
+        const range = lastRequests()[0].updateParagraphStyle.range;
+        assert.equal(range.tabId, 'tab-2');
+        assert.equal(range.startIndex, 1);
+        assert.equal(range.endIndex, 14);
+        ctx.mocks.docs.service.documents.get._resetImpl();
+      });
+
+      it('returns the standard not-found error and issues no batchUpdate for an unknown tabId (textToFind)', async () => {
+        ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+          data: { tabs: [{ tabProperties: { tabId: 'tab-1' }, documentTab: { body: { content: [] } } }] },
+        }));
+        const before = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate').length;
+        const res = await callTool(ctx.client, 'applyParagraphStyle', { documentId: 'doc-1', textToFind: 'x', alignment: 'CENTER', tabId: 'missing' });
+        assert.equal(res.isError, true);
+        assert.ok(res.content[0].text.includes('Tab with ID "missing" not found'));
+        assert.ok(res.content[0].text.includes('listDocumentTabs'));
+        assert.equal(ctx.mocks.docs.tracker.getCalls('documents.batchUpdate').length, before);
+        ctx.mocks.docs.service.documents.get._resetImpl();
+      });
     });
 
     describe('createParagraphBullets', () => {

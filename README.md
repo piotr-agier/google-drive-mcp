@@ -302,6 +302,8 @@ export GOOGLE_DRIVE_MCP_AUTH_PORT=3100
 
 The server will try 5 consecutive ports starting from the configured value (e.g., 3100–3104).
 
+The callback server binds to the loopback interface and the OAuth redirect URI uses the loopback IP — `http://127.0.0.1:<port>/oauth2callback` (default range `127.0.0.1:3000`–`127.0.0.1:3004`). **Desktop app** OAuth clients (the recommended type — see [Create OAuth 2.0 Credentials](#4-create-oauth-20-credentials)) accept any loopback redirect automatically and need no action. If you instead use a **Web application** OAuth client, you must register `http://127.0.0.1:<port>/oauth2callback` for every port in the range as an authorized redirect URI in Google Cloud Console, or authentication fails with `redirect_uri_mismatch`.
+
 ### Token Storage
 
 Authentication tokens are stored securely following the XDG Base Directory specification:
@@ -1188,6 +1190,7 @@ OAuth credentials not found. Please provide credentials using one of these metho
 1. **Wrong credential type**: Must be "Desktop app", not "Web application"
 2. **Port blocked**: Ports 3000-3004 must be available (or custom range if `GOOGLE_DRIVE_MCP_AUTH_PORT` is set)
 3. **Test user not added**: Add your email in OAuth consent screen
+4. **`redirect_uri_mismatch` (Web application clients only)**: The callback redirect URI uses the loopback IP `http://127.0.0.1:<port>/oauth2callback`. Switch to a "Desktop app" client (recommended), or add `http://127.0.0.1:3000/oauth2callback` … `http://127.0.0.1:3004/oauth2callback` (plus any custom `GOOGLE_DRIVE_MCP_AUTH_PORT` range) as authorized redirect URIs
 
 **Solution:**
 ```bash

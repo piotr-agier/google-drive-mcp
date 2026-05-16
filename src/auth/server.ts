@@ -152,7 +152,7 @@ export class AuthServer {
       this.flowOAuth2Client = new OAuth2Client(
         client_id,
         client_secret || undefined,
-        `http://localhost:${port}/oauth2callback`
+        `http://127.0.0.1:${port}/oauth2callback`
       );
     } catch (error) {
         // Could not load credentials, cannot proceed with auth flow
@@ -187,12 +187,14 @@ export class AuthServer {
         await new Promise<void>((resolve, reject) => {
           // Create a temporary server instance to test the port.
           // Bind to the loopback interface explicitly: the OAuth redirect URI
-          // is hard-coded to `http://localhost:<port>/oauth2callback`, so we
+          // is hard-coded to `http://127.0.0.1:<port>/oauth2callback`, so we
           // never need to accept connections from other interfaces, and doing
-          // so would expose the short-lived auth server to the LAN.
+          // so would expose the short-lived auth server to the LAN. The IP is
+          // used (not `localhost`) so the bind and the redirect URI resolve to
+          // the same address on dual-stack hosts.
           const testServer = this.app.listen(port, '127.0.0.1', () => {
             this.server = testServer; // Assign to class property *only* if successful
-            console.error(`Authentication server listening on http://localhost:${port}`);
+            console.error(`Authentication server listening on http://127.0.0.1:${port}`);
             resolve();
           });
           testServer.on('error', (err: NodeJS.ErrnoException) => {
@@ -225,6 +227,16 @@ export class AuthServer {
       const address = this.server.address();
       if (typeof address === 'object' && address !== null) {
         return address.port;
+      }
+    }
+    return null;
+  }
+
+  public getServerAddress(): string | null {
+    if (this.server) {
+      const address = this.server.address();
+      if (typeof address === 'object' && address !== null) {
+        return address.address;
       }
     }
     return null;

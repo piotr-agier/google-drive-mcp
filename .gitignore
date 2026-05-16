@@ -36,6 +36,9 @@ Thumbs.db
 *.swp
 *.swo
 
+# Agent/tool config
+.codex/
+
 # Test coverage
 coverage/
 .nyc_output/

@@ -1302,7 +1302,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "createDocFromHTML",
-    description: "Create a Google Doc from HTML content. HTML tags are automatically converted to native Google Doc styles: <h1> → Heading 1, <h2> → Heading 2, <p> → Normal Text, <b> → bold, <i> → italic, <ul>/<ol> → lists, <table> → tables. This is the recommended way to create styled documents — it avoids the paragraph style inheritance bug where body text inherits heading styles.",
+    description: "Create a Google Doc from HTML content in a single Drive API call. HTML tags are converted to native Google Doc styles: <h1> → Heading 1, <h2> → Heading 2, <p> → Normal Text, <b> → bold, <i> → italic, <ul>/<ol> → lists, <table> → tables. Useful when you want native heading/list/table styling applied in one request instead of a createGoogleDoc call followed by per-paragraph formatGoogleDocParagraph requests.",
     inputSchema: {
       type: "object",
       properties: {

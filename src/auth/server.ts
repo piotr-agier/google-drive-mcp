@@ -5,19 +5,9 @@ import http from 'http';
 import open from 'open';
 import { loadCredentials } from './client.js';
 import { resolveOAuthScopes } from './scopes.js';
+import { escapeHtml } from './html.js';
 
 const SCOPES = resolveOAuthScopes();
-
-// Escape user-influenced strings before embedding them in HTML responses.
-// Covers both element content and double-quoted attribute contexts.
-export function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 
 export class AuthServer {
   private baseOAuth2Client: OAuth2Client; // Used by TokenManager for validation/refresh
@@ -106,7 +96,14 @@ export class AuthServer {
         `);
       } catch (error: unknown) {
         this.authCompletedSuccessfully = false;
-        console.error('OAuth callback token exchange failed:', error);
+        // Log the message only, not the raw error object: google-auth-library
+        // token-exchange failures are GaxiosErrors whose `config`/`response`
+        // carry the request body (authorization code + client_secret), which
+        // must not land in logs.
+        console.error(
+          'OAuth callback failed:',
+          error instanceof Error ? error.message : String(error)
+        );
         // Send a generic HTML error response; the error detail goes to the
         // server log only, never reflected back to the browser.
         res.status(500).send(`

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { escapeHtml } from '../src/auth/server.js';
+import { escapeHtml } from '../src/auth/html.js';
 
 test('escapeHtml neutralizes script injection', () => {
   assert.equal(

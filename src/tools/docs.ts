@@ -1,3 +1,4 @@
+import { Readable } from 'stream';
 import { z } from 'zod';
 import JSZip from 'jszip';
 import type { ToolDefinition, ToolContext, ToolResult } from '../types.js';
@@ -1045,6 +1046,12 @@ const CreateGoogleDocSchema = z.object({
   parentFolderId: z.string().optional()
 });
 
+const CreateDocFromHTMLSchema = z.object({
+  html: z.string().min(1, "HTML content is required"),
+  name: z.string().min(1, "Document name is required"),
+  parentFolderId: z.string().optional(),
+});
+
 const UpdateGoogleDocSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
   content: z.string(),
@@ -1291,6 +1298,19 @@ export const toolDefinitions: ToolDefinition[] = [
         parentFolderId: { type: "string", description: "Parent folder ID" }
       },
       required: ["name", "content"]
+    }
+  },
+  {
+    name: "createDocFromHTML",
+    description: "Create a Google Doc from HTML content. HTML tags are automatically converted to native Google Doc styles: <h1> → Heading 1, <h2> → Heading 2, <p> → Normal Text, <b> → bold, <i> → italic, <ul>/<ol> → lists, <table> → tables. This is the recommended way to create styled documents — it avoids the paragraph style inheritance bug where body text inherits heading styles.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        html: { type: "string", description: "HTML content. Use standard tags: <h1>, <h2>, <h3> for headings, <p> for body text, <b>/<i> for inline styles, <ul>/<ol> for lists, <table> for tables. Inline CSS styles are also supported (e.g., font-family, color, font-size)." },
+        name: { type: "string", description: "Document name in Google Drive" },
+        parentFolderId: { type: "string", description: "Parent folder ID or path. Defaults to root." }
+      },
+      required: ["html", "name"]
     }
   },
   {
@@ -1848,6 +1868,63 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
 
       return {
         content: [{ type: "text", text: `Created Google Doc: ${doc.name}\nID: ${doc.id}\nLink: ${doc.webViewLink}` }],
+        isError: false
+      };
+    }
+
+    case "createDocFromHTML": {
+      const validation = CreateDocFromHTMLSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const a = validation.data;
+
+      const parentFolderId = await ctx.resolveFolderId(a.parentFolderId);
+
+      // Check if document already exists
+      const existingFileId = await ctx.checkFileExists(a.name, parentFolderId);
+      if (existingFileId) {
+        return errorResponse(
+          `A document named "${a.name}" already exists in this location. ` +
+          `Use a different name or delete the existing doc (ID: ${existingFileId}).`
+        );
+      }
+
+      // Upload HTML content as a Google Doc via Drive API MIME conversion.
+      // The Drive API automatically converts HTML tags to native Google Doc styles:
+      // <h1> → HEADING_1, <h2> → HEADING_2, <p> → NORMAL_TEXT, etc.
+      ctx.log('Creating Google Doc from HTML', { name: a.name, htmlLength: a.html.length });
+
+      const htmlBuffer = Buffer.from(a.html, 'utf-8');
+
+      let fileResponse;
+      try {
+        fileResponse = await ctx.getDrive().files.create({
+          requestBody: {
+            name: a.name,
+            mimeType: 'application/vnd.google-apps.document',
+            parents: [parentFolderId]
+          },
+          media: {
+            mimeType: 'text/html',
+            body: Readable.from(htmlBuffer)
+          },
+          fields: 'id, name, webViewLink',
+          supportsAllDrives: true
+        });
+      } catch (createError: any) {
+        ctx.log('Drive files.create (HTML) error details:', {
+          message: createError.message,
+          code: createError.code,
+          errors: createError.errors,
+          status: createError.status
+        });
+        throw createError;
+      }
+
+      const newDoc = fileResponse.data;
+      return {
+        content: [{ type: "text", text: `Created Google Doc from HTML: ${newDoc.name}\nID: ${newDoc.id}\nLink: ${newDoc.webViewLink}` }],
         isError: false
       };
     }

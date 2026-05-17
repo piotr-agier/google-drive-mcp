@@ -215,7 +215,7 @@ function buildToolContext(): ToolContext {
 function createMcpServer(config: RuntimeConfig = runtimeConfig): Server {
   const resourcesEnabled = !config.disableResources;
   if (!resourcesEnabled) {
-    log('Resources capability disabled via GOOGLE_DRIVE_MCP_DISABLE_RESOURCES');
+    log('Resources capability disabled via GOOGLE_DRIVE_MCP_DISABLE_RESOURCES / --no-resources');
   }
 
   const s = new Server(
@@ -423,7 +423,7 @@ Environment Variables:
 
   Common Configuration:
   GOOGLE_DRIVE_MCP_SCOPES               Comma-separated scopes to request (aliases or full URLs; defaults to all Drive/Docs/Sheets/Slides/Calendar scopes). Applies to local OAuth, external OAuth, and service account modes.
-  GOOGLE_DRIVE_MCP_DISABLE_RESOURCES    Disable the MCP resource protocol (gdrive:/// listing/reading); tools stay available. Equivalent to the --no-resources flag. (default: enabled)
+  GOOGLE_DRIVE_MCP_DISABLE_RESOURCES    Disable the MCP resource protocol (gdrive:/// listing/reading); tools stay available. Accepts 1/0, true/false, yes/no, on/off. Mirrored by the --no-resources[=<bool>] flag. (default: enabled)
 
   Transport Configuration:
   MCP_TRANSPORT                         Transport mode: stdio or http (default: stdio)

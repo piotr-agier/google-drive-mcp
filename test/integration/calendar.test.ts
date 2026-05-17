@@ -169,6 +169,16 @@ describe('Calendar tools', () => {
         { fileUrl: 'https://drive.google.com/file/d/new/view', title: 'New' },
       ]);
     });
+
+    it('removes all attachments when given an empty array', async () => {
+      const res = await callTool(ctx.client, 'updateCalendarEvent', {
+        eventId: 'event-1', attachments: [],
+      });
+      assert.equal(res.isError, false);
+      const call = ctx.mocks.calendar.tracker.getCalls('events.update').at(-1);
+      assert.equal(call!.args[0].supportsAttachments, true);
+      assert.deepEqual(call!.args[0].requestBody.attachments, []);
+    });
   });
 
   // --- deleteCalendarEvent ---

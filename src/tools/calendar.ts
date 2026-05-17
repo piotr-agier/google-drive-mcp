@@ -173,7 +173,7 @@ const AttachmentInputSchema = z
   )
   .max(25, "A calendar event can have at most 25 attachments")
   .optional()
-  .describe("File attachments for the event (max 25). Replaces existing attachments on update.");
+  .describe("File attachments for the event (max 25). On update this replaces existing attachments; pass an empty array to remove all of them, or omit to keep them.");
 
 const CreateCalendarEventSchema = z.object({
   summary: z.string().min(1, "Event title is required"),
@@ -350,7 +350,7 @@ export const toolDefinitions: ToolDefinition[] = [
         attachments: {
           type: "array",
           maxItems: 25,
-          description: "File attachments (max 25). Replaces existing attachments; omit to keep them. For Drive files use the file's share URL as fileUrl.",
+          description: "File attachments (max 25). Replaces existing attachments; pass an empty array to remove all, or omit to keep them. For Drive files use the file's share URL as fileUrl.",
           items: {
             type: "object",
             properties: {

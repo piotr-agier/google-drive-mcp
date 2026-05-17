@@ -286,3 +286,12 @@ test('buildCalendarEventUpdate replaces attachments when overridden', () => {
   });
   assert.deepEqual(result.attachments, [{ fileUrl: 'https://drive.google.com/f/2', title: 'B' }]);
 });
+
+test('buildCalendarEventUpdate clears attachments when given an empty array', () => {
+  const withAttachments = {
+    ...EXISTING_EVENT,
+    attachments: [{ fileUrl: 'https://drive.google.com/f/1', title: 'A' }],
+  };
+  const result = buildCalendarEventUpdate(withAttachments, { attachments: [] });
+  assert.deepEqual(result.attachments, []);
+});

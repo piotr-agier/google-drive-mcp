@@ -32,7 +32,7 @@ test('disableResources defaults to false when unset and no flag', withVar(undefi
 // ---------------------------------------------------------------------------
 // disableResources — env var truthy values
 // ---------------------------------------------------------------------------
-for (const v of ['1', 'true', 'yes', 'on', 'enable', 'enabled', 'TRUE', '  Yes  ', 'ON', ' Enabled ']) {
+for (const v of ['1', 'true', 'yes', 'on', 'TRUE', '  Yes  ', ' ON ']) {
   test(`disableResources is true for env value ${JSON.stringify(v)}`, withVar(v, () => {
     assert.equal(loadRuntimeConfig([]).disableResources, true);
   }));
@@ -41,7 +41,7 @@ for (const v of ['1', 'true', 'yes', 'on', 'enable', 'enabled', 'TRUE', '  Yes  
 // ---------------------------------------------------------------------------
 // disableResources — env var falsy values
 // ---------------------------------------------------------------------------
-for (const v of ['0', 'false', 'no', 'off', 'disable', 'disabled', 'FALSE', 'Off', ' Disabled ']) {
+for (const v of ['0', 'false', 'no', 'off', 'FALSE', 'Off', ' No ']) {
   test(`disableResources is false for env value ${JSON.stringify(v)}`, withVar(v, () => {
     assert.equal(loadRuntimeConfig([]).disableResources, false);
   }));
@@ -53,6 +53,14 @@ for (const v of ['0', 'false', 'no', 'off', 'disable', 'disabled', 'FALSE', 'Off
 test('disableResources falls back to default for unrecognized env value', withVar('maybe', () => {
   assert.equal(loadRuntimeConfig([]).disableResources, false);
 }));
+
+// enable/disable are intentionally NOT accepted: on a negated env var they form
+// a double negative. They must behave like any other unrecognized value.
+for (const v of ['enable', 'enabled', 'disable', 'disabled']) {
+  test(`disableResources ignores non-alias env value ${JSON.stringify(v)} (falls back to default)`, withVar(v, () => {
+    assert.equal(loadRuntimeConfig([]).disableResources, false);
+  }));
+}
 
 // ---------------------------------------------------------------------------
 // disableResources — --no-resources CLI flag
@@ -82,6 +90,16 @@ test('--no-resources=off re-enables resources', withVar(undefined, () => {
 
 test('--no-resources=<garbage> falls back to the bare-flag intent (disable)', withVar(undefined, () => {
   assert.equal(loadRuntimeConfig(['--no-resources=maybe']).disableResources, true);
+}));
+
+test('--no-resources= (empty value) disables (bare-flag intent)', withVar(undefined, () => {
+  assert.equal(loadRuntimeConfig(['--no-resources=']).disableResources, true);
+}));
+
+// enable/disable are not aliases, so --no-resources=disabled is garbage and
+// follows the bare-flag intent (disable) — no double-negative trap.
+test('--no-resources=disabled is treated as garbage and disables', withVar(undefined, () => {
+  assert.equal(loadRuntimeConfig(['--no-resources=disabled']).disableResources, true);
 }));
 
 // ---------------------------------------------------------------------------

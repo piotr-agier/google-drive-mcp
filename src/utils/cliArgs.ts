@@ -20,8 +20,12 @@ function parseIntOr(value: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
-const TRUTHY = new Set(['1', 'true', 'yes', 'on', 'enable', 'enabled']);
-const FALSY = new Set(['0', 'false', 'no', 'off', 'disable', 'disabled']);
+// Deliberately omits enable/disable: on a negated flag (`--no-resources`) and a
+// negated env var (`..._DISABLE_RESOURCES`) those words form a double negative
+// (`--no-resources=disabled` reading as "resources enabled"). on/off covers the
+// same intent unambiguously under negation.
+const TRUTHY = new Set(['1', 'true', 'yes', 'on']);
+const FALSY = new Set(['0', 'false', 'no', 'off']);
 
 function parseBoolEnv(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined) return fallback;

@@ -32,7 +32,7 @@ test('disableResources defaults to false when unset and no flag', withVar(undefi
 // ---------------------------------------------------------------------------
 // disableResources — env var truthy values
 // ---------------------------------------------------------------------------
-for (const v of ['1', 'true', 'yes', 'TRUE', '  Yes  ']) {
+for (const v of ['1', 'true', 'yes', 'on', 'enable', 'enabled', 'TRUE', '  Yes  ', 'ON', ' Enabled ']) {
   test(`disableResources is true for env value ${JSON.stringify(v)}`, withVar(v, () => {
     assert.equal(loadRuntimeConfig([]).disableResources, true);
   }));
@@ -41,7 +41,7 @@ for (const v of ['1', 'true', 'yes', 'TRUE', '  Yes  ']) {
 // ---------------------------------------------------------------------------
 // disableResources — env var falsy values
 // ---------------------------------------------------------------------------
-for (const v of ['0', 'false', 'no', 'FALSE']) {
+for (const v of ['0', 'false', 'no', 'off', 'disable', 'disabled', 'FALSE', 'Off', ' Disabled ']) {
   test(`disableResources is false for env value ${JSON.stringify(v)}`, withVar(v, () => {
     assert.equal(loadRuntimeConfig([]).disableResources, false);
   }));
@@ -63,6 +63,25 @@ test('--no-resources flag sets disableResources true', withVar(undefined, () => 
 
 test('--no-resources flag overrides a falsy env value', withVar('0', () => {
   assert.equal(loadRuntimeConfig(['--no-resources']).disableResources, true);
+}));
+
+// ---------------------------------------------------------------------------
+// disableResources — --no-resources=<bool> value form
+// ---------------------------------------------------------------------------
+test('--no-resources=true sets disableResources true', withVar(undefined, () => {
+  assert.equal(loadRuntimeConfig(['--no-resources=true']).disableResources, true);
+}));
+
+test('--no-resources=false re-enables, overriding a truthy env value', withVar('1', () => {
+  assert.equal(loadRuntimeConfig(['--no-resources=false']).disableResources, false);
+}));
+
+test('--no-resources=off re-enables resources', withVar(undefined, () => {
+  assert.equal(loadRuntimeConfig(['--no-resources=off']).disableResources, false);
+}));
+
+test('--no-resources=<garbage> falls back to the bare-flag intent (disable)', withVar(undefined, () => {
+  assert.equal(loadRuntimeConfig(['--no-resources=maybe']).disableResources, true);
 }));
 
 // ---------------------------------------------------------------------------

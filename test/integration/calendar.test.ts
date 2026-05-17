@@ -35,6 +35,14 @@ describe('Calendar tools', () => {
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('Test Event'));
     });
+
+    it('surfaces attachments for listed events', async () => {
+      const res = await callTool(ctx.client, 'getCalendarEvents', {});
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Attachments:'));
+      assert.ok(res.content[0].text.includes('Agenda.pdf'));
+      assert.ok(res.content[0].text.includes('https://drive.google.com/file/d/file-1/view'));
+    });
   });
 
   // --- getCalendarEvent ---
@@ -56,6 +64,24 @@ describe('Calendar tools', () => {
       assert.ok(res.content[0].text.includes('Attachments:'));
       assert.ok(res.content[0].text.includes('Agenda.pdf'));
       assert.ok(res.content[0].text.includes('https://drive.google.com/file/d/file-1/view'));
+    });
+
+    it('renders a title-less attachment without duplicating the URL', async () => {
+      ctx.mocks.calendar.service.events.get._setImpl(async () => ({
+        data: {
+          id: 'event-1',
+          summary: 'No-title attachment',
+          start: { dateTime: '2025-01-01T10:00:00Z' },
+          end: { dateTime: '2025-01-01T11:00:00Z' },
+          status: 'confirmed',
+          attachments: [{ fileUrl: 'https://example.com/f' }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getCalendarEvent', { eventId: 'event-1' });
+      ctx.mocks.calendar.service.events.get._resetImpl();
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Attachments: https://example.com/f'));
+      assert.ok(!res.content[0].text.includes('https://example.com/f (https://example.com/f)'));
     });
   });
 

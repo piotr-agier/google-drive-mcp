@@ -994,7 +994,7 @@ When binding to `127.0.0.1` (default), DNS rebinding protection is automatically
   - `summary`, `description`, `location`: Updated fields (optional)
   - `start`, `end`: Updated times (optional)
   - `attendees`: Updated attendee emails, replaces existing (optional)
-  - `attachments`: Array of `{ fileUrl, title?, mimeType? }`, replaces existing (optional, max 25); omit to keep current attachments
+  - `attachments`: Array of `{ fileUrl, title?, mimeType? }`, replaces existing (optional, max 25); omit to keep current attachments, or pass `[]` to remove all
   - `sendUpdates`: `all`, `externalOnly`, or `none` (optional, default: none)
 
 - **deleteCalendarEvent** - Delete a calendar event

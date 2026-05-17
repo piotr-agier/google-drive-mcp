@@ -126,8 +126,8 @@ function formatEventForDisplay(event: CalendarEventInfo): string {
   }
   if (event.attachments && event.attachments.length > 0) {
     const items = event.attachments.map(a => {
-      const label = a.title || a.fileUrl || '(untitled)';
-      return a.fileUrl ? `${label} (${a.fileUrl})` : label;
+      if (a.title && a.fileUrl) return `${a.title} (${a.fileUrl})`;
+      return a.title || a.fileUrl || '(untitled)';
     });
     lines.push(`Attachments: ${items.join(', ')}`);
   }
@@ -303,6 +303,7 @@ export const toolDefinitions: ToolDefinition[] = [
         visibility: { type: "string", enum: ["default", "public", "private", "confidential"], description: "Event visibility" },
         attachments: {
           type: "array",
+          maxItems: 25,
           description: "File attachments (max 25). For Drive files use the file's share URL as fileUrl.",
           items: {
             type: "object",
@@ -348,6 +349,7 @@ export const toolDefinitions: ToolDefinition[] = [
         attendees: { type: "array", items: { type: "string" }, description: "Updated attendee emails (replaces existing)" },
         attachments: {
           type: "array",
+          maxItems: 25,
           description: "File attachments (max 25). Replaces existing attachments; omit to keep them. For Drive files use the file's share URL as fileUrl.",
           items: {
             type: "object",

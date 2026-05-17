@@ -24,7 +24,7 @@ import {
 } from './utils.js';
 import type { ToolContext } from './types.js';
 import { errorResponse } from './types.js';
-import { loadRuntimeConfig } from './utils/cliArgs.js';
+import { loadRuntimeConfig, type RuntimeConfig } from './utils/cliArgs.js';
 
 import * as driveTools from './tools/drive.js';
 import * as docsTools from './tools/docs.js';
@@ -212,8 +212,8 @@ function buildToolContext(): ToolContext {
 // SERVER FACTORY
 // -----------------------------------------------------------------------------
 
-function createMcpServer(): Server {
-  const resourcesEnabled = !runtimeConfig.disableResources;
+function createMcpServer(config: RuntimeConfig = runtimeConfig): Server {
+  const resourcesEnabled = !config.disableResources;
   if (!resourcesEnabled) {
     log('Resources capability disabled via GOOGLE_DRIVE_MCP_DISABLE_RESOURCES');
   }
@@ -400,6 +400,14 @@ Transport Options:
   --transport <stdio|http>   Transport mode (default: stdio)
   --port <number>            HTTP listen port (default: 3100)
   --host <address>           HTTP bind address (default: 127.0.0.1)
+
+Options:
+  --no-resources[=<bool>]    Disable the MCP resource protocol (gdrive:/// listing/reading);
+                             tools stay available. Bare flag disables; --no-resources=false
+                             re-enables (overrides a truthy GOOGLE_DRIVE_MCP_DISABLE_RESOURCES).
+  --api-timeout=<ms>         Per-request API timeout in ms; 0 disables (default: 120000)
+  --retry-max=<n>            Max retry attempts on transient failures; 0 disables (default: 3)
+  --retry-base-delay=<ms>    Base delay for retry backoff in ms (default: 1000)
 
 Examples:
   npx @yourusername/google-drive-mcp auth

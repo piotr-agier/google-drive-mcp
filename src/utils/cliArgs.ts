@@ -20,11 +20,14 @@ function parseIntOr(value: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
+const TRUTHY = new Set(['1', 'true', 'yes', 'on', 'enable', 'enabled']);
+const FALSY = new Set(['0', 'false', 'no', 'off', 'disable', 'disabled']);
+
 function parseBoolEnv(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined) return fallback;
   const v = value.trim().toLowerCase();
-  if (v === '1' || v === 'true' || v === 'yes') return true;
-  if (v === '0' || v === 'false' || v === 'no') return false;
+  if (TRUTHY.has(v)) return true;
+  if (FALSY.has(v)) return false;
   return fallback;
 }
 
@@ -47,6 +50,11 @@ export function loadRuntimeConfig(argv: string[] = process.argv.slice(2)): Runti
       cfg.retryBaseDelay = parseIntOr(arg.split('=')[1], cfg.retryBaseDelay);
     } else if (arg === '--no-resources') {
       cfg.disableResources = true;
+    } else if (arg.startsWith('--no-resources=')) {
+      // Bare --no-resources disables; --no-resources=false re-enables (e.g. to
+      // override a truthy GOOGLE_DRIVE_MCP_DISABLE_RESOURCES). An unrecognized
+      // value falls back to the bare-flag intent (disable).
+      cfg.disableResources = parseBoolEnv(arg.split('=')[1], true);
     }
   }
 

@@ -1118,14 +1118,15 @@ const GetGoogleDocContentSchema = z.object({
 const InsertTextSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
   text: z.string().min(1, "Text to insert is required"),
-  index: z.number().int().min(1, "Index must be at least 1 (1-based)"),
+  // Google Docs use 1-based indexes; text files use 0-based offsets — accept both, validate at runtime.
+  index: z.number().int().min(0, "Index must be non-negative"),
   tabId: z.string().optional()
 });
 
 const DeleteRangeSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
-  startIndex: z.number().int().min(1, "Start index must be at least 1"),
-  endIndex: z.number().int().min(1, "End index must be at least 1"),
+  startIndex: z.number().int().min(0, "Start index must be non-negative"),
+  endIndex: z.number().int().min(0, "End index must be non-negative"),
   tabId: z.string().optional()
 }).refine(data => data.endIndex > data.startIndex, {
   message: "End index must be greater than start index",
@@ -1387,28 +1388,28 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "insertText",
-    description: "Insert text at a specific index in a Google Doc (surgical edit, doesn't replace entire doc). For multi-tab docs, specify tabId to target a specific tab.",
+    description: "Insert text at a specific index (surgical edit, doesn't replace whole file). Works on Google Docs and text/* files (e.g. text/plain, text/markdown). Index semantics differ by file type: Google Docs use the Docs API's 1-based structural position (includes structural elements); text files use a 0-based character offset into the raw UTF-8 content. For multi-tab Google Docs, specify tabId to target a specific tab — tabId is not supported on text files.",
     inputSchema: {
       type: "object",
       properties: {
-        documentId: { type: "string", description: "The document ID" },
+        documentId: { type: "string", description: "The Google Doc or text file ID" },
         text: { type: "string", description: "Text to insert" },
-        index: { type: "number", description: "Position to insert at (1-based)" },
-        tabId: { type: "string", description: "Optional. Tab ID to insert into (from listDocumentTabs). If omitted, inserts into the first/default tab." }
+        index: { type: "number", description: "Position to insert at. Google Docs: 1-based Docs API structural index. Text files: 0-based character offset into the raw file." },
+        tabId: { type: "string", description: "Optional. Google Docs only — Tab ID to insert into (from listDocumentTabs). If omitted, inserts into the first/default tab. Not supported on text files." }
       },
       required: ["documentId", "text", "index"]
     }
   },
   {
     name: "deleteRange",
-    description: "Delete content between start and end indices in a Google Doc. For multi-tab docs, specify tabId to target a specific tab.",
+    description: "Delete content between start and end indices. Works on Google Docs and text/* files (e.g. text/plain, text/markdown). Index semantics differ by file type: Google Docs use the Docs API's 1-based structural position (includes structural elements); text files use 0-based character offsets into the raw UTF-8 content. For multi-tab Google Docs, specify tabId to target a specific tab — tabId is not supported on text files.",
     inputSchema: {
       type: "object",
       properties: {
-        documentId: { type: "string", description: "The document ID" },
-        startIndex: { type: "number", description: "Start index (1-based, inclusive)" },
-        endIndex: { type: "number", description: "End index (exclusive)" },
-        tabId: { type: "string", description: "Optional. Tab ID to delete from (from listDocumentTabs). If omitted, deletes from the first/default tab." }
+        documentId: { type: "string", description: "The Google Doc or text file ID" },
+        startIndex: { type: "number", description: "Start index (inclusive). Google Docs: 1-based Docs API structural index. Text files: 0-based character offset into the raw file." },
+        endIndex: { type: "number", description: "End index (exclusive). Google Docs: 1-based Docs API structural index. Text files: 0-based character offset into the raw file." },
+        tabId: { type: "string", description: "Optional. Google Docs only — Tab ID to delete from (from listDocumentTabs). If omitted, deletes from the first/default tab. Not supported on text files." }
       },
       required: ["documentId", "startIndex", "endIndex"]
     }
@@ -2175,26 +2176,77 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
       const a = validation.data;
 
-      const location: { index: number; tabId?: string } = { index: a.index };
-      if (a.tabId) location.tabId = a.tabId;
-
-      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-      await docs.documents.batchUpdate({
-        documentId: a.documentId,
-        requestBody: {
-          requests: [{
-            insertText: {
-              location,
-              text: a.text
-            }
-          }]
-        }
+      const fileMeta = await ctx.getDrive().files.get({
+        fileId: a.documentId,
+        fields: 'mimeType, name',
+        supportsAllDrives: true
       });
+      const mimeType = fileMeta.data.mimeType || '';
+      const fileName = fileMeta.data.name || 'unknown';
 
-      return {
-        content: [{ type: "text", text: `Successfully inserted ${a.text.length} characters at index ${a.index}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
-        isError: false
-      };
+      if (mimeType === 'application/vnd.google-apps.document') {
+        const location: { index: number; tabId?: string } = { index: a.index };
+        if (a.tabId) location.tabId = a.tabId;
+
+        const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+        await docs.documents.batchUpdate({
+          documentId: a.documentId,
+          requestBody: {
+            requests: [{
+              insertText: {
+                location,
+                text: a.text
+              }
+            }]
+          }
+        });
+
+        return {
+          content: [{ type: "text", text: `Successfully inserted ${a.text.length} characters at index ${a.index}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
+          isError: false
+        };
+      }
+
+      if (mimeType.startsWith('text/')) {
+        if (a.tabId) {
+          return errorResponse('tabId is not supported for text files');
+        }
+
+        const mediaResponse = await ctx.getDrive().files.get(
+          { fileId: a.documentId, alt: 'media', supportsAllDrives: true },
+          { responseType: 'stream' }
+        );
+
+        const chunks: Buffer[] = [];
+        await new Promise<void>((resolve, reject) => {
+          mediaResponse.data
+            .on('data', (chunk: Buffer) => chunks.push(chunk))
+            .on('end', () => resolve())
+            .on('error', (err: Error) => reject(err));
+        });
+        const content = Buffer.concat(chunks).toString('utf-8');
+
+        if (a.index > content.length) {
+          return errorResponse(`index ${a.index} is beyond end of file (length ${content.length})`);
+        }
+
+        const updated = content.slice(0, a.index) + a.text + content.slice(a.index);
+
+        await ctx.getDrive().files.update({
+          fileId: a.documentId,
+          media: { mimeType, body: updated },
+          supportsAllDrives: true
+        });
+
+        return {
+          content: [{ type: "text", text: `Successfully inserted ${a.text.length} characters at offset ${a.index} in ${fileName}` }],
+          isError: false
+        };
+      }
+
+      return errorResponse(
+        `File "${fileName}" has MIME type "${mimeType}". insertText only supports Google Docs (application/vnd.google-apps.document) and text/* files.`
+      );
     }
 
     case "deleteRange": {
@@ -2208,26 +2260,77 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         return errorResponse("endIndex must be greater than startIndex");
       }
 
-      const range: { startIndex: number; endIndex: number; tabId?: string } = {
-        startIndex: a.startIndex,
-        endIndex: a.endIndex
-      };
-      if (a.tabId) range.tabId = a.tabId;
-
-      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-      await docs.documents.batchUpdate({
-        documentId: a.documentId,
-        requestBody: {
-          requests: [{
-            deleteContentRange: { range }
-          }]
-        }
+      const fileMeta = await ctx.getDrive().files.get({
+        fileId: a.documentId,
+        fields: 'mimeType, name',
+        supportsAllDrives: true
       });
+      const mimeType = fileMeta.data.mimeType || '';
+      const fileName = fileMeta.data.name || 'unknown';
 
-      return {
-        content: [{ type: "text", text: `Successfully deleted content from index ${a.startIndex} to ${a.endIndex}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
-        isError: false
-      };
+      if (mimeType === 'application/vnd.google-apps.document') {
+        const range: { startIndex: number; endIndex: number; tabId?: string } = {
+          startIndex: a.startIndex,
+          endIndex: a.endIndex
+        };
+        if (a.tabId) range.tabId = a.tabId;
+
+        const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+        await docs.documents.batchUpdate({
+          documentId: a.documentId,
+          requestBody: {
+            requests: [{
+              deleteContentRange: { range }
+            }]
+          }
+        });
+
+        return {
+          content: [{ type: "text", text: `Successfully deleted content from index ${a.startIndex} to ${a.endIndex}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
+          isError: false
+        };
+      }
+
+      if (mimeType.startsWith('text/')) {
+        if (a.tabId) {
+          return errorResponse('tabId is not supported for text files');
+        }
+
+        const mediaResponse = await ctx.getDrive().files.get(
+          { fileId: a.documentId, alt: 'media', supportsAllDrives: true },
+          { responseType: 'stream' }
+        );
+
+        const chunks: Buffer[] = [];
+        await new Promise<void>((resolve, reject) => {
+          mediaResponse.data
+            .on('data', (chunk: Buffer) => chunks.push(chunk))
+            .on('end', () => resolve())
+            .on('error', (err: Error) => reject(err));
+        });
+        const content = Buffer.concat(chunks).toString('utf-8');
+
+        if (a.endIndex > content.length) {
+          return errorResponse(`endIndex ${a.endIndex} is beyond end of file (length ${content.length})`);
+        }
+
+        const updated = content.slice(0, a.startIndex) + content.slice(a.endIndex);
+
+        await ctx.getDrive().files.update({
+          fileId: a.documentId,
+          media: { mimeType, body: updated },
+          supportsAllDrives: true
+        });
+
+        return {
+          content: [{ type: "text", text: `Successfully deleted ${a.endIndex - a.startIndex} characters from offset ${a.startIndex} to ${a.endIndex} in ${fileName}` }],
+          isError: false
+        };
+      }
+
+      return errorResponse(
+        `File "${fileName}" has MIME type "${mimeType}". deleteRange only supports Google Docs (application/vnd.google-apps.document) and text/* files.`
+      );
     }
 
     case "readGoogleDoc": {

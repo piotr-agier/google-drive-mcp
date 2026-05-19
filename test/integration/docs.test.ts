@@ -261,6 +261,12 @@ describe('Docs tools', () => {
 
   // --- insertText ---
   describe('insertText', () => {
+    beforeEach(() => {
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({
+        data: { id: 'doc-1', name: 'My Doc', mimeType: 'application/vnd.google-apps.document', parents: ['root'] },
+      }));
+    });
+
     it('happy path', async () => {
       const res = await callTool(ctx.client, 'insertText', { documentId: 'doc-1', text: 'inserted', index: 1 });
       assert.equal(res.isError, false);
@@ -289,6 +295,12 @@ describe('Docs tools', () => {
 
   // --- deleteRange ---
   describe('deleteRange', () => {
+    beforeEach(() => {
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({
+        data: { id: 'doc-1', name: 'My Doc', mimeType: 'application/vnd.google-apps.document', parents: ['root'] },
+      }));
+    });
+
     it('happy path', async () => {
       const res = await callTool(ctx.client, 'deleteRange', { documentId: 'doc-1', startIndex: 1, endIndex: 5 });
       assert.equal(res.isError, false);

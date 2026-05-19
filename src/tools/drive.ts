@@ -58,6 +58,11 @@ const UpdateTextFileSchema = z.object({
   name: z.string().optional()
 });
 
+const ReadTextFileSchema = z.object({
+  fileId: z.string().min(1, "File ID is required"),
+  maxLength: z.number().int().min(1).optional()
+});
+
 const CreateFolderSchema = z.object({
   name: z.string().min(1, "Folder name is required"),
   parent: z.string().optional()
@@ -281,6 +286,18 @@ export const toolDefinitions: ToolDefinition[] = [
         name: { type: "string", description: "New name (.txt or .md)" }
       },
       required: ["fileId", "content"]
+    }
+  },
+  {
+    name: "readTextFile",
+    description: "Read content of a text or markdown file (text/* MIME types). For Google Docs, use readGoogleDoc.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "ID of the file to read" },
+        maxLength: { type: "number", description: "Maximum number of characters to return; content beyond this is truncated" }
+      },
+      required: ["fileId"]
     }
   },
   {
@@ -792,6 +809,60 @@ export async function handleTool(
           type: "text",
           text: `Updated file: ${updatedFile.data.name}\nModified: ${updatedFile.data.modifiedTime}`
         }],
+        isError: false
+      };
+    }
+
+    case "readTextFile": {
+      const validation = ReadTextFileSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const data = validation.data;
+
+      const metadata = await ctx.getDrive().files.get({
+        fileId: data.fileId,
+        fields: 'mimeType, name',
+        supportsAllDrives: true
+      });
+
+      const mimeType = metadata.data.mimeType || '';
+      const fileName = metadata.data.name || 'unknown';
+
+      if (!mimeType.startsWith('text/')) {
+        return errorResponse(
+          `File "${fileName}" has MIME type "${mimeType}", which is not a text/* type. ` +
+          `For Google Docs, use readGoogleDoc instead.`
+        );
+      }
+
+      const mediaResponse = await ctx.getDrive().files.get(
+        { fileId: data.fileId, alt: 'media', supportsAllDrives: true },
+        { responseType: 'stream' }
+      );
+
+      const chunks: Buffer[] = [];
+      await new Promise<void>((resolve, reject) => {
+        mediaResponse.data
+          .on('data', (chunk: Buffer) => chunks.push(chunk))
+          .on('end', () => resolve())
+          .on('error', (err: Error) => reject(err));
+      });
+
+      const fullContent = Buffer.concat(chunks).toString('utf-8');
+      const originalLength = fullContent.length;
+      const truncated = data.maxLength !== undefined && originalLength > data.maxLength;
+      const content = truncated ? fullContent.slice(0, data.maxLength) : fullContent;
+
+      const header =
+        `File: ${fileName}\n` +
+        `MIME type: ${mimeType}\n` +
+        `Length: ${originalLength} characters\n` +
+        `Truncated: ${truncated ? `yes (showing first ${data.maxLength})` : 'no'}\n` +
+        `---\n`;
+
+      return {
+        content: [{ type: "text", text: header + content }],
         isError: false
       };
     }

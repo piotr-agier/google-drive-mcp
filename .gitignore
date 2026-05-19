@@ -38,6 +38,7 @@ Thumbs.db
 
 # Agent/tool config
 .codex/
+.claude/settings.local.json
 
 # Test coverage
 coverage/

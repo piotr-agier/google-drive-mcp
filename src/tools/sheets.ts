@@ -177,6 +177,44 @@ const ListGoogleSheetsSchema = z.object({
   orderBy: z.enum(["name", "modifiedTime", "createdTime"]).optional().default("modifiedTime")
 });
 
+const SetColumnWidthSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  sheetId: z.number().int(),
+  startColumn: z.number().int().min(0),
+  endColumn: z.number().int().min(0),
+  pixelSize: z.number().int().min(0, "pixelSize must be >= 0")
+});
+
+const SetRowHeightSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  sheetId: z.number().int(),
+  startRow: z.number().int().min(0),
+  endRow: z.number().int().min(0),
+  pixelSize: z.number().int().min(0, "pixelSize must be >= 0")
+});
+
+const AutoResizeColumnsSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  sheetId: z.number().int(),
+  startColumn: z.number().int().min(0),
+  endColumn: z.number().int().min(0)
+});
+
+const AutoResizeRowsSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  sheetId: z.number().int(),
+  startRow: z.number().int().min(0),
+  endRow: z.number().int().min(0)
+});
+
+const HideShowDimensionSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  sheetId: z.number().int(),
+  dimension: z.enum(["COLUMNS", "ROWS"]),
+  startIndex: z.number().int().min(0),
+  endIndex: z.number().int().min(0)
+});
+
 // ---------------------------------------------------------------------------
 // Tool Definitions
 // ---------------------------------------------------------------------------
@@ -577,6 +615,94 @@ export const toolDefinitions: ToolDefinition[] = [
         orderBy: { type: "string", description: "Sort order for results", enum: ["name", "modifiedTime", "createdTime"], default: "modifiedTime" }
       },
       required: []
+    }
+  },
+  {
+    name: "setColumnWidth",
+    description: "Set the width (in pixels) of one or more columns in a sheet. Indices are 0-based and the interval is half-open [startColumn, endColumn) — to resize a single column at position 5, pass startColumn: 5, endColumn: 6.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        sheetId: { type: "number", description: "Sheet ID (from getSpreadsheetInfo / listSheets). The default first sheet is usually 0." },
+        startColumn: { type: "number", description: "0-based start column index (inclusive)" },
+        endColumn: { type: "number", description: "0-based end column index (exclusive)" },
+        pixelSize: { type: "number", description: "Column width in pixels (must be >= 0)" }
+      },
+      required: ["spreadsheetId", "sheetId", "startColumn", "endColumn", "pixelSize"]
+    }
+  },
+  {
+    name: "setRowHeight",
+    description: "Set the height (in pixels) of one or more rows in a sheet. Indices are 0-based and the interval is half-open [startRow, endRow) — to resize a single row at position 5, pass startRow: 5, endRow: 6.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        sheetId: { type: "number", description: "Sheet ID (from getSpreadsheetInfo / listSheets). The default first sheet is usually 0." },
+        startRow: { type: "number", description: "0-based start row index (inclusive)" },
+        endRow: { type: "number", description: "0-based end row index (exclusive)" },
+        pixelSize: { type: "number", description: "Row height in pixels (must be >= 0)" }
+      },
+      required: ["spreadsheetId", "sheetId", "startRow", "endRow", "pixelSize"]
+    }
+  },
+  {
+    name: "autoResizeColumns",
+    description: "Auto-size one or more columns to fit their content. Indices are 0-based and the interval is half-open [startColumn, endColumn) — to auto-fit a single column at position 5, pass startColumn: 5, endColumn: 6.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        sheetId: { type: "number", description: "Sheet ID (from getSpreadsheetInfo / listSheets). The default first sheet is usually 0." },
+        startColumn: { type: "number", description: "0-based start column index (inclusive)" },
+        endColumn: { type: "number", description: "0-based end column index (exclusive)" }
+      },
+      required: ["spreadsheetId", "sheetId", "startColumn", "endColumn"]
+    }
+  },
+  {
+    name: "autoResizeRows",
+    description: "Auto-size one or more rows to fit their content. Indices are 0-based and the interval is half-open [startRow, endRow) — to auto-fit a single row at position 5, pass startRow: 5, endRow: 6.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        sheetId: { type: "number", description: "Sheet ID (from getSpreadsheetInfo / listSheets). The default first sheet is usually 0." },
+        startRow: { type: "number", description: "0-based start row index (inclusive)" },
+        endRow: { type: "number", description: "0-based end row index (exclusive)" }
+      },
+      required: ["spreadsheetId", "sheetId", "startRow", "endRow"]
+    }
+  },
+  {
+    name: "hideSheetDimension",
+    description: "Hide a range of columns or rows in a sheet (sets hiddenByUser=true). Indices are 0-based and the interval is half-open [startIndex, endIndex) — to hide a single column/row at position 5, pass startIndex: 5, endIndex: 6.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        sheetId: { type: "number", description: "Sheet ID (from getSpreadsheetInfo / listSheets). The default first sheet is usually 0." },
+        dimension: { type: "string", description: "Which dimension to hide", enum: ["COLUMNS", "ROWS"] },
+        startIndex: { type: "number", description: "0-based start index (inclusive)" },
+        endIndex: { type: "number", description: "0-based end index (exclusive)" }
+      },
+      required: ["spreadsheetId", "sheetId", "dimension", "startIndex", "endIndex"]
+    }
+  },
+  {
+    name: "showSheetDimension",
+    description: "Show (unhide) a range of columns or rows in a sheet (sets hiddenByUser=false). Indices are 0-based and the interval is half-open [startIndex, endIndex) — to unhide a single column/row at position 5, pass startIndex: 5, endIndex: 6.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        sheetId: { type: "number", description: "Sheet ID (from getSpreadsheetInfo / listSheets). The default first sheet is usually 0." },
+        dimension: { type: "string", description: "Which dimension to show", enum: ["COLUMNS", "ROWS"] },
+        startIndex: { type: "number", description: "0-based start index (inclusive)" },
+        endIndex: { type: "number", description: "0-based end index (exclusive)" }
+      },
+      required: ["spreadsheetId", "sheetId", "dimension", "startIndex", "endIndex"]
     }
   }
 ];
@@ -1411,6 +1537,140 @@ export async function handleTool(
         content: [{ type: "text", text: result }],
         isError: false
       };
+    }
+
+    case "setColumnWidth": {
+      const validation = SetColumnWidthSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: a.spreadsheetId,
+        requestBody: {
+          requests: [{
+            updateDimensionProperties: {
+              range: {
+                sheetId: a.sheetId,
+                dimension: 'COLUMNS',
+                startIndex: a.startColumn,
+                endIndex: a.endColumn,
+              },
+              properties: { pixelSize: a.pixelSize },
+              fields: 'pixelSize',
+            },
+          }],
+        },
+      });
+
+      return { content: [{ type: 'text', text: `Set column width to ${a.pixelSize}px for columns [${a.startColumn}, ${a.endColumn}) on sheet ${a.sheetId}.` }], isError: false };
+    }
+
+    case "setRowHeight": {
+      const validation = SetRowHeightSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: a.spreadsheetId,
+        requestBody: {
+          requests: [{
+            updateDimensionProperties: {
+              range: {
+                sheetId: a.sheetId,
+                dimension: 'ROWS',
+                startIndex: a.startRow,
+                endIndex: a.endRow,
+              },
+              properties: { pixelSize: a.pixelSize },
+              fields: 'pixelSize',
+            },
+          }],
+        },
+      });
+
+      return { content: [{ type: 'text', text: `Set row height to ${a.pixelSize}px for rows [${a.startRow}, ${a.endRow}) on sheet ${a.sheetId}.` }], isError: false };
+    }
+
+    case "autoResizeColumns": {
+      const validation = AutoResizeColumnsSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: a.spreadsheetId,
+        requestBody: {
+          requests: [{
+            autoResizeDimensions: {
+              dimensions: {
+                sheetId: a.sheetId,
+                dimension: 'COLUMNS',
+                startIndex: a.startColumn,
+                endIndex: a.endColumn,
+              },
+            },
+          }],
+        },
+      });
+
+      return { content: [{ type: 'text', text: `Auto-resized columns [${a.startColumn}, ${a.endColumn}) on sheet ${a.sheetId}.` }], isError: false };
+    }
+
+    case "autoResizeRows": {
+      const validation = AutoResizeRowsSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: a.spreadsheetId,
+        requestBody: {
+          requests: [{
+            autoResizeDimensions: {
+              dimensions: {
+                sheetId: a.sheetId,
+                dimension: 'ROWS',
+                startIndex: a.startRow,
+                endIndex: a.endRow,
+              },
+            },
+          }],
+        },
+      });
+
+      return { content: [{ type: 'text', text: `Auto-resized rows [${a.startRow}, ${a.endRow}) on sheet ${a.sheetId}.` }], isError: false };
+    }
+
+    case "hideSheetDimension":
+    case "showSheetDimension": {
+      const validation = HideShowDimensionSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+      const hide = toolName === 'hideSheetDimension';
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: a.spreadsheetId,
+        requestBody: {
+          requests: [{
+            updateDimensionProperties: {
+              range: {
+                sheetId: a.sheetId,
+                dimension: a.dimension,
+                startIndex: a.startIndex,
+                endIndex: a.endIndex,
+              },
+              properties: { hiddenByUser: hide },
+              fields: 'hiddenByUser',
+            },
+          }],
+        },
+      });
+
+      const verb = hide ? 'Hid' : 'Showed';
+      return { content: [{ type: 'text', text: `${verb} ${a.dimension.toLowerCase()} [${a.startIndex}, ${a.endIndex}) on sheet ${a.sheetId}.` }], isError: false };
     }
 
     default:

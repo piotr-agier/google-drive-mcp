@@ -345,6 +345,96 @@ describe('Sheets tools', () => {
     });
   });
 
+  // --- dimension tools (setColumnWidth, setRowHeight, autoResize*, hide/showSheetDimension) ---
+  describe('dimension tools', () => {
+    it('setColumnWidth happy path', async () => {
+      const res = await callTool(ctx.client, 'setColumnWidth', {
+        spreadsheetId: 'sheet-1', sheetId: 0, startColumn: 0, endColumn: 3, pixelSize: 120,
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Set column width'));
+    });
+
+    it('setColumnWidth rejects negative pixelSize', async () => {
+      const res = await callTool(ctx.client, 'setColumnWidth', {
+        spreadsheetId: 'sheet-1', sheetId: 0, startColumn: 0, endColumn: 3, pixelSize: -1,
+      });
+      assert.equal(res.isError, true);
+    });
+
+    it('setColumnWidth validation error', async () => {
+      const res = await callTool(ctx.client, 'setColumnWidth', {});
+      assert.equal(res.isError, true);
+    });
+
+    it('setRowHeight happy path', async () => {
+      const res = await callTool(ctx.client, 'setRowHeight', {
+        spreadsheetId: 'sheet-1', sheetId: 0, startRow: 0, endRow: 5, pixelSize: 30,
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Set row height'));
+    });
+
+    it('setRowHeight validation error', async () => {
+      const res = await callTool(ctx.client, 'setRowHeight', {});
+      assert.equal(res.isError, true);
+    });
+
+    it('autoResizeColumns happy path', async () => {
+      const res = await callTool(ctx.client, 'autoResizeColumns', {
+        spreadsheetId: 'sheet-1', sheetId: 0, startColumn: 0, endColumn: 3,
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Auto-resized columns'));
+    });
+
+    it('autoResizeColumns validation error', async () => {
+      const res = await callTool(ctx.client, 'autoResizeColumns', {});
+      assert.equal(res.isError, true);
+    });
+
+    it('autoResizeRows happy path', async () => {
+      const res = await callTool(ctx.client, 'autoResizeRows', {
+        spreadsheetId: 'sheet-1', sheetId: 0, startRow: 0, endRow: 5,
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Auto-resized rows'));
+    });
+
+    it('autoResizeRows validation error', async () => {
+      const res = await callTool(ctx.client, 'autoResizeRows', {});
+      assert.equal(res.isError, true);
+    });
+
+    it('hideSheetDimension happy path (columns)', async () => {
+      const res = await callTool(ctx.client, 'hideSheetDimension', {
+        spreadsheetId: 'sheet-1', sheetId: 0, dimension: 'COLUMNS', startIndex: 2, endIndex: 4,
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Hid columns'));
+    });
+
+    it('showSheetDimension happy path (rows)', async () => {
+      const res = await callTool(ctx.client, 'showSheetDimension', {
+        spreadsheetId: 'sheet-1', sheetId: 0, dimension: 'ROWS', startIndex: 2, endIndex: 4,
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Showed rows'));
+    });
+
+    it('hideSheetDimension validation error', async () => {
+      const res = await callTool(ctx.client, 'hideSheetDimension', {});
+      assert.equal(res.isError, true);
+    });
+
+    it('hideSheetDimension rejects invalid dimension enum', async () => {
+      const res = await callTool(ctx.client, 'hideSheetDimension', {
+        spreadsheetId: 'sheet-1', sheetId: 0, dimension: 'CELLS', startIndex: 0, endIndex: 1,
+      });
+      assert.equal(res.isError, true);
+    });
+  });
+
   // --- listGoogleSheets ---
   describe('listGoogleSheets', () => {
     it('happy path', async () => {

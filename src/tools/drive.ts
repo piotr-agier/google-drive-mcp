@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { drive_v3 } from 'googleapis';
 import { existsSync, statSync, createReadStream } from 'fs';
+import { Readable } from 'stream';
 import { mkdtemp, readFile, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { basename, extname, join } from 'path';
@@ -111,12 +112,17 @@ const UnlockFileSchema = z.object({
 });
 
 const UploadFileSchema = z.object({
-  localPath: z.string().min(1, "Local file path is required"),
+  localPath: z.string().min(1).optional(),
+  contentBase64: z.string().min(1).optional(),
+  fileId: z.string().min(1).optional(),
   name: z.string().optional(),
   parentFolderId: z.string().optional(),
   mimeType: z.string().optional(),
   convertToGoogleFormat: z.boolean().optional()
-});
+}).refine(
+  (data) => !!data.localPath !== !!data.contentBase64,
+  { message: "Provide exactly one of localPath or contentBase64" }
+);
 
 const DownloadFileSchema = z.object({
   fileId: z.string().min(1, "File ID is required"),
@@ -368,17 +374,19 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "uploadFile",
-    description: "Upload a local file (any type: image, audio, video, PDF, etc.) to Google Drive",
+    description: "Upload a file (any type: image, audio, video, PDF, etc.) to Google Drive, either from a local path on the server or from base64-encoded content. When fileId is provided, uploads the content as a new version of that existing file (in-place update) instead of creating a new file.",
     inputSchema: {
       type: "object",
       properties: {
-        localPath: { type: "string", description: "Absolute path to the local file to upload" },
-        name: { type: "string", description: "File name in Drive (defaults to local filename)" },
-        parentFolderId: { type: "string", description: "Parent folder ID or path (e.g., '/Work/Projects'). Creates folders if needed. Defaults to root." },
+        localPath: { type: "string", description: "Absolute path to the local file to upload (on the machine running this server). Provide either localPath or contentBase64." },
+        contentBase64: { type: "string", description: "Base64-encoded file content. Alternative to localPath for clients without access to the server's filesystem. Provide either localPath or contentBase64." },
+        fileId: { type: "string", description: "ID of an existing Drive file to update in place: the uploaded content becomes a new version of this file (same ID, revision history preserved). Omit to create a new file." },
+        name: { type: "string", description: "File name in Drive (defaults to local filename; required when creating a new file from contentBase64)" },
+        parentFolderId: { type: "string", description: "Parent folder ID or path (e.g., '/Work/Projects'). Creates folders if needed. Defaults to root. Not allowed with fileId (use moveItem to move a file)." },
         mimeType: { type: "string", description: "MIME type (auto-detected from extension if omitted)" },
-        convertToGoogleFormat: { type: "boolean", description: "Convert uploaded file to Google Workspace format (e.g., .docx to Google Doc, .xlsx to Google Sheet, .pptx to Google Slides). Defaults to false." }
+        convertToGoogleFormat: { type: "boolean", description: "Convert uploaded file to Google Workspace format (e.g., .docx to Google Doc, .xlsx to Google Sheet, .pptx to Google Slides). Defaults to false. Not allowed with fileId." }
       },
-      required: ["localPath"]
+      required: []
     }
   },
   {
@@ -1184,16 +1192,52 @@ export async function handleTool(
       }
       const data = validation.data;
 
-      // Validate local file exists
-      if (!existsSync(data.localPath)) {
-        return errorResponse(`File not found: ${data.localPath}`);
+      if (data.fileId && data.convertToGoogleFormat) {
+        return errorResponse('convertToGoogleFormat cannot be combined with fileId (in-place update).');
+      }
+      if (data.fileId && data.parentFolderId) {
+        return errorResponse('parentFolderId cannot be combined with fileId (in-place update). Use moveItem to move a file.');
       }
 
-      const stats = statSync(data.localPath);
-      const fileName = data.name || data.localPath.split(/[\\/]/).pop() || 'upload';
+      let contentBuffer: Buffer | undefined;
+      let contentSize: number;
+      if (data.localPath) {
+        // Validate local file exists
+        if (!existsSync(data.localPath)) {
+          return errorResponse(`File not found: ${data.localPath}`);
+        }
+        contentSize = statSync(data.localPath).size;
+      } else {
+        contentBuffer = Buffer.from(data.contentBase64!, 'base64');
+        contentSize = contentBuffer.length;
+      }
+      const mediaBody = () => contentBuffer ? Readable.from(contentBuffer) : createReadStream(data.localPath!);
+
+      const fileName = data.name || data.localPath?.split(/[\\/]/).pop() || '';
+      if (!fileName && !data.fileId) {
+        return errorResponse('name is required when creating a new file from contentBase64.');
+      }
       const ext = fileName.split('.').pop()?.toLowerCase() || '';
-      const detectedMime = data.mimeType || BINARY_MIME_TYPES[ext] || 'application/octet-stream';
-      const parentId = await ctx.resolveFolderId(data.parentFolderId);
+      let detectedMime = data.mimeType || BINARY_MIME_TYPES[ext] || '';
+      if (!detectedMime && data.fileId) {
+        // In-place update with no MIME hint: reuse the existing file's MIME type
+        const existing = await ctx.getDrive().files.get({
+          fileId: data.fileId,
+          fields: 'mimeType',
+          supportsAllDrives: true
+        });
+        const existingMime = existing.data.mimeType || '';
+        if (existingMime.startsWith('application/vnd.google-apps')) {
+          return errorResponse(
+            `File ${data.fileId} is a Google Workspace file (${existingMime}). ` +
+            `Specify mimeType (e.g. the Office format of the uploaded content) so Drive can convert it.`
+          );
+        }
+        detectedMime = existingMime;
+      }
+      if (!detectedMime) {
+        detectedMime = 'application/octet-stream';
+      }
 
       // Google Workspace conversion mapping
       const GOOGLE_FORMAT_MAP: Record<string, string> = {
@@ -1216,34 +1260,55 @@ export async function handleTool(
 
       const uploadName = targetMimeType ? fileName.replace(/\.[^.]+$/, '') : fileName;
 
-      ctx.log('Uploading file', { localPath: data.localPath, name: uploadName, mimeType: detectedMime, convertToGoogle: !!targetMimeType, size: stats.size });
+      ctx.log('Uploading file', { localPath: data.localPath, fileId: data.fileId, name: uploadName, mimeType: detectedMime, convertToGoogle: !!targetMimeType, size: contentSize });
 
-      const requestBody: any = {
-        name: uploadName,
-        parents: [parentId]
-      };
-      if (targetMimeType) {
-        requestBody.mimeType = targetMimeType;
+      let file;
+      if (data.fileId) {
+        // In-place update: upload content as a new version of the existing file
+        const requestBody: any = {};
+        if (data.name) {
+          requestBody.name = data.name;
+        }
+        file = await ctx.getDrive().files.update({
+          fileId: data.fileId,
+          requestBody,
+          media: {
+            mimeType: detectedMime,
+            body: mediaBody()
+          },
+          fields: 'id, name, size, mimeType, webViewLink',
+          supportsAllDrives: true
+        });
+      } else {
+        const parentId = await ctx.resolveFolderId(data.parentFolderId);
+        const requestBody: any = {
+          name: uploadName,
+          parents: [parentId]
+        };
+        if (targetMimeType) {
+          requestBody.mimeType = targetMimeType;
+        }
+        file = await ctx.getDrive().files.create({
+          requestBody,
+          media: {
+            mimeType: detectedMime,
+            body: mediaBody()
+          },
+          fields: 'id, name, size, mimeType, webViewLink',
+          supportsAllDrives: true
+        });
       }
 
-      const file = await ctx.getDrive().files.create({
-        requestBody,
-        media: {
-          mimeType: detectedMime,
-          body: createReadStream(data.localPath)
-        },
-        fields: 'id, name, size, mimeType, webViewLink',
-        supportsAllDrives: true
-      });
-
-      ctx.log('File uploaded successfully', { fileId: file.data?.id });
+      ctx.log('File uploaded successfully', { fileId: file.data?.id, updated: !!data.fileId });
       return {
         content: [{
           type: "text",
           text: [
-            `Uploaded: ${file.data?.name || fileName}`,
+            data.fileId
+              ? `Updated (new version): ${file.data?.name || fileName}`
+              : `Uploaded: ${file.data?.name || fileName}`,
             `ID: ${file.data?.id || 'unknown'}`,
-            `Size: ${file.data?.size || stats.size} bytes`,
+            `Size: ${file.data?.size || contentSize} bytes`,
             `Type: ${file.data?.mimeType || detectedMime}`,
             file.data?.webViewLink ? `Link: ${file.data.webViewLink}` : ''
           ].filter(Boolean).join('\n')

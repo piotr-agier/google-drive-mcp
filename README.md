@@ -523,9 +523,11 @@ When binding to `127.0.0.1` (default), DNS rebinding protection is automatically
 - **authListScopes** - Show configured/requested scopes, granted scopes, missing scopes, and presets
 - **authTestFileAccess** - Test Drive access (optionally against a specific `fileId`)
 
-- **uploadFile** - Upload a local file (any type: image, audio, video, PDF, etc.) to Google Drive
-  - `localPath`: Absolute path to the local file
-  - `name`: File name in Drive (optional, defaults to local filename)
+- **uploadFile** - Upload a file (any type: image, audio, video, PDF, etc.) to Google Drive, either from a local path or from base64-encoded content. Can also upload the content as a new version of an existing file (in-place update)
+  - `localPath`: Absolute path to the local file (provide either `localPath` or `contentBase64`)
+  - `contentBase64`: Base64-encoded file content — alternative to `localPath`, useful for remote/HTTP deployments where the client has no access to the server's filesystem (optional)
+  - `fileId`: ID of an existing file to update in place — the uploaded content becomes a new version of that file, keeping its ID, links, and revision history (optional; omit to create a new file. Not combinable with `parentFolderId` or `convertToGoogleFormat`)
+  - `name`: File name in Drive (optional, defaults to local filename; required when creating a new file from `contentBase64`)
   - `parentFolderId`: Parent folder ID or path (optional, e.g., '/Work/Projects')
   - `mimeType`: MIME type (optional, auto-detected from extension)
   - `convertToGoogleFormat`: Convert uploaded file to native Google Workspace format (optional, default: false). When enabled, Office files are automatically converted:

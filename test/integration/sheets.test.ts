@@ -288,6 +288,37 @@ describe('Sheets tools', () => {
       assert.ok(res.content[0].text.includes('Added data validation'));
     });
 
+    it('addDataValidation ONE_OF_RANGE happy path prepends "="', async () => {
+      setupSheetsMock();
+      const res = await callTool(ctx.client, 'addDataValidation', {
+        spreadsheetId: 'sheet-1', range: 'Sheet1!A1:A10', conditionType: 'ONE_OF_RANGE', values: ['Reference!A2:A50'],
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('Added data validation (ONE_OF_RANGE)'));
+      const calls = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate');
+      const rule = calls[0].args[0].requestBody.requests[0].setDataValidation.rule;
+      assert.equal(rule.condition.type, 'ONE_OF_RANGE');
+      assert.deepEqual(rule.condition.values, [{ userEnteredValue: '=Reference!A2:A50' }]);
+    });
+
+    it('addDataValidation ONE_OF_RANGE keeps explicit "="', async () => {
+      setupSheetsMock();
+      const res = await callTool(ctx.client, 'addDataValidation', {
+        spreadsheetId: 'sheet-1', range: 'Sheet1!A1:A10', conditionType: 'ONE_OF_RANGE', values: ['=Reference!A2:A50'],
+      });
+      assert.equal(res.isError, false);
+      const calls = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate');
+      const rule = calls[0].args[0].requestBody.requests[0].setDataValidation.rule;
+      assert.deepEqual(rule.condition.values, [{ userEnteredValue: '=Reference!A2:A50' }]);
+    });
+
+    it('addDataValidation ONE_OF_RANGE rejects multiple values', async () => {
+      const res = await callTool(ctx.client, 'addDataValidation', {
+        spreadsheetId: 'sheet-1', range: 'Sheet1!A1:A10', conditionType: 'ONE_OF_RANGE', values: ['Ref!A2:A50', 'Ref!B2:B50'],
+      });
+      assert.equal(res.isError, true);
+    });
+
     it('addDataValidation requires values', async () => {
       const res = await callTool(ctx.client, 'addDataValidation', {
         spreadsheetId: 'sheet-1', range: 'Sheet1!A1:A10', conditionType: 'NUMBER_GREATER',

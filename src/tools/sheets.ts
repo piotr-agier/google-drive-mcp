@@ -149,11 +149,14 @@ const DeleteSheetSchema = z.object({
 const AddDataValidationSchema = z.object({
   spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
   range: z.string().min(1, "Range is required"),
-  conditionType: z.enum(["ONE_OF_LIST", "NUMBER_GREATER", "NUMBER_LESS", "TEXT_CONTAINS"]),
+  conditionType: z.enum(["ONE_OF_LIST", "ONE_OF_RANGE", "NUMBER_GREATER", "NUMBER_LESS", "TEXT_CONTAINS"]),
   values: z.array(z.string()).min(1, "At least one value is required"),
   strict: z.boolean().optional().default(true),
   showCustomUi: z.boolean().optional().default(true)
-});
+}).refine(
+  a => a.conditionType !== "ONE_OF_RANGE" || a.values.length === 1,
+  { message: "ONE_OF_RANGE takes exactly one value: the source range (e.g. 'Reference!A2:A50')" }
+);
 
 const ProtectRangeSchema = z.object({
   spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
@@ -528,8 +531,8 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         spreadsheetId: { type: "string", description: "Spreadsheet ID" },
         range: { type: "string", description: "A1 range" },
-        conditionType: { type: "string", enum: ["ONE_OF_LIST", "NUMBER_GREATER", "NUMBER_LESS", "TEXT_CONTAINS"], description: "Validation condition type" },
-        values: { type: "array", items: { type: "string" }, description: "Condition values (e.g. list items, threshold)" },
+        conditionType: { type: "string", enum: ["ONE_OF_LIST", "ONE_OF_RANGE", "NUMBER_GREATER", "NUMBER_LESS", "TEXT_CONTAINS"], description: "Validation condition type. ONE_OF_RANGE creates a dropdown sourced from a cell range in the same spreadsheet, so the list can be maintained in one place (or imported from a master sheet via IMPORTRANGE)." },
+        values: { type: "array", items: { type: "string" }, description: "Condition values (e.g. list items, threshold). For ONE_OF_RANGE: exactly one value, the source range in A1 notation (e.g. 'Reference!A2:A50'); a leading '=' is added automatically if omitted." },
         strict: { type: "boolean", description: "Reject invalid values" },
         showCustomUi: { type: "boolean", description: "Show dropdown/custom UI" }
       },
@@ -1279,7 +1282,11 @@ export async function handleTool(
       const gridRange = await resolveGridRange(sheets, a.spreadsheetId, a.range);
       if (typeof gridRange === 'string') return errorResponse(gridRange);
 
-      const conditionValues = a.values.map(v => ({ userEnteredValue: v }));
+      // ONE_OF_RANGE expects a single range formula (leading "="); accept plain
+      // A1 notation and normalise so callers don't need to know the quirk.
+      const conditionValues = a.conditionType === "ONE_OF_RANGE"
+        ? a.values.map(v => ({ userEnteredValue: v.startsWith("=") ? v : `=${v}` }))
+        : a.values.map(v => ({ userEnteredValue: v }));
 
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId: a.spreadsheetId,

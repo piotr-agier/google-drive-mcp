@@ -792,8 +792,8 @@ When binding to `127.0.0.1` (default), DNS rebinding protection is automatically
 - **addDataValidation** - Add data validation rules to a range
   - `spreadsheetId`: Spreadsheet ID
   - `range`: A1 range (e.g., `Sheet1!A1:A10`)
-  - `conditionType`: `ONE_OF_LIST`, `NUMBER_GREATER`, `NUMBER_LESS`, or `TEXT_CONTAINS`
-  - `values`: Condition values (e.g. list items, threshold)
+  - `conditionType`: `ONE_OF_LIST`, `ONE_OF_RANGE`, `NUMBER_GREATER`, `NUMBER_LESS`, or `TEXT_CONTAINS`
+  - `values`: Condition values (e.g. list items, threshold). For `ONE_OF_RANGE`: exactly one value, the source range in A1 notation (e.g. `Reference!A2:A50`); a leading `=` is added automatically if omitted
   - `strict`: Reject invalid values (optional, default: `true`)
   - `showCustomUi`: Show dropdown/custom UI (optional, default: `true`)
 

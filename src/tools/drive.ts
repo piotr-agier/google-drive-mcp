@@ -1209,7 +1209,14 @@ export async function handleTool(
         }
         contentSize = statSync(data.localPath).size;
       } else {
-        contentBuffer = Buffer.from(data.contentBase64!, 'base64');
+        // Node's base64 decoder silently drops invalid characters rather than
+        // throwing, so validate the payload before decoding to avoid uploading
+        // truncated/empty content as a "success".
+        const b64 = data.contentBase64!.replace(/\s/g, '');
+        if (!b64 || b64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(b64)) {
+          return errorResponse('contentBase64 is not valid base64-encoded content.');
+        }
+        contentBuffer = Buffer.from(b64, 'base64');
         contentSize = contentBuffer.length;
       }
       const mediaBody = () => contentBuffer ? Readable.from(contentBuffer) : createReadStream(data.localPath!);
@@ -1263,9 +1270,11 @@ export async function handleTool(
 
       ctx.log('Uploading file', { localPath: data.localPath, fileId: data.fileId, name: uploadName, mimeType: detectedMime, convertToGoogle: !!targetMimeType, size: contentSize });
 
-      let file;
+      let file: { data?: drive_v3.Schema$File };
       if (data.fileId) {
-        // In-place update: upload content as a new version of the existing file
+        // In-place update: upload content as a new version of the existing file.
+        // The stored file's mimeType is intentionally left unchanged (new-version
+        // semantics, not a type change) — only the content/revision is replaced.
         const requestBody: any = {};
         if (data.name) {
           requestBody.name = data.name;

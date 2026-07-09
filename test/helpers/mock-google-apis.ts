@@ -29,10 +29,28 @@ export class CallTracker {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+// The real Google API reads the upload's media.body stream. Mirror that here so a
+// createReadStream (or any Readable) passed as media.body is fully consumed and closed
+// before the call resolves — otherwise a stream over a temp fixture can open the file
+// after the test deleted it, surfacing as async-activity-after-test-end.
+async function drainMediaBody(args: any[]) {
+  for (const a of args) {
+    const body = a?.media?.body;
+    if (body && typeof body.resume === 'function' && typeof body.on === 'function') {
+      await new Promise<void>((resolve) => {
+        body.on('end', resolve);
+        body.on('error', resolve);
+        body.resume();
+      });
+    }
+  }
+}
+
 function stub(tracker: CallTracker, name: string, defaultReturn: any = {}) {
   let impl: ((...a: any[]) => any) | null = null;
   const fn = async (...args: any[]) => {
     tracker.record(name, args);
+    await drainMediaBody(args);
     if (impl) return impl(...args);
     return { data: typeof defaultReturn === 'function' ? defaultReturn() : defaultReturn };
   };

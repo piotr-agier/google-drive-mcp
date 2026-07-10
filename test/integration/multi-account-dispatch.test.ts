@@ -118,4 +118,30 @@ describe('Multi-account dispatch routing', () => {
       `dispatch should not have built a drive service for the rejected call, saw: ${JSON.stringify(markers)}`,
     );
   });
+
+  it('rejects an array account argument instead of silently routing to the default', async () => {
+    // The resolver supports arrays only for a not-yet-wired fanout; coercing the
+    // array to the default would return partial results. It must error instead.
+    const result = await callTool(ctx.client, 'search', {
+      query: 'q',
+      account: ['alpha', 'beta'] as unknown as string,
+    });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /single account alias|one call per account/);
+    // Threw before dispatch — no drive service built for either account.
+    const markers = authCalls.map((c) => c.marker).filter((m) => m !== undefined);
+    assert.ok(
+      !markers.includes('alpha-client') && !markers.includes('beta-client'),
+      `array-account call should not have built any drive service, saw: ${JSON.stringify(markers)}`,
+    );
+  });
+
+  it('rejects a non-string (number) account argument', async () => {
+    const result = await callTool(ctx.client, 'search', {
+      query: 'q',
+      account: 42 as unknown as string,
+    });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /single account alias|one call per account/);
+  });
 });

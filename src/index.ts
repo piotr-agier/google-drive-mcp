@@ -455,8 +455,22 @@ function withAccountParam(def: { name: string; description: string; inputSchema:
 }
 
 function normalizeAccountArg(raw: unknown): string | undefined {
-  if (typeof raw === 'string' && raw.trim().length > 0) return raw.trim();
-  return undefined;
+  // `null`/`undefined`/empty → "not provided" (resolve against the default).
+  // Check null first: `typeof null === 'object'` would otherwise fall into the
+  // throw below.
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== 'string') {
+    // An array/object silently coerced to the default would route to the wrong
+    // account and return partial results. Fail loudly instead (fanout dispatch
+    // is not yet supported — see the resolver's Phase-3 notes).
+    throw new Error(
+      `The 'account' argument must be a single account alias (a string), but received ` +
+        `${Array.isArray(raw) ? 'an array' : `a ${typeof raw}`}. Targeting multiple ` +
+        `accounts in one call is not supported — make one call per account.`,
+    );
+  }
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function stripAccountArg(args: Record<string, unknown>): Record<string, unknown> {
@@ -540,7 +554,7 @@ async function buildToolContext(
 // SERVER FACTORY
 // -----------------------------------------------------------------------------
 
-function createMcpServer(sessionId: string = STDIO_SESSION_ID, config: RuntimeConfig = runtimeConfig): Server {
+function createMcpServer(config: RuntimeConfig = runtimeConfig): Server {
   const resourcesEnabled = !config.disableResources;
   if (!resourcesEnabled) {
     log('Resources capability disabled via GOOGLE_DRIVE_MCP_DISABLE_RESOURCES / --no-resources');
@@ -569,10 +583,16 @@ function createMcpServer(sessionId: string = STDIO_SESSION_ID, config: RuntimeCo
     };
   });
 
-  s.setRequestHandler(CallToolRequestSchema, async (request) => {
+  s.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     await ensureAuthSystem();
     const toolName = request.params.name;
     const rawArgs = request.params.arguments ?? {};
+    // Resolve per-session state against the transport's real session id — the
+    // Mcp-Session-Id on HTTP (one server per session), or the 'stdio' sentinel
+    // when the transport has none (stdio / in-memory). Each HTTP session must
+    // not share the 'stdio' key, or per-session defaults would leak across
+    // clients.
+    const sessionId = extra?.sessionId ?? STDIO_SESSION_ID;
     log('Handling tool request', { tool: toolName });
 
     try {

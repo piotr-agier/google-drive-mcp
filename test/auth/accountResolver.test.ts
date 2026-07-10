@@ -193,6 +193,67 @@ test('resolver: session default skipped if scopes insufficient', async () => {
   assert.equal(t.resolutionReason, 'global-default');
 });
 
+test('resolver: scope-short global default errors instead of silently routing elsewhere (write)', async () => {
+  // default 'personal' lacks drive; 'work' has it. A bare write must NOT be
+  // silently rerouted to 'work' — surface the user's configured default instead.
+  const { resolver } = await buildResolver(
+    [makeRecord('personal', SCOPE_READONLY), makeRecord('work', SCOPE_DRIVE)],
+    'personal',
+  );
+  await assert.rejects(
+    () =>
+      resolver.resolve(undefined, 'write', {
+        sessionId: STDIO_SESSION_ID,
+        acceptableScopes: [SCOPE_DRIVE],
+      }),
+    (err: Error) => {
+      assert.match(err.message, /Account 'personal' is connected but lacks the required scope/);
+      assert.match(err.message, /manage_accounts add personal/);
+      // Must name the configured default, not the substitute account.
+      assert.doesNotMatch(err.message, /\bwork\b/);
+      return true;
+    },
+  );
+});
+
+test('resolver: scope-short default also errors for reads (uniform behavior)', async () => {
+  const { resolver } = await buildResolver(
+    [makeRecord('personal', SCOPE_READONLY), makeRecord('work', SCOPE_DRIVE)],
+    'personal',
+  );
+  await assert.rejects(
+    () =>
+      resolver.resolve(undefined, 'read', {
+        sessionId: STDIO_SESSION_ID,
+        acceptableScopes: [SCOPE_DRIVE],
+      }),
+    /Account 'personal' is connected but lacks the required scope/,
+  );
+});
+
+test('resolver: scope-short session default errors, naming the session alias', async () => {
+  // No global default; the session default 'personal' lacks drive while 'work'
+  // has it. Must error naming 'personal' (step-2 recording), not route to 'work'.
+  const { resolver, sessions } = await buildResolver([
+    makeRecord('personal', SCOPE_READONLY),
+    makeRecord('work', SCOPE_DRIVE),
+  ]);
+  const sid = 'session-scope-short';
+  sessions.getOrCreate(sid).defaultAccountAlias = 'personal';
+  await assert.rejects(
+    () =>
+      resolver.resolve(undefined, 'write', {
+        sessionId: sid,
+        acceptableScopes: [SCOPE_DRIVE],
+      }),
+    (err: Error) => {
+      assert.match(err.message, /Account 'personal' is connected but lacks the required scope/);
+      assert.doesNotMatch(err.message, /\bwork\b/);
+      return true;
+    },
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Eligibility
 // ---------------------------------------------------------------------------

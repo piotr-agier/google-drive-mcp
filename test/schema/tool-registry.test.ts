@@ -5,7 +5,7 @@ import { setupTestServer, type TestContext } from '../helpers/setup-server.js';
 const EXPECTED_TOOL_COUNT = 108;
 
 const EXPECTED_TOOLS = [
-  'search', 'createTextFile', 'updateTextFile', 'createFolder', 'listFolder', 'listSharedDrives',
+  'search', 'createTextFile', 'updateTextFile', 'readTextFile', 'createFolder', 'listFolder', 'listSharedDrives',
   'deleteItem', 'renameItem', 'moveItem',
   'createGoogleDoc', 'createDocFromHTML', 'updateGoogleDoc', 'insertText', 'deleteRange',
   'readGoogleDoc', 'readGoogleDocPaginated', 'listDocumentTabs', 'applyTextStyle', 'applyParagraphStyle', 'formatGoogleDocText', 'formatGoogleDocParagraph', 'createParagraphBullets', 'findAndReplaceInDoc',

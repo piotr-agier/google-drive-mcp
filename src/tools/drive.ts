@@ -9,7 +9,8 @@ import pdfLib from 'pdf-lib';
 const { PDFDocument } = pdfLib;
 import type { ToolDefinition, ToolContext, ToolResult } from '../types.js';
 import { errorResponse } from '../types.js';
-import { escapeDriveQuery, getMimeTypeFromFilename, TEXT_MIME_TYPES } from '../utils.js';
+import { escapeDriveQuery, getMimeTypeFromFilename, isTextMime, TEXT_MIME_TYPES } from '../utils.js';
+import { downloadTextContent } from './text-content.js';
 import { downloadDriveFile, GOOGLE_WORKSPACE_EXPORT_FORMATS } from '../download-file.js';
 import { getSecureTokenPath } from '../auth/utils.js';
 import { SCOPE_ALIASES, SCOPE_PRESETS, resolveOAuthScopes } from '../auth/scopes.js';
@@ -297,12 +298,12 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "readTextFile",
-    description: "Read content of a text or markdown file (text/* MIME types). For Google Docs, use readGoogleDoc.",
+    description: "Read content of a text file (any text/* MIME type, e.g. text/plain, text/markdown, text/csv). For Google Docs, use readGoogleDoc.",
     inputSchema: {
       type: "object",
       properties: {
         fileId: { type: "string", description: "ID of the file to read" },
-        maxLength: { type: "number", description: "Maximum number of characters to return; content beyond this is truncated" }
+        maxLength: { type: "number", description: "Maximum number of characters (Unicode code points) to return; content beyond this is truncated" }
       },
       required: ["fileId"]
     }
@@ -791,8 +792,8 @@ export async function handleTool(
       });
 
       const currentMimeType = existingFile.data.mimeType || 'text/plain';
-      if (!Object.values(TEXT_MIME_TYPES).includes(currentMimeType)) {
-        return errorResponse("File is not a text or markdown file.");
+      if (!isTextMime(currentMimeType)) {
+        return errorResponse("File is not a text file (expected a text/* MIME type).");
       }
 
       const updateMetadata: { name?: string; mimeType?: string } = {};
@@ -838,30 +839,21 @@ export async function handleTool(
       const mimeType = metadata.data.mimeType || '';
       const fileName = metadata.data.name || 'unknown';
 
-      if (!mimeType.startsWith('text/')) {
+      if (!isTextMime(mimeType)) {
         return errorResponse(
           `File "${fileName}" has MIME type "${mimeType}", which is not a text/* type. ` +
           `For Google Docs, use readGoogleDoc instead.`
         );
       }
 
-      const mediaResponse = await ctx.getDrive().files.get(
-        { fileId: data.fileId, alt: 'media', supportsAllDrives: true },
-        { responseType: 'stream' }
-      );
-
-      const chunks: Buffer[] = [];
-      await new Promise<void>((resolve, reject) => {
-        mediaResponse.data
-          .on('data', (chunk: Buffer) => chunks.push(chunk))
-          .on('end', () => resolve())
-          .on('error', (err: Error) => reject(err));
-      });
-
-      const fullContent = Buffer.concat(chunks).toString('utf-8');
-      const originalLength = fullContent.length;
+      const fullContent = await downloadTextContent(ctx.getDrive(), data.fileId);
+      // Length/truncation are measured in Unicode code points (whole characters),
+      // so truncation never splits a surrogate pair and the reported length matches
+      // the 0-based code-point offsets used by insertText/deleteRange.
+      const codePoints = Array.from(fullContent);
+      const originalLength = codePoints.length;
       const truncated = data.maxLength !== undefined && originalLength > data.maxLength;
-      const content = truncated ? fullContent.slice(0, data.maxLength) : fullContent;
+      const content = truncated ? codePoints.slice(0, data.maxLength).join('') : fullContent;
 
       const header =
         `File: ${fileName}\n` +

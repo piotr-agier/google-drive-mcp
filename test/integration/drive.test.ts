@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { describe, it, before, after, beforeEach } from 'node:test';
+import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import { PDFDocument } from 'pdf-lib';
 import { setupTestServer, callTool, type TestContext } from '../helpers/setup-server.js';
 
@@ -200,8 +201,83 @@ describe('Drive tools', () => {
       assert.equal(res.isError, false);
     });
 
+    it('accepts any text/* MIME type (e.g. text/csv)', async () => {
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({
+        data: { mimeType: 'text/csv', name: 'data.csv', parents: ['root'] },
+      }));
+      const res = await callTool(ctx.client, 'updateTextFile', { fileId: 'file-1', content: 'a,b\n1,2\n' });
+      assert.equal(res.isError, false);
+    });
+
+    it('rejects a non-text MIME type', async () => {
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({
+        data: { mimeType: 'application/pdf', name: 'doc.pdf', parents: ['root'] },
+      }));
+      const res = await callTool(ctx.client, 'updateTextFile', { fileId: 'file-1', content: 'x' });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.includes('not a text file'));
+    });
+
     it('validation error on missing required fields', async () => {
       const res = await callTool(ctx.client, 'updateTextFile', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- readTextFile ---
+  describe('readTextFile', () => {
+    // files.get is a single stub reached both for the metadata read and the
+    // alt:'media' content download, so branch on params.alt.
+    function stubTextFile(content: string, mimeType = 'text/plain', name = 'notes.txt') {
+      ctx.mocks.drive.service.files.get._setImpl(async (p: any) =>
+        p?.alt === 'media'
+          ? { data: Readable.from(Buffer.from(content, 'utf-8')) }
+          : { data: { id: 'file-1', name, mimeType, parents: ['root'] } });
+    }
+
+    afterEach(() => {
+      ctx.mocks.drive.service.files.get._resetImpl();
+    });
+
+    it('happy path returns header + content with a code-point Length', async () => {
+      stubTextFile('Hello World');
+      const res = await callTool(ctx.client, 'readTextFile', { fileId: 'file-1' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text;
+      assert.ok(text.includes('Length: 11 characters'));
+      assert.ok(text.includes('Truncated: no'));
+      assert.ok(text.endsWith('Hello World'));
+    });
+
+    it('reports code-point Length for astral characters (emoji counts as 1)', async () => {
+      stubTextFile('😀😀😀');
+      const res = await callTool(ctx.client, 'readTextFile', { fileId: 'file-1' });
+      assert.equal(res.isError, false);
+      // 3 emoji = 3 code points (would be 6 if counting UTF-16 units).
+      assert.ok(res.content[0].text.includes('Length: 3 characters'));
+    });
+
+    it('truncates on a code-point boundary without garbling emoji', async () => {
+      // 'ab😀cd': truncate to 3 code points → 'ab😀', never a lone surrogate.
+      stubTextFile('ab😀cd');
+      const res = await callTool(ctx.client, 'readTextFile', { fileId: 'file-1', maxLength: 3 });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text;
+      assert.ok(text.includes('Length: 5 characters'));
+      assert.ok(text.includes('Truncated: yes'));
+      assert.ok(text.endsWith('ab😀'));
+      assert.ok(!text.split('---\n')[1].includes('�'));
+    });
+
+    it('rejects a non-text MIME type', async () => {
+      stubTextFile('irrelevant', 'application/vnd.google-apps.document', 'My Doc');
+      const res = await callTool(ctx.client, 'readTextFile', { fileId: 'file-1' });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.includes('readGoogleDoc'));
+    });
+
+    it('validation error on missing fileId', async () => {
+      const res = await callTool(ctx.client, 'readTextFile', {});
       assert.equal(res.isError, true);
     });
   });

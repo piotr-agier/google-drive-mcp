@@ -3,7 +3,8 @@ import { z } from 'zod';
 import JSZip from 'jszip';
 import type { ToolDefinition, ToolContext, ToolResult } from '../types.js';
 import { errorResponse } from '../types.js';
-import { escapeDriveQuery } from '../utils.js';
+import { escapeDriveQuery, isTextMime } from '../utils.js';
+import { downloadTextContent, writeTextContent } from './text-content.js';
 import { uploadImageToDrive } from '../utils/driveImageUpload.js';
 import { withRetry } from '../utils/retry.js';
 
@@ -1388,13 +1389,13 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "insertText",
-    description: "Insert text at a specific index (surgical edit, doesn't replace whole file). Works on Google Docs and text/* files (e.g. text/plain, text/markdown). Index semantics differ by file type: Google Docs use the Docs API's 1-based structural position (includes structural elements); text files use a 0-based character offset into the raw UTF-8 content. For multi-tab Google Docs, specify tabId to target a specific tab — tabId is not supported on text files.",
+    description: "Insert text at a specific index (surgical edit, doesn't replace whole file). Works on Google Docs and text/* files (e.g. text/plain, text/markdown). Index semantics differ by file type: Google Docs use the Docs API's 1-based structural position (includes structural elements); text files use a 0-based Unicode code point (character) offset into the file content. For multi-tab Google Docs, specify tabId to target a specific tab — tabId is not supported on text files.",
     inputSchema: {
       type: "object",
       properties: {
         documentId: { type: "string", description: "The Google Doc or text file ID" },
         text: { type: "string", description: "Text to insert" },
-        index: { type: "number", description: "Position to insert at. Google Docs: 1-based Docs API structural index. Text files: 0-based character offset into the raw file." },
+        index: { type: "number", description: "Position to insert at. Google Docs: 1-based Docs API structural index. Text files: 0-based Unicode code point (character) offset." },
         tabId: { type: "string", description: "Optional. Google Docs only — Tab ID to insert into (from listDocumentTabs). If omitted, inserts into the first/default tab. Not supported on text files." }
       },
       required: ["documentId", "text", "index"]
@@ -1402,13 +1403,13 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "deleteRange",
-    description: "Delete content between start and end indices. Works on Google Docs and text/* files (e.g. text/plain, text/markdown). Index semantics differ by file type: Google Docs use the Docs API's 1-based structural position (includes structural elements); text files use 0-based character offsets into the raw UTF-8 content. For multi-tab Google Docs, specify tabId to target a specific tab — tabId is not supported on text files.",
+    description: "Delete content between start and end indices. Works on Google Docs and text/* files (e.g. text/plain, text/markdown). Index semantics differ by file type: Google Docs use the Docs API's 1-based structural position (includes structural elements); text files use 0-based Unicode code point (character) offsets into the file content. For multi-tab Google Docs, specify tabId to target a specific tab — tabId is not supported on text files.",
     inputSchema: {
       type: "object",
       properties: {
         documentId: { type: "string", description: "The Google Doc or text file ID" },
-        startIndex: { type: "number", description: "Start index (inclusive). Google Docs: 1-based Docs API structural index. Text files: 0-based character offset into the raw file." },
-        endIndex: { type: "number", description: "End index (exclusive). Google Docs: 1-based Docs API structural index. Text files: 0-based character offset into the raw file." },
+        startIndex: { type: "number", description: "Start index (inclusive). Google Docs: 1-based Docs API structural index. Text files: 0-based Unicode code point (character) offset." },
+        endIndex: { type: "number", description: "End index (exclusive). Google Docs: 1-based Docs API structural index. Text files: 0-based Unicode code point (character) offset." },
         tabId: { type: "string", description: "Optional. Google Docs only — Tab ID to delete from (from listDocumentTabs). If omitted, deletes from the first/default tab. Not supported on text files." }
       },
       required: ["documentId", "startIndex", "endIndex"]
@@ -2176,15 +2177,27 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
       const a = validation.data;
 
-      const fileMeta = await ctx.getDrive().files.get({
-        fileId: a.documentId,
-        fields: 'mimeType, name',
-        supportsAllDrives: true
-      });
-      const mimeType = fileMeta.data.mimeType || '';
-      const fileName = fileMeta.data.name || 'unknown';
+      let mimeType = '';
+      let fileName = 'unknown';
+      try {
+        const fileMeta = await ctx.getDrive().files.get({
+          fileId: a.documentId,
+          fields: 'mimeType, name',
+          supportsAllDrives: true
+        });
+        mimeType = fileMeta.data.mimeType || '';
+        fileName = fileMeta.data.name || 'unknown';
+      } catch {
+        // Under the drive.file scope, metadata reads fail for Google Docs the app
+        // did not create. Fall back to the Docs API path (documents scope), which
+        // is unaffected by drive.file — restoring pre-text-file-support behavior.
+        mimeType = 'application/vnd.google-apps.document';
+      }
 
       if (mimeType === 'application/vnd.google-apps.document') {
+        if (a.index < 1) {
+          return errorResponse('For Google Docs, index must be at least 1 (1-based).');
+        }
         const location: { index: number; tabId?: string } = { index: a.index };
         if (a.tabId) location.tabId = a.tabId;
 
@@ -2207,36 +2220,23 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         };
       }
 
-      if (mimeType.startsWith('text/')) {
+      if (isTextMime(mimeType)) {
         if (a.tabId) {
           return errorResponse('tabId is not supported for text files');
         }
 
-        const mediaResponse = await ctx.getDrive().files.get(
-          { fileId: a.documentId, alt: 'media', supportsAllDrives: true },
-          { responseType: 'stream' }
-        );
+        const content = await downloadTextContent(ctx.getDrive(), a.documentId);
+        // Index offsets are 0-based Unicode code points, so edit on the code-point
+        // array — slicing the raw JS string (UTF-16 units) would split a surrogate
+        // pair and corrupt astral characters (emoji) on write-back.
+        const codePoints = Array.from(content);
 
-        const chunks: Buffer[] = [];
-        await new Promise<void>((resolve, reject) => {
-          mediaResponse.data
-            .on('data', (chunk: Buffer) => chunks.push(chunk))
-            .on('end', () => resolve())
-            .on('error', (err: Error) => reject(err));
-        });
-        const content = Buffer.concat(chunks).toString('utf-8');
-
-        if (a.index > content.length) {
-          return errorResponse(`index ${a.index} is beyond end of file (length ${content.length})`);
+        if (a.index > codePoints.length) {
+          return errorResponse(`index ${a.index} is beyond end of file (length ${codePoints.length})`);
         }
 
-        const updated = content.slice(0, a.index) + a.text + content.slice(a.index);
-
-        await ctx.getDrive().files.update({
-          fileId: a.documentId,
-          media: { mimeType, body: updated },
-          supportsAllDrives: true
-        });
+        const updated = codePoints.slice(0, a.index).join('') + a.text + codePoints.slice(a.index).join('');
+        await writeTextContent(ctx.getDrive(), a.documentId, mimeType, updated);
 
         return {
           content: [{ type: "text", text: `Successfully inserted ${a.text.length} characters at offset ${a.index} in ${fileName}` }],
@@ -2260,15 +2260,27 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         return errorResponse("endIndex must be greater than startIndex");
       }
 
-      const fileMeta = await ctx.getDrive().files.get({
-        fileId: a.documentId,
-        fields: 'mimeType, name',
-        supportsAllDrives: true
-      });
-      const mimeType = fileMeta.data.mimeType || '';
-      const fileName = fileMeta.data.name || 'unknown';
+      let mimeType = '';
+      let fileName = 'unknown';
+      try {
+        const fileMeta = await ctx.getDrive().files.get({
+          fileId: a.documentId,
+          fields: 'mimeType, name',
+          supportsAllDrives: true
+        });
+        mimeType = fileMeta.data.mimeType || '';
+        fileName = fileMeta.data.name || 'unknown';
+      } catch {
+        // Under the drive.file scope, metadata reads fail for Google Docs the app
+        // did not create. Fall back to the Docs API path (documents scope), which
+        // is unaffected by drive.file — restoring pre-text-file-support behavior.
+        mimeType = 'application/vnd.google-apps.document';
+      }
 
       if (mimeType === 'application/vnd.google-apps.document') {
+        if (a.startIndex < 1) {
+          return errorResponse('For Google Docs, startIndex must be at least 1 (1-based).');
+        }
         const range: { startIndex: number; endIndex: number; tabId?: string } = {
           startIndex: a.startIndex,
           endIndex: a.endIndex
@@ -2291,36 +2303,23 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         };
       }
 
-      if (mimeType.startsWith('text/')) {
+      if (isTextMime(mimeType)) {
         if (a.tabId) {
           return errorResponse('tabId is not supported for text files');
         }
 
-        const mediaResponse = await ctx.getDrive().files.get(
-          { fileId: a.documentId, alt: 'media', supportsAllDrives: true },
-          { responseType: 'stream' }
-        );
+        const content = await downloadTextContent(ctx.getDrive(), a.documentId);
+        // Offsets are 0-based Unicode code points, so edit on the code-point array
+        // — slicing the raw JS string (UTF-16 units) would split a surrogate pair
+        // and corrupt astral characters (emoji) on write-back.
+        const codePoints = Array.from(content);
 
-        const chunks: Buffer[] = [];
-        await new Promise<void>((resolve, reject) => {
-          mediaResponse.data
-            .on('data', (chunk: Buffer) => chunks.push(chunk))
-            .on('end', () => resolve())
-            .on('error', (err: Error) => reject(err));
-        });
-        const content = Buffer.concat(chunks).toString('utf-8');
-
-        if (a.endIndex > content.length) {
-          return errorResponse(`endIndex ${a.endIndex} is beyond end of file (length ${content.length})`);
+        if (a.endIndex > codePoints.length) {
+          return errorResponse(`endIndex ${a.endIndex} is beyond end of file (length ${codePoints.length})`);
         }
 
-        const updated = content.slice(0, a.startIndex) + content.slice(a.endIndex);
-
-        await ctx.getDrive().files.update({
-          fileId: a.documentId,
-          media: { mimeType, body: updated },
-          supportsAllDrives: true
-        });
+        const updated = codePoints.slice(0, a.startIndex).join('') + codePoints.slice(a.endIndex).join('');
+        await writeTextContent(ctx.getDrive(), a.documentId, mimeType, updated);
 
         return {
           content: [{ type: "text", text: `Successfully deleted ${a.endIndex - a.startIndex} characters from offset ${a.startIndex} to ${a.endIndex} in ${fileName}` }],

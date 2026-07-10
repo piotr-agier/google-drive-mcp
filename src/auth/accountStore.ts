@@ -18,6 +18,7 @@ import {
   RedactedAccountView,
   TokenFileV2,
 } from './types.js';
+import { DEFAULT_SCOPES } from './scopes.js';
 import {
   getAdditionalLegacyPaths,
   getLegacyTokenPath,
@@ -342,7 +343,11 @@ function buildRecordFromV1(v1: V1TokenShape): AccountRecord {
     sub,
     accessToken: v1.access_token ?? '',
     refreshToken,
-    scope: v1.scope ?? '',
+    // A v1 file predates scope filtering (the old single-account world used the
+    // one token for everything). If it never recorded a scope, fall back to the
+    // full default set so migration doesn't newly fail the resolver's scope gate
+    // — a total outage from a file that worked the day before.
+    scope: v1.scope ?? DEFAULT_SCOPES.join(' '),
     tokenType: 'Bearer',
     expiryDate: v1.expiry_date ?? 0,
     addedAt: now,

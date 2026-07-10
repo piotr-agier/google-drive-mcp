@@ -4,6 +4,11 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { AccountStore } from '../../src/auth/accountStore.js';
+import { coversScopes } from '../../src/auth/accountResolver.js';
+import { DEFAULT_SCOPES } from '../../src/auth/scopes.js';
+
+const DRIVE = 'https://www.googleapis.com/auth/drive';
+const DRIVE_FILE = 'https://www.googleapis.com/auth/drive.file';
 
 async function mktmpDir(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'gdrive-mcp-migration-'));
@@ -71,6 +76,13 @@ test('v1 file with only refresh_token still migrates (no access_token)', async (
   assert.equal(rec!.refreshToken, '1//r');
   assert.equal(rec!.accessToken, '');
   assert.equal(rec!.pendingIdentity, true);
+  // A scope-less v1 file must migrate to the full default scope set, not '',
+  // so the resolver's scope gate doesn't reject every tool (finding 8).
+  assert.equal(rec!.scope, DEFAULT_SCOPES.join(' '));
+  assert.ok(
+    coversScopes(rec!.scope, [DRIVE, DRIVE_FILE]),
+    'migrated scope-less account must remain eligible for drive tools',
+  );
 });
 
 test('second reload of an already-migrated v2 file is a no-op', async () => {

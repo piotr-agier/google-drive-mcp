@@ -76,3 +76,38 @@ test('every acceptable scope is a full URL, not an alias', () => {
   }
   assert.equal(violations.length, 0, `Non-URL scopes: ${violations.join(', ')}`);
 });
+
+// ---------------------------------------------------------------------------
+// Docs/Sheets/Slides accept the drive-family scopes (finding 7).
+//
+// The Docs/Sheets/Slides APIs also honor drive / drive.file / drive.readonly,
+// so an account consented with `drive` must be eligible. drive.readonly can
+// authorize reads but NOT writes, so it must appear on read tools only. A bare
+// constant rename can't verify this directionality — these tests can.
+// ---------------------------------------------------------------------------
+
+const DRIVE = 'https://www.googleapis.com/auth/drive';
+const DRIVE_READONLY = 'https://www.googleapis.com/auth/drive.readonly';
+
+const PRODUCT_TOOLS: Array<{ read: string; write: string }> = [
+  { read: 'readGoogleDoc', write: 'createGoogleDoc' },
+  { read: 'getGoogleSheetContent', write: 'createGoogleSheet' },
+  { read: 'getGoogleSlidesContent', write: 'createGoogleSlides' },
+];
+
+for (const { read, write } of PRODUCT_TOOLS) {
+  test(`${read} (read) accepts full drive AND drive.readonly`, () => {
+    const scopes = TOOL_META[read].acceptableScopes;
+    assert.ok(scopes.includes(DRIVE), `${read} should accept ${DRIVE}`);
+    assert.ok(scopes.includes(DRIVE_READONLY), `${read} should accept ${DRIVE_READONLY}`);
+  });
+
+  test(`${write} (write) accepts full drive but NOT drive.readonly`, () => {
+    const scopes = TOOL_META[write].acceptableScopes;
+    assert.ok(scopes.includes(DRIVE), `${write} should accept ${DRIVE}`);
+    assert.ok(
+      !scopes.includes(DRIVE_READONLY),
+      `${write} must not accept read-only ${DRIVE_READONLY}`,
+    );
+  });
+}

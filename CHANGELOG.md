@@ -23,7 +23,6 @@ Substantial internal refactor to introduce **multi-account support**: one runnin
 
 ### Bug Fixes
 
-<<<<<<< HEAD
 - **drive:** `addPermission` no longer forces `emailAddress` for `type: "anyone"` and `type: "domain"` — the Drive API rejected the field for those principals, making both unusable. Added a `domain` parameter so domain-wide grants work, and per-type requirements are now validated up front (`emailAddress` for `user`/`group`, `domain` for `domain`, neither for `anyone`). Also added an optional `allowFileDiscovery` flag for `anyone`/`domain` grants — `false` (default) keeps a file link-only, `true` makes it discoverable in search ([#131](https://github.com/piotr-agier/google-drive-mcp/issues/131))
 - **resources:** raise the `resources/list` page size from 10 to 1000 (Drive API max) so clients that eagerly enumerate the entire Drive (e.g. Gemini CLI) no longer hang during initialization ([#111](https://github.com/piotr-agier/google-drive-mcp/issues/111), [#128](https://github.com/piotr-agier/google-drive-mcp/pull/128))
 - **docs:** honor `tabId` in `insertTable`, `editTableCell`, `insertSmartChip`, `createFootnote`, `applyTextStyle`/`formatGoogleDocText`, `applyParagraphStyle`/`formatGoogleDocParagraph`, and `createParagraphBullets` — these previously ignored `tabId` and silently edited the default tab of multi-tab documents while reporting success ([#114](https://github.com/piotr-agier/google-drive-mcp/issues/114), [#126](https://github.com/piotr-agier/google-drive-mcp/pull/126))

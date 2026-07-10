@@ -72,12 +72,18 @@ export class AccountResolver {
     }
 
     // 2. Session default
+    // Remember a configured default that exists but lacks the needed scopes, so
+    // step 4 can surface it (with re-consent guidance) instead of silently
+    // routing this call to a different account than the user chose. Use `??=` so
+    // the higher-precedence session alias wins the message if both are short.
+    let skippedDefaultAlias: string | undefined;
     const sessionDefaultAlias = this.sessions.get(ctx.sessionId)?.defaultAccountAlias;
     if (sessionDefaultAlias) {
       const rec = this.store.get(sessionDefaultAlias);
       if (rec && hasScopes(rec)) {
         return { kind: 'single', accounts: [rec], resolutionReason: 'session-default' };
       }
+      if (rec) skippedDefaultAlias ??= sessionDefaultAlias;
     }
 
     // 3. Global default
@@ -87,6 +93,7 @@ export class AccountResolver {
       if (rec && hasScopes(rec)) {
         return { kind: 'single', accounts: [rec], resolutionReason: 'global-default' };
       }
+      if (rec) skippedDefaultAlias ??= globalDefaultAlias;
     }
 
     // 4. Eligibility filter
@@ -108,6 +115,12 @@ export class AccountResolver {
           `Run manage_accounts add to connect an account with the needed scopes, or ` +
           `manage_accounts remove <alias> followed by manage_accounts add <alias> to re-consent.`,
       );
+    }
+    // A configured default exists but is scope-short: don't silently substitute
+    // a different account — tell the user their default lacks the scope (and how
+    // to re-consent it in place).
+    if (skippedDefaultAlias) {
+      throw new Error(scopeShortageMessage(skippedDefaultAlias, ctx.acceptableScopes));
     }
     if (eligible.length === 1) {
       return { kind: 'single', accounts: eligible, resolutionReason: 'sole-authenticated' };

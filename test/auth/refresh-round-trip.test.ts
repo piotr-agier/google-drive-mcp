@@ -71,7 +71,10 @@ function makeRecord(overrides: Partial<AccountRecord> = {}): AccountRecord {
     refreshToken: 'persistent-refresh',
     scope: 'https://www.googleapis.com/auth/drive',
     tokenType: 'Bearer',
-    expiryDate: Date.now() - 60_000, // already expired so refresh logic could fire
+    // Future expiry so getClient does NOT kick off a real (failing) network
+    // refresh that races the manually-emitted 'tokens' event below. Tests that
+    // need the refresh path stub it explicitly (see the invalid_grant test).
+    expiryDate: Date.now() + 3600_000,
     addedAt: now,
     lastRefreshedAt: now,
     ...overrides,

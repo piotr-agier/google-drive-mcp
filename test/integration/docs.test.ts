@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { describe, it, before, after, beforeEach } from 'node:test';
+import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
+import { Readable } from 'node:stream';
 import { setupTestServer, callTool, type TestContext } from '../helpers/setup-server.js';
 
 // Create reusable mock document structures for testing common document and tab configurations
@@ -119,6 +120,10 @@ describe('Docs tools', () => {
   beforeEach(() => {
     ctx.mocks.drive.tracker.reset();
     ctx.mocks.docs.tracker.reset();
+    // Reset stub impls that individual blocks override on drive.files.get so a
+    // per-block override (e.g. insertText/deleteRange forcing a Google-Docs
+    // mimeType) does not leak into later tests and make the suite order-dependent.
+    ctx.mocks.drive.service.files.get._resetImpl();
   });
 
   // --- createGoogleDoc ---
@@ -287,6 +292,12 @@ describe('Docs tools', () => {
       assert.equal(requests[0].insertText.text, 'hello');
     });
 
+    it('rejects index 0 on a Google Doc (1-based)', async () => {
+      const res = await callTool(ctx.client, 'insertText', { documentId: 'doc-1', text: 'x', index: 0 });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.includes('1-based'));
+    });
+
     it('validation error', async () => {
       const res = await callTool(ctx.client, 'insertText', {});
       assert.equal(res.isError, true);
@@ -327,9 +338,111 @@ describe('Docs tools', () => {
       assert.ok(res.content[0].text.toLowerCase().includes('end index'));
     });
 
+    it('rejects startIndex 0 on a Google Doc (1-based)', async () => {
+      const res = await callTool(ctx.client, 'deleteRange', { documentId: 'doc-1', startIndex: 0, endIndex: 3 });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.includes('1-based'));
+    });
+
     it('validation error', async () => {
       const res = await callTool(ctx.client, 'deleteRange', {});
       assert.equal(res.isError, true);
+    });
+  });
+
+  // --- insertText / deleteRange on text/* files ---
+  describe('text-file editing', () => {
+    // files.get is a single stub reached both for the metadata read and the
+    // alt:'media' content download, so branch on params.alt.
+    function stubTextFile(content: string, mimeType = 'text/plain', name = 'notes.txt') {
+      ctx.mocks.drive.service.files.get._setImpl(async (p: any) =>
+        p?.alt === 'media'
+          ? { data: Readable.from(Buffer.from(content, 'utf-8')) }
+          : { data: { id: 'file-1', name, mimeType, parents: ['root'] } });
+    }
+
+    function lastWrittenBody(): Buffer {
+      const updates = ctx.mocks.drive.tracker.getCalls('files.update');
+      return updates[updates.length - 1].args[0].media.body as Buffer;
+    }
+
+    afterEach(() => {
+      ctx.mocks.drive.service.files.get._resetImpl();
+    });
+
+    it('insertText inserts at a code-point offset', async () => {
+      stubTextFile('Hello World');
+      const res = await callTool(ctx.client, 'insertText', { documentId: 'file-1', text: 'X', index: 5 });
+      assert.equal(res.isError, false);
+      assert.equal(lastWrittenBody().toString('utf-8'), 'HelloX World');
+    });
+
+    it('insertText appends at end of file (index === length)', async () => {
+      stubTextFile('abc');
+      const res = await callTool(ctx.client, 'insertText', { documentId: 'file-1', text: 'Z', index: 3 });
+      assert.equal(res.isError, false);
+      assert.equal(lastWrittenBody().toString('utf-8'), 'abcZ');
+    });
+
+    it('insertText preserves emoji (no surrogate corruption)', async () => {
+      // '😀' is one code point (2 UTF-16 units); insert after it at code-point index 1.
+      stubTextFile('😀abc');
+      const res = await callTool(ctx.client, 'insertText', { documentId: 'file-1', text: 'X', index: 1 });
+      assert.equal(res.isError, false);
+      const written = lastWrittenBody().toString('utf-8');
+      assert.equal(written, '😀Xabc');
+      assert.ok(!written.includes('�'));
+    });
+
+    it('insertText past end of file errors', async () => {
+      stubTextFile('abc');
+      const res = await callTool(ctx.client, 'insertText', { documentId: 'file-1', text: 'X', index: 99 });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.includes('beyond end of file'));
+    });
+
+    it('insertText rejects tabId on a text file', async () => {
+      stubTextFile('abc');
+      const res = await callTool(ctx.client, 'insertText', { documentId: 'file-1', text: 'X', index: 0, tabId: 'tab-1' });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.includes('tabId is not supported'));
+    });
+
+    it('deleteRange removes a code-point range', async () => {
+      stubTextFile('Hello World');
+      const res = await callTool(ctx.client, 'deleteRange', { documentId: 'file-1', startIndex: 5, endIndex: 11 });
+      assert.equal(res.isError, false);
+      assert.equal(lastWrittenBody().toString('utf-8'), 'Hello');
+    });
+
+    it('deleteRange preserves surrounding emoji (no surrogate corruption)', async () => {
+      // 'a😀b': code points a(0) 😀(1) b(2); delete the emoji [1,2).
+      stubTextFile('a😀b');
+      const res = await callTool(ctx.client, 'deleteRange', { documentId: 'file-1', startIndex: 1, endIndex: 2 });
+      assert.equal(res.isError, false);
+      const written = lastWrittenBody().toString('utf-8');
+      assert.equal(written, 'ab');
+      assert.ok(!written.includes('�'));
+    });
+
+    it('deleteRange over the whole file writes empty content (not a silent no-op)', async () => {
+      stubTextFile('hello\n'); // 6 code points
+      const res = await callTool(ctx.client, 'deleteRange', { documentId: 'file-1', startIndex: 0, endIndex: 6 });
+      assert.equal(res.isError, false);
+      const updates = ctx.mocks.drive.tracker.getCalls('files.update');
+      assert.equal(updates.length, 1); // the write actually happened
+      const body = updates[0].args[0].media.body as Buffer;
+      assert.ok(Buffer.isBuffer(body));
+      assert.equal(body.length, 0); // empty Buffer is truthy → uploaded, so the file is emptied
+    });
+
+    it('editing works when metadata read fails (drive.file scope fallback → Docs API)', async () => {
+      // Simulate drive.file: metadata files.get throws; media read never happens
+      // because the handler falls back to the Google-Docs (batchUpdate) path.
+      ctx.mocks.drive.service.files.get._setImpl(async () => { throw new Error('File not found: 404'); });
+      const res = await callTool(ctx.client, 'insertText', { documentId: 'doc-1', text: 'x', index: 1 });
+      assert.equal(res.isError, false);
+      assert.equal(ctx.mocks.docs.tracker.getCalls('documents.batchUpdate').length, 1);
     });
   });
 

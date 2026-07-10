@@ -73,6 +73,17 @@ export function getMimeTypeFromFilename(filename: string): string {
 }
 
 /**
+ * Whether a MIME type denotes a raw text file that the readTextFile /
+ * insertText / deleteRange / updateTextFile tools can read and edit in place.
+ * Covers all `text/*` types (text/plain, text/markdown, text/csv, text/html, …).
+ * Note: this is intentionally broader than TEXT_MIME_TYPES, which is the
+ * extension→MIME allowlist used for naming new/renamed text files.
+ */
+export function isTextMime(mimeType: string): boolean {
+  return mimeType.startsWith('text/');
+}
+
+/**
  * Escape a string for use in a Google Drive API query.
  * Escapes backslashes and single quotes.
  */

@@ -34,6 +34,7 @@ export class AccountStore {
   private data: TokenFileV2 = emptyFile();
   private syntheticClients = new Map<string, unknown>();
   private writeQueue: Promise<void> = Promise.resolve();
+  private tmpSeq = 0;
   private loaded = false;
 
   constructor(opts?: { filePath?: string; mode?: AuthMode }) {
@@ -63,7 +64,13 @@ export class AccountStore {
       const content = await fs.readFile(this.filePath, 'utf-8');
       const parsed = JSON.parse(content) as Record<string, unknown>;
 
-      if (parsed && parsed.version === 2 && typeof parsed.accounts === 'object') {
+      if (
+        parsed &&
+        parsed.version === 2 &&
+        parsed.accounts &&
+        typeof parsed.accounts === 'object' &&
+        !Array.isArray(parsed.accounts)
+      ) {
         this.data = parsed as unknown as TokenFileV2;
         this.loaded = true;
         return;
@@ -93,6 +100,29 @@ export class AccountStore {
       }
       throw err;
     }
+  }
+
+  /**
+   * Move an unreadable/corrupt token file aside (non-destructive) and reset to an
+   * empty in-memory state, so the boot flow can self-heal instead of failing every
+   * request. Returns the backup path, or null if there was nothing to move.
+   */
+  async quarantineCorruptFile(): Promise<string | null> {
+    let moved: string | null = null;
+    if (this.mode === 'local-oauth') {
+      const backup = `${this.filePath}.corrupt-${Date.now()}`;
+      try {
+        await fs.rename(this.filePath, backup);
+        moved = backup;
+      } catch (err: unknown) {
+        if (!isENOENT(err)) {
+          console.error(`AccountStore: could not quarantine ${this.filePath}:`, err);
+        }
+      }
+    }
+    this.data = emptyFile();
+    this.loaded = true;
+    return moved;
   }
 
   list(): AccountRecord[] {
@@ -174,6 +204,12 @@ export class AccountStore {
 
   private enqueue(mutate: () => void): Promise<void> {
     const next = this.writeQueue.then(async () => {
+      // Read-modify-write: re-read the freshest on-disk state before applying the
+      // mutation so a concurrent process's accounts (or a refresh token it just
+      // rotated) survive instead of being clobbered by our stale in-memory snapshot.
+      if (this.mode === 'local-oauth') {
+        await this.mergeFromDisk();
+      }
       mutate();
       if (this.mode === 'local-oauth') {
         await this.atomicWrite();
@@ -187,9 +223,42 @@ export class AccountStore {
   private async atomicWrite(): Promise<void> {
     const dir = path.dirname(this.filePath);
     await fs.mkdir(dir, { recursive: true });
-    const tmp = `${this.filePath}.tmp`;
+    // Unique temp name per writer so concurrent processes sharing this file never
+    // race on the same scratch path (rename stays atomic).
+    const tmp = `${this.filePath}.tmp.${process.pid}.${this.tmpSeq++}`;
     await fs.writeFile(tmp, JSON.stringify(this.data, null, 2), { mode: 0o600 });
     await fs.rename(tmp, this.filePath);
+  }
+
+  /**
+   * Re-read the on-disk file into memory ahead of a queued write. Best-effort:
+   * a missing file resets us to empty; an unreadable or foreign-shaped file
+   * leaves the in-memory state untouched (a queued write must not be derailed by
+   * a transient bad read, and migration only ever happens in reload()).
+   */
+  private async mergeFromDisk(): Promise<void> {
+    try {
+      const content = await fs.readFile(this.filePath, 'utf-8');
+      const parsed = JSON.parse(content) as Record<string, unknown>;
+      if (
+        parsed &&
+        parsed.version === 2 &&
+        parsed.accounts &&
+        typeof parsed.accounts === 'object' &&
+        !Array.isArray(parsed.accounts)
+      ) {
+        this.data = parsed as unknown as TokenFileV2;
+      }
+    } catch (err: unknown) {
+      if (isENOENT(err)) {
+        this.data = emptyFile();
+        return;
+      }
+      console.error(
+        `AccountStore: could not re-read ${this.filePath} before write; keeping in-memory state.`,
+        err,
+      );
+    }
   }
 
   private async migrateFromV1(v1: V1TokenShape): Promise<void> {

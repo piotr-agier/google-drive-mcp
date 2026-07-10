@@ -19,6 +19,17 @@ import { AccountRecord } from './types.js';
 /** Buffer before access-token expiry that triggers a refresh (ms). */
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
+/**
+ * Detect an OAuth `invalid_grant` (refresh token revoked or expired) across the
+ * shapes google-auth-library / gaxios surface it in.
+ */
+function isInvalidGrant(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { response?: { data?: { error?: unknown } }; message?: unknown };
+  if (e.response?.data?.error === 'invalid_grant') return true;
+  return typeof e.message === 'string' && e.message.includes('invalid_grant');
+}
+
 export class AccountClientFactory {
   private clients = new Map<string, OAuth2Client>();
   private inflightRefresh = new Map<string, Promise<void>>();
@@ -122,8 +133,16 @@ export class AccountClientFactory {
           throw new Error('Token refresh returned no access_token.');
         }
       } catch (err) {
+        if (isInvalidGrant(err)) {
+          // Refresh token revoked or expired. Surface an actionable error instead
+          // of an opaque downstream 401 so the user knows how to recover.
+          throw new Error(
+            `Account '${alias}' authorization was revoked or has expired. ` +
+              `Run:  manage_accounts add ${alias}  to reconnect it.`,
+          );
+        }
         console.error(`Token refresh failed for "${alias}":`, err);
-        // Don't throw — let the caller's subsequent API call produce a clearer error.
+        // Transient failure — don't throw; let the caller's API call surface it.
       }
     })().finally(() => {
       this.inflightRefresh.delete(alias);

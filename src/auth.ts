@@ -56,7 +56,9 @@ export interface AuthSystem {
  * - For local OAuth: loads v2 tokens.json (or migrates v1).
  *   If no accounts are registered, runs the interactive auth flow via AuthServer.
  */
-export async function buildAuthSystem(): Promise<AuthSystem> {
+export async function buildAuthSystem(
+  opts: { interactiveIfEmpty?: boolean } = {},
+): Promise<AuthSystem> {
   console.error('Initializing authentication...');
 
   if (isServiceAccountMode()) {
@@ -78,9 +80,26 @@ export async function buildAuthSystem(): Promise<AuthSystem> {
 
   // Local OAuth mode
   const store = new AccountStore({ mode: 'local-oauth' });
-  await store.reload();
+  try {
+    await store.reload();
+  } catch (err) {
+    // A corrupt/unreadable tokens.json must not brick every request. Move the bad
+    // file aside (non-destructive) and start empty so the first-time auth flow
+    // below can re-establish credentials — restoring the pre-PR self-heal.
+    const backup = await store.quarantineCorruptFile();
+    console.error(
+      `Authentication: tokens.json was unreadable (${(err as Error).message}). ` +
+        (backup ? `Moved it to ${backup}. ` : '') +
+        'Starting fresh — you will be prompted to re-authenticate.',
+    );
+  }
 
   if (store.list().length === 0) {
+    if (opts.interactiveIfEmpty === false) {
+      // Caller (e.g. the `auth` CLI) drives its own additive consent flow, so
+      // don't launch the legacy first-time browser auth here.
+      return assembleSystem('local-oauth', store);
+    }
     // First-time auth: run the interactive browser flow.
     const oauth2Client = await initializeOAuth2Client();
     const tokenManager = new TokenManager(oauth2Client);
@@ -161,8 +180,11 @@ export async function authenticate(): Promise<OAuth2Client> {
 }
 
 /**
- * Manual authentication command
- * Used when running "npm run auth" or when the user needs to re-authenticate
+ * @deprecated Legacy single-account auth. NOT wired to the CLI — the `auth` command
+ * runs `runAuthServer` in index.ts, which persists additively into the multi-account
+ * AccountStore. This function still uses the legacy no-`onTokens` AuthServer path,
+ * which flat-overwrites a v2 multi-account tokens.json with a single credential; do
+ * not call it on a multi-account install. Kept only for backward-compatible imports.
  */
 export async function runAuthCommand(): Promise<void> {
   try {

@@ -197,3 +197,38 @@ test('factory.evict drops the cached client so the next getClient rebuilds', asy
     await cleanup();
   }
 });
+
+test('factory surfaces invalid_grant as an actionable reconnect error (finding 5)', async () => {
+  const { tokenPath, cleanup } = await setupTmpCredentials();
+  try {
+    const store = new AccountStore({ filePath: tokenPath, mode: 'local-oauth' });
+    await store.reload();
+    // Future expiry so the first getClient does NOT trigger a refresh.
+    await store.upsert(makeRecord({ expiryDate: Date.now() + 3600_000 }));
+
+    const factory = new AccountClientFactory(store);
+    const client = await factory.getClient('work');
+
+    // Make the cached client look expired and its refresh fail with invalid_grant.
+    client.setCredentials({ ...client.credentials, expiry_date: Date.now() - 60_000 });
+    (client as unknown as { refreshAccessToken: () => Promise<never> }).refreshAccessToken =
+      async () => {
+        const err = new Error('invalid_grant') as Error & {
+          response?: { data?: { error?: string } };
+        };
+        err.response = { data: { error: 'invalid_grant' } };
+        throw err;
+      };
+
+    await assert.rejects(
+      () => factory.getClient('work'),
+      (err: Error) => {
+        assert.match(err.message, /revoked or has expired/);
+        assert.match(err.message, /manage_accounts add work/);
+        return true;
+      },
+    );
+  } finally {
+    await cleanup();
+  }
+});

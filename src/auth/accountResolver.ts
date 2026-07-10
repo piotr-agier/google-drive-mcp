@@ -137,8 +137,8 @@ function scopeShortageMessage(alias: string, acceptable: string[]): string {
   return (
     `Account '${alias}' is connected but lacks the required scope for this ` +
     `operation: ${scopeList}. To re-consent with broader scopes, run:\n` +
-    `  manage_accounts remove ${alias}\n` +
     `  manage_accounts add ${alias}\n` +
-    `(the second call will show the Google consent screen with the new scopes.)`
+    `(this re-runs the Google consent screen for '${alias}' in place — with the ` +
+    `new scopes — without disconnecting the account.)`
   );
 }

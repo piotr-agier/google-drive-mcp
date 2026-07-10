@@ -166,3 +166,33 @@ describe('per-tool account parameter', () => {
     assert.match(accountProp.description ?? '', /manage_accounts list/);
   });
 });
+
+// Regression (finding 3): after the last account is removed, the admin context
+// must not throw — manage_accounts still needs to work so the user can re-add one.
+describe('manage_accounts with zero accounts', () => {
+  let ctx: TestContext;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let mod: any;
+
+  before(async () => {
+    ctx = await setupTestServer();
+    mod = await import('../../src/index.js');
+    // Empty the store the admin context would otherwise resolve a default from.
+    const sys = mod._getAuthSystemForTesting();
+    await sys.store.remove('test');
+  });
+
+  after(async () => {
+    // Restore the standard synthetic account so later tests are unaffected.
+    mod._setAuthClientForTesting({ request: async () => ({ data: 'restored' }) });
+    await ctx.cleanup();
+  });
+
+  it('list returns an empty list instead of a lockout error', async () => {
+    const result = await callTool(ctx.client, 'manage_accounts', { action: 'list' });
+    assert.notEqual(result.isError, true, `list errored: ${JSON.stringify(result)}`);
+    const payload = JSON.parse(result.content[0].text);
+    assert.equal(payload.defaultAccount, null);
+    assert.deepEqual(payload.accounts, []);
+  });
+});

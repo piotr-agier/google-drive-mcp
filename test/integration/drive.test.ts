@@ -425,6 +425,84 @@ describe('Drive tools', () => {
       assert.equal(res.isError, false);
     });
 
+    it('addPermission type "anyone" needs no emailAddress and omits it from the request', async () => {
+      const res = await callTool(ctx.client, 'addPermission', {
+        fileId: 'file-1', type: 'anyone', role: 'reader',
+      });
+      assert.equal(res.isError, false);
+      const createCalls = ctx.mocks.drive.tracker.getCalls('permissions.create');
+      assert.ok(createCalls.length >= 1);
+      const body = createCalls[0].args[0].requestBody;
+      assert.equal(body.type, 'anyone');
+      assert.equal('emailAddress' in body, false);
+      assert.equal('domain' in body, false);
+    });
+
+    it('addPermission type "domain" sends domain, not emailAddress', async () => {
+      const res = await callTool(ctx.client, 'addPermission', {
+        fileId: 'file-1', type: 'domain', domain: 'example.com', role: 'reader',
+      });
+      assert.equal(res.isError, false);
+      const body = ctx.mocks.drive.tracker.getCalls('permissions.create')[0].args[0].requestBody;
+      assert.equal(body.type, 'domain');
+      assert.equal(body.domain, 'example.com');
+      assert.equal('emailAddress' in body, false);
+    });
+
+    it('addPermission type "user" without emailAddress is rejected before any API call', async () => {
+      const res = await callTool(ctx.client, 'addPermission', {
+        fileId: 'file-1', type: 'user', role: 'reader',
+      });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.toLowerCase().includes('emailaddress'));
+      assert.equal(ctx.mocks.drive.tracker.getCalls('permissions.create').length, 0);
+    });
+
+    it('addPermission type "domain" without domain is rejected before any API call', async () => {
+      const res = await callTool(ctx.client, 'addPermission', {
+        fileId: 'file-1', type: 'domain', role: 'reader',
+      });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.toLowerCase().includes('domain'));
+      assert.equal(ctx.mocks.drive.tracker.getCalls('permissions.create').length, 0);
+    });
+
+    it('addPermission type "anyone" forwards allowFileDiscovery:true', async () => {
+      const res = await callTool(ctx.client, 'addPermission', {
+        fileId: 'file-1', type: 'anyone', role: 'reader', allowFileDiscovery: true,
+      });
+      assert.equal(res.isError, false);
+      const body = ctx.mocks.drive.tracker.getCalls('permissions.create')[0].args[0].requestBody;
+      assert.equal(body.allowFileDiscovery, true);
+    });
+
+    it('addPermission type "anyone" forwards allowFileDiscovery:false (not dropped as falsy)', async () => {
+      const res = await callTool(ctx.client, 'addPermission', {
+        fileId: 'file-1', type: 'anyone', role: 'reader', allowFileDiscovery: false,
+      });
+      assert.equal(res.isError, false);
+      const body = ctx.mocks.drive.tracker.getCalls('permissions.create')[0].args[0].requestBody;
+      assert.equal(body.allowFileDiscovery, false);
+    });
+
+    it('addPermission type "anyone" omits allowFileDiscovery when not provided', async () => {
+      const res = await callTool(ctx.client, 'addPermission', {
+        fileId: 'file-1', type: 'anyone', role: 'reader',
+      });
+      assert.equal(res.isError, false);
+      const body = ctx.mocks.drive.tracker.getCalls('permissions.create')[0].args[0].requestBody;
+      assert.equal('allowFileDiscovery' in body, false);
+    });
+
+    it('addPermission ignores allowFileDiscovery for type "user"', async () => {
+      const res = await callTool(ctx.client, 'addPermission', {
+        fileId: 'file-1', type: 'user', emailAddress: 'user@example.com', role: 'reader', allowFileDiscovery: true,
+      });
+      assert.equal(res.isError, false);
+      const body = ctx.mocks.drive.tracker.getCalls('permissions.create')[0].args[0].requestBody;
+      assert.equal('allowFileDiscovery' in body, false);
+    });
+
     it('shareFile happy path', async () => {
       const res = await callTool(ctx.client, 'shareFile', {
         fileId: 'file-1', emailAddress: 'user@example.com', role: 'writer',

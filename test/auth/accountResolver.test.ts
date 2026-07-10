@@ -102,8 +102,9 @@ test('resolver: explicit string without acceptable scopes throws the scope-short
       }),
     (err: Error) => {
       assert.match(err.message, /Account 'personal' is connected but lacks the required scope/);
-      assert.match(err.message, /manage_accounts remove personal/);
+      // Recovery must be non-destructive: a single in-place re-consent, no remove.
       assert.match(err.message, /manage_accounts add personal/);
+      assert.doesNotMatch(err.message, /manage_accounts remove/);
       assert.match(err.message, new RegExp(SCOPE_DRIVE.replace(/\//g, '\\/')));
       return true;
     },
@@ -262,8 +263,9 @@ test('resolver: sole-account scope mismatch throws the scope-shortage message', 
       }),
     (err: Error) => {
       assert.match(err.message, /Account 'only' is connected but lacks the required scope/);
-      assert.match(err.message, /manage_accounts remove only/);
+      // Recovery must be non-destructive: a single in-place re-consent, no remove.
       assert.match(err.message, /manage_accounts add only/);
+      assert.doesNotMatch(err.message, /manage_accounts remove/);
       return true;
     },
   );

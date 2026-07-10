@@ -107,16 +107,25 @@ function requireAuthSystem(): AuthSystem {
   return authSystem;
 }
 
-async function getDefaultAccount(): Promise<AccountRecord> {
+/** The default account, or undefined when no accounts are authenticated. */
+function defaultAccountOrUndefined(): AccountRecord | undefined {
   const sys = requireAuthSystem();
   const defaultAlias = sys.store.getDefault();
   if (defaultAlias) {
     const rec = sys.store.get(defaultAlias);
     if (rec) return rec;
   }
-  const accounts = sys.store.list();
-  if (accounts.length === 0) throw new Error('No accounts are authenticated.');
-  return accounts[0];
+  return sys.store.list()[0];
+}
+
+async function getDefaultAccount(): Promise<AccountRecord> {
+  const account = defaultAccountOrUndefined();
+  if (!account) {
+    throw new Error(
+      'No accounts are authenticated. Run "manage_accounts add <alias>" to add one.',
+    );
+  }
+  return account;
 }
 
 async function getDriveFor(account: AccountRecord): Promise<drive_v3.Drive> {
@@ -175,10 +184,14 @@ function validateNewAlias(alias: string): void {
 
 async function addAccountFlow(alias: string, openBrowser = true): Promise<AddAccountResult> {
   requireLocalOAuthMode('add');
-  validateNewAlias(alias);
   const sys = requireAuthSystem();
-  if (sys.store.get(alias)) {
-    throw new Error(`Alias "${alias}" already exists. Remove it first or choose a different name.`);
+  const existing = sys.store.get(alias);
+  // A brand-new alias must pass the full new-alias rules (pattern + reserved name).
+  // An existing account may re-consent in place — to broaden scopes or recover a
+  // revoked grant (including the migrated 'default') — so those guards are skipped
+  // when the alias already exists.
+  if (!existing) {
+    validateNewAlias(alias);
   }
 
   // Fresh OAuth2Client for this flow — will receive tokens on callback.
@@ -198,16 +211,18 @@ async function addAccountFlow(alias: string, openBrowser = true): Promise<AddAcc
     onTokens: async (tokens) => {
       try {
         flowClient.setCredentials(tokens);
-        let email = 'unknown';
-        let sub = `pending:${alias}:${Date.now()}`;
-        let pendingIdentity = true;
+        // On a re-consent, fall back to the account's existing identity if the
+        // fresh userinfo lookup fails, so we never regress a known email/sub.
+        let email = existing?.email ?? 'unknown';
+        let sub = existing?.sub ?? `pending:${alias}:${Date.now()}`;
+        let pendingIdentity = existing?.pendingIdentity ?? true;
         try {
           const info = await fetchUserInfo(flowClient);
           email = info.email;
           sub = info.sub;
           pendingIdentity = false;
         } catch (err) {
-          log('Userinfo lookup failed for new account; proceeding with pending identity', {
+          log('Userinfo lookup failed; proceeding with existing/pending identity', {
             alias,
             error: (err as Error).message,
           });
@@ -218,11 +233,12 @@ async function addAccountFlow(alias: string, openBrowser = true): Promise<AddAcc
           email,
           sub,
           accessToken: tokens.access_token ?? '',
-          refreshToken: tokens.refresh_token ?? '',
+          // Google omits refresh_token on some re-consents; keep the prior one.
+          refreshToken: tokens.refresh_token ?? existing?.refreshToken ?? '',
           scope: tokens.scope ?? scopes.join(' '),
           tokenType: 'Bearer',
           expiryDate: tokens.expiry_date ?? 0,
-          addedAt: now,
+          addedAt: existing?.addedAt ?? now,
           lastRefreshedAt: now,
           pendingIdentity,
         };
@@ -460,23 +476,52 @@ function stripAccountArg(args: Record<string, unknown>): Record<string, unknown>
 async function buildToolContext(
   sessionId: string,
   scopedAccount?: AccountRecord,
+  opts: { tolerateClientFailure?: boolean } = {},
 ): Promise<ToolContext> {
   const sys = requireAuthSystem();
-  const account = scopedAccount ?? (await getDefaultAccount());
-  const drive = await getDriveFor(account);
-  // Pre-warm calendar cache so synchronous ctx.getCalendar() works.
-  await getCalendarFor(account);
-  const authClient = await sys.factory.getClient(account.alias);
+  const account = scopedAccount ?? defaultAccountOrUndefined();
+
+  const noAccount = (): never => {
+    throw new Error(
+      'No accounts are authenticated. Run "manage_accounts add <alias>" to add one.',
+    );
+  };
+
+  // Eagerly build the account-scoped clients for the back-compat fields. On the
+  // admin path (tolerateClientFailure) a missing default (zero accounts) or a
+  // client that can't be built (e.g. a revoked grant) must NOT block tools like
+  // manage_accounts, so the failure is swallowed and these fields are left unset;
+  // client-backed handlers then surface a clear error only when actually used. On
+  // the normal path the resolver always supplies a usable account and any build
+  // error (e.g. the revoked-grant reconnect hint) propagates to the caller.
+  let drive: drive_v3.Drive | undefined;
+  let authClient: any;
+  if (account) {
+    try {
+      drive = await getDriveFor(account);
+      await getCalendarFor(account); // pre-warm calendar cache
+      authClient = await sys.factory.getClient(account.alias);
+    } catch (err) {
+      if (!opts.tolerateClientFailure) throw err;
+      log('Default-account client unavailable; continuing with a client-less admin context', {
+        alias: account.alias,
+        error: (err as Error).message,
+      });
+    }
+  } else if (!opts.tolerateClientFailure) {
+    noAccount();
+  }
 
   return {
     authClient,
     google,
-    getDrive: () => getDriveSync(account.alias),
-    getCalendar: () => getCalendarSync(account.alias),
+    getDrive: () => (account ? getDriveSync(account.alias) : noAccount()),
+    getCalendar: () => (account ? getCalendarSync(account.alias) : noAccount()),
     log,
-    resolvePath: (pathStr) => resolvePath(pathStr, drive),
-    resolveFolderId: (input) => resolveFolderId(input, drive),
-    checkFileExists: (name, parentFolderId) => checkFileExists(name, parentFolderId, drive),
+    resolvePath: (pathStr) => (drive ? resolvePath(pathStr, drive) : noAccount()),
+    resolveFolderId: (input) => (drive ? resolveFolderId(input, drive) : noAccount()),
+    checkFileExists: (name, parentFolderId) =>
+      drive ? checkFileExists(name, parentFolderId, drive) : noAccount(),
     validateTextFileExtension,
     runtimeConfig,
 
@@ -536,8 +581,10 @@ function createMcpServer(sessionId: string = STDIO_SESSION_ID, config: RuntimeCo
 
       if (ADMIN_TOOLS.has(toolName)) {
         // Admin tools operate on system-wide state; they run with the default
-        // account's context for back-compat but ignore any `account` arg.
-        ctx = await buildToolContext(sessionId);
+        // account's context for back-compat but ignore any `account` arg. Tolerate
+        // a missing/unusable default so manage_accounts still works with zero
+        // accounts or a revoked default (its handlers only touch accountOps).
+        ctx = await buildToolContext(sessionId, undefined, { tolerateClientFailure: true });
         toolArgs = rawArgs;
       } else {
         const meta = TOOL_META[toolName] ?? FALLBACK_META;
@@ -763,37 +810,64 @@ function showVersion(): void {
   console.log(`Google Drive MCP Server v${VERSION}`);
 }
 
-async function runAuthServer(): Promise<void> {
+async function runAuthServer(alias?: string): Promise<void> {
   try {
-    const oauth2Client = await initializeOAuth2Client();
-    const authServerInstance = new AuthServer(oauth2Client);
-    const success = await authServerInstance.start(true);
+    // Assemble the multi-account system WITHOUT the empty-store first-time flow, so
+    // the CLI drives a single additive consent below. This never flat-overwrites a
+    // populated tokens.json — the pre-fix legacy path wiped every other account.
+    authSystem = await buildAuthSystem({ interactiveIfEmpty: false });
+    const sys = requireAuthSystem();
 
-    if (!success && !authServerInstance.authCompletedSuccessfully) {
-      const { start, end } = authServerInstance.portRange;
-      console.error(
-        `Authentication failed. Could not start server or validate existing tokens. Check port availability (${start}-${end}) and try again.`
+    if (sys.mode !== 'local-oauth') {
+      console.log(
+        `Auth mode is '${sys.mode}'; credentials come from the environment — ` +
+          `no interactive login is required.`,
       );
-      process.exit(1);
-    } else if (authServerInstance.authCompletedSuccessfully) {
-      console.log("Authentication successful.");
+      process.exit(0);
+    }
+
+    const target =
+      alias ?? sys.store.getDefault() ?? sys.store.list()[0]?.alias ?? 'default';
+
+    // Fresh install bootstrapping a reserved alias (e.g. 'default'): addAccountFlow
+    // can't create a reserved alias, so use the standard first-time flow, which
+    // creates 'default' via v1→v2 migration. Safe: the store is empty here, so there
+    // is nothing to overwrite.
+    if (sys.store.list().length === 0 && RESERVED_ALIASES.has(target)) {
+      authSystem = await buildAuthSystem();
+      const created = requireAuthSystem().store.getDefault() ?? 'default';
+      console.log(`Authentication successful. Account '${created}' is ready.`);
       process.exit(0);
     }
 
     console.log(
-      "Authentication server started. Please complete the authentication in your browser..."
+      `${sys.store.get(target) ? 'Re-authenticating' : 'Authenticating'} account ` +
+        `'${target}'. Complete the consent in your browser...`,
     );
 
-    const intervalId = setInterval(async () => {
-      if (authServerInstance.authCompletedSuccessfully) {
-        clearInterval(intervalId);
-        await authServerInstance.stop();
-        console.log("Authentication completed successfully!");
-        process.exit(0);
-      }
-    }, 1000);
+    const { completion, cancel } = await addAccountFlow(target, true);
+    const timeoutMs = 5 * 60 * 1000;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`Timed out after ${timeoutMs / 1000}s waiting for OAuth consent.`)),
+        timeoutMs,
+      );
+    });
+    try {
+      const record = await Promise.race([completion, timeout]);
+      console.log(
+        `Authentication successful. Account '${record.alias}' (${record.email}) is ready.`,
+      );
+      process.exit(0);
+    } catch (err) {
+      await cancel().catch(() => undefined);
+      throw err;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   } catch (error) {
-    console.error("Authentication failed:", error);
+    console.error('Authentication failed:', (error as Error).message ?? error);
     process.exit(1);
   }
 }
@@ -804,6 +878,7 @@ async function runAuthServer(): Promise<void> {
 
 interface CliArgs {
   command: string | undefined;
+  authAlias?: string;
   transport: 'stdio' | 'http';
   httpPort: number;
   httpHost: string;
@@ -812,6 +887,7 @@ interface CliArgs {
 function parseCliArgs(): CliArgs {
   const args = process.argv.slice(2);
   let command: string | undefined;
+  let authAlias: string | undefined;
   let transport: string | undefined;
   let httpPort: string | undefined;
   let httpHost: string | undefined;
@@ -841,6 +917,11 @@ function parseCliArgs(): CliArgs {
       command = arg;
       continue;
     }
+    // Second positional (e.g. `auth work`) is the target account alias.
+    if (command && authAlias === undefined && !arg.startsWith('--')) {
+      authAlias = arg;
+      continue;
+    }
   }
 
   const resolvedTransport = transport || process.env.MCP_TRANSPORT || 'stdio';
@@ -857,6 +938,7 @@ function parseCliArgs(): CliArgs {
 
   return {
     command,
+    authAlias,
     transport: resolvedTransport,
     httpPort: resolvedPort,
     httpHost: httpHost || process.env.MCP_HTTP_HOST || '127.0.0.1',
@@ -868,7 +950,7 @@ async function main() {
 
   switch (args.command) {
     case "auth":
-      await runAuthServer();
+      await runAuthServer(args.authAlias);
       break;
     case "start":
     case undefined:

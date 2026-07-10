@@ -216,3 +216,54 @@ test('AccountStore synthetic mode does not touch disk', async () => {
   assert.ok(store.get('service-account'));
   assert.ok(store.getSyntheticClient('service-account'));
 });
+
+// ---------------------------------------------------------------------------
+// Cross-process safety + corrupt-file self-heal (regression: PR #106 review)
+// ---------------------------------------------------------------------------
+
+test('AccountStore merges a concurrent writer instead of clobbering it (finding 2)', async () => {
+  const filePath = await mktmp();
+  // Two independent stores on the same file, both loaded while empty — simulating
+  // two server processes (e.g. Claude Desktop + Cursor) sharing tokens.json.
+  const a = new AccountStore({ filePath, mode: 'local-oauth' });
+  const b = new AccountStore({ filePath, mode: 'local-oauth' });
+  await a.reload();
+  await b.reload();
+
+  await a.upsert(makeRecord('work'));
+  // b's in-memory snapshot predates 'work'; its write must not drop it.
+  await b.upsert(makeRecord('personal'));
+
+  const c = new AccountStore({ filePath, mode: 'local-oauth' });
+  await c.reload();
+  assert.ok(c.get('work'), "work (written by A) must survive B's write");
+  assert.ok(c.get('personal'), 'personal (written by B) must be present');
+});
+
+test('AccountStore reload rejects a v2 file with null accounts (finding 14)', async () => {
+  const filePath = await mktmp();
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify({ version: 2, accounts: null }));
+  const store = new AccountStore({ filePath, mode: 'local-oauth' });
+  await assert.rejects(() => store.reload(), /Unrecognized tokens\.json format/);
+});
+
+test('AccountStore quarantines a corrupt file and resets to empty (finding 6)', async () => {
+  const filePath = await mktmp();
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, '{ this is not valid json');
+  const store = new AccountStore({ filePath, mode: 'local-oauth' });
+  // reload() still throws (so programmatic callers/tests see the error)...
+  await assert.rejects(() => store.reload(), /JSON|Unexpected|token/i);
+
+  // ...but the boot layer can self-heal by quarantining the bad file.
+  const backup = await store.quarantineCorruptFile();
+  assert.ok(backup && backup.includes('.corrupt-'), `expected a .corrupt-* backup, got ${backup}`);
+  await store.reload(); // original moved aside → ENOENT → empty
+  assert.equal(store.list().length, 0);
+  const entries = await fs.readdir(path.dirname(filePath));
+  assert.ok(
+    entries.some((e) => e.includes('.corrupt-')),
+    `expected a corrupt backup file, saw: ${entries.join(', ')}`,
+  );
+});

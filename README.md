@@ -490,6 +490,7 @@ When binding to `127.0.0.1` (default), DNS rebinding protection is automatically
   - `role`: Permission role (`reader`, `commenter`, `writer`, `fileOrganizer`, `organizer`, `owner`)
   - `emailAddress`: Required for `user`/`group` types
   - `domain`: Required for `domain` type
+  - `allowFileDiscovery`: For `domain`/`anyone` only — `false` (default) = accessible with the link, `true` = discoverable in search (optional)
   - `sendNotificationEmail`: Send notification email (optional)
 
 - **updatePermission** - Update role for an existing permission

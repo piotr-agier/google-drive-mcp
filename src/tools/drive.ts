@@ -144,11 +144,22 @@ const ListPermissionsSchema = z.object({
 
 const AddPermissionSchema = z.object({
   fileId: z.string().min(1, "File ID is required"),
-  emailAddress: z.string().email("Valid email is required"),
+  emailAddress: z.string().email("Valid email is required").optional(),
+  domain: z.string().min(1, "Domain is required").optional(),
   role: z.enum(["owner", "organizer", "fileOrganizer", "writer", "commenter", "reader"]).default("reader"),
   type: z.enum(["user", "group", "domain", "anyone"]).default("user"),
   sendNotificationEmail: z.boolean().optional().default(false),
   emailMessage: z.string().optional(),
+  allowFileDiscovery: z.boolean().optional(),
+}).superRefine((data, ctx) => {
+  if ((data.type === "user" || data.type === "group") && !data.emailAddress) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["emailAddress"],
+      message: "emailAddress is required when type is 'user' or 'group'" });
+  }
+  if (data.type === "domain" && !data.domain) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["domain"],
+      message: "domain is required when type is 'domain'" });
+  }
 });
 
 const UpdatePermissionSchema = z.object({
@@ -441,18 +452,20 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "addPermission",
-    description: "Add a sharing permission to a file",
+    description: "Add a sharing permission to a file. Provide emailAddress for type 'user'/'group', domain for type 'domain', and neither for 'anyone'.",
     inputSchema: {
       type: "object",
       properties: {
         fileId: { type: "string", description: "Google Drive file ID" },
-        emailAddress: { type: "string", description: "Target user/group email" },
+        emailAddress: { type: "string", description: "Target user/group email. Required when type is 'user' or 'group'; ignored for 'domain'/'anyone'." },
+        domain: { type: "string", description: "Target domain, e.g. 'example.com'. Required when type is 'domain'; ignored otherwise." },
         role: { type: "string", enum: ["owner", "organizer", "fileOrganizer", "writer", "commenter", "reader"], description: "Permission role" },
         type: { type: "string", enum: ["user", "group", "domain", "anyone"], description: "Principal type" },
         sendNotificationEmail: { type: "boolean", description: "Send notification email" },
-        emailMessage: { type: "string", description: "Custom message to include in the notification email. Ignored unless sendNotificationEmail is true." }
+        emailMessage: { type: "string", description: "Custom message to include in the notification email. Ignored unless sendNotificationEmail is true." },
+        allowFileDiscovery: { type: "boolean", description: "Only for type 'domain'/'anyone': false (default) = accessible with the link only; true = discoverable in search. Ignored for 'user'/'group'." }
       },
-      required: ["fileId", "emailAddress"]
+      required: ["fileId"]
     }
   },
   {
@@ -1453,15 +1466,18 @@ export async function handleTool(
         requestBody: {
           type: data.type,
           role: data.role,
-          emailAddress: data.emailAddress,
+          ...((data.type === "user" || data.type === "group") && { emailAddress: data.emailAddress }),
+          ...(data.type === "domain" && { domain: data.domain }),
+          ...((data.type === "anyone" || data.type === "domain") && data.allowFileDiscovery !== undefined && { allowFileDiscovery: data.allowFileDiscovery }),
         },
         sendNotificationEmail: data.sendNotificationEmail,
         ...(data.emailMessage && { emailMessage: data.emailMessage }),
-        fields: 'id,type,role,emailAddress',
+        fields: 'id,type,role,emailAddress,domain,allowFileDiscovery',
         supportsAllDrives: true,
       });
 
-      return { content: [{ type: 'text', text: `Permission added: ${response.data.id} (${response.data.role}) for ${response.data.emailAddress || data.emailAddress}` }], isError: false };
+      const principal = response.data.emailAddress || response.data.domain || data.emailAddress || data.domain || data.type;
+      return { content: [{ type: 'text', text: `Permission added: ${response.data.id} (${response.data.role}) for ${principal}` }], isError: false };
     }
 
     case "updatePermission": {

@@ -13,7 +13,7 @@ import { escapeDriveQuery, getMimeTypeFromFilename, isTextMime, TEXT_MIME_TYPES 
 import { downloadTextContent } from './text-content.js';
 import { downloadDriveFile, GOOGLE_WORKSPACE_EXPORT_FORMATS } from '../download-file.js';
 import { getSecureTokenPath } from '../auth/utils.js';
-import { SCOPE_ALIASES, SCOPE_PRESETS, resolveOAuthScopes } from '../auth/scopes.js';
+import { SCOPE_ALIASES, SCOPE_PRESETS, resolveOAuthScopes, splitScopes } from '../auth/scopes.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -299,7 +299,7 @@ export function resolveSetDefaultTarget(account_id: string | null | undefined): 
 function getGrantedScopesFromAuthClient(ctx: ToolContext): string[] {
   const scopeRaw = ctx.authClient?.credentials?.scope;
   if (!scopeRaw || typeof scopeRaw !== 'string') return [];
-  return [...new Set(scopeRaw.split(' ').map((s: string) => s.trim()).filter(Boolean))];
+  return splitScopes(scopeRaw);
 }
 
 function resolveScopeStatus(ctx: ToolContext): { requestedScopes: string[]; grantedScopes: string[]; missingScopes: string[] } {

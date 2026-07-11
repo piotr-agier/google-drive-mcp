@@ -18,7 +18,7 @@ import {
   RedactedAccountView,
   TokenFileV2,
 } from './types.js';
-import { DEFAULT_SCOPES } from './scopes.js';
+import { DEFAULT_SCOPES, splitScopes } from './scopes.js';
 import {
   getAdditionalLegacyPaths,
   getLegacyTokenPath,
@@ -36,7 +36,6 @@ export class AccountStore {
   private syntheticClients = new Map<string, unknown>();
   private writeQueue: Promise<void> = Promise.resolve();
   private tmpSeq = 0;
-  private loaded = false;
 
   constructor(opts?: { filePath?: string; mode?: AuthMode }) {
     this.filePath = opts?.filePath ?? getSecureTokenPath();
@@ -57,7 +56,6 @@ export class AccountStore {
    */
   async reload(): Promise<void> {
     if (this.mode !== 'local-oauth') {
-      this.loaded = true;
       return;
     }
 
@@ -73,13 +71,11 @@ export class AccountStore {
         !Array.isArray(parsed.accounts)
       ) {
         this.data = parsed as unknown as TokenFileV2;
-        this.loaded = true;
         return;
       }
 
       if (looksLikeV1(parsed)) {
         await this.migrateFromV1(parsed as V1TokenShape);
-        this.loaded = true;
         return;
       }
 
@@ -92,11 +88,9 @@ export class AccountStore {
         // No current file — check legacy paths before giving up.
         const migrated = await this.tryMigrateLegacyPaths();
         if (migrated) {
-          this.loaded = true;
           return;
         }
         this.data = emptyFile();
-        this.loaded = true;
         return;
       }
       throw err;
@@ -122,7 +116,6 @@ export class AccountStore {
       }
     }
     this.data = emptyFile();
-    this.loaded = true;
     return moved;
   }
 
@@ -132,10 +125,6 @@ export class AccountStore {
 
   get(alias: string): AccountRecord | undefined {
     return this.data.accounts[alias];
-  }
-
-  getBySub(sub: string): AccountRecord | undefined {
-    return Object.values(this.data.accounts).find((a) => a.sub === sub);
   }
 
   getDefault(): string | undefined {
@@ -192,7 +181,7 @@ export class AccountStore {
       email: r.email,
       sub: r.sub,
       addedAt: r.addedAt,
-      scopesGranted: r.scope ? r.scope.split(/\s+/).filter(Boolean) : [],
+      scopesGranted: splitScopes(r.scope),
       expiresInSec: r.expiryDate ? Math.floor((r.expiryDate - now) / 1000) : null,
       pendingIdentity: !!r.pendingIdentity,
       isDefault: r.alias === defaultAlias,

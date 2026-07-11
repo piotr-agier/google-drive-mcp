@@ -71,3 +71,13 @@ export function resolveOAuthScopes(): string[] {
 export function resolveAddAccountScopes(): string[] {
   return [...resolveOAuthScopes(), ...USERINFO_SCOPES];
 }
+
+/**
+ * Split an OAuth scope string (space/whitespace-separated per RFC 6749) into a
+ * deduped list of individual scopes. The single source of truth for scope-string
+ * tokenization across the resolver, store, and diagnostics.
+ */
+export function splitScopes(scope: string | null | undefined): string[] {
+  if (!scope) return [];
+  return [...new Set(scope.split(/\s+/).filter(Boolean))];
+}

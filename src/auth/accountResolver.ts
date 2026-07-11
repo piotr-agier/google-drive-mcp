@@ -16,6 +16,7 @@
 import { AccountStore } from './accountStore.js';
 import { SessionStore } from './sessionStore.js';
 import { AccountRecord, AccountTargeting, ToolOpKind } from './types.js';
+import { splitScopes } from './scopes.js';
 
 export interface ResolveContext {
   sessionId: string;
@@ -139,7 +140,7 @@ export class AccountResolver {
 /** Any-of scope check: true iff `granted` contains at least one `acceptable` scope. */
 export function coversScopes(granted: string, acceptable: string[]): boolean {
   if (acceptable.length === 0) return true;
-  const grantedSet = new Set(granted.split(/\s+/).filter(Boolean));
+  const grantedSet = new Set(splitScopes(granted));
   return acceptable.some((s) => grantedSet.has(s));
 }
 

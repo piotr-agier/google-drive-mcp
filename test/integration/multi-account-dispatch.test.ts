@@ -24,8 +24,8 @@ describe('Multi-account dispatch routing', () => {
     serverModule = await import('../../src/index.js');
 
     // Seed two extra synthetic accounts on top of the default 'test' account.
-    serverModule._addSyntheticAccountForTesting('alpha', { _marker: 'alpha-client' });
-    serverModule._addSyntheticAccountForTesting('beta', { _marker: 'beta-client' });
+    await serverModule._addSyntheticAccountForTesting('alpha', { _marker: 'alpha-client' });
+    await serverModule._addSyntheticAccountForTesting('beta', { _marker: 'beta-client' });
 
     // Wrap google.drive so we record the auth marker for every construction.
     originalDriveFactory = google.drive as any;

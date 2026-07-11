@@ -3,7 +3,7 @@ import { z } from 'zod';
 import JSZip from 'jszip';
 import type { ToolDefinition, ToolContext, ToolResult } from '../types.js';
 import { errorResponse } from '../types.js';
-import { escapeDriveQuery, isTextMime } from '../utils.js';
+import { escapeDriveQuery, isTextMime, ALL_DRIVES_LIST_PARAMS } from '../utils.js';
 import { downloadTextContent, writeTextContent } from './text-content.js';
 import { uploadImageToDrive } from '../utils/driveImageUpload.js';
 import { withRetry } from '../utils/retry.js';
@@ -3378,8 +3378,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         pageSize: a.maxResults,
         orderBy: a.orderBy === 'name' ? 'name' : a.orderBy,
         fields: 'files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress))',
-        supportsAllDrives: true,
-        includeItemsFromAllDrives: true
+        ...ALL_DRIVES_LIST_PARAMS
       });
 
       const files = response.data.files || [];
@@ -3413,6 +3412,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const response = await ctx.getDrive().files.get({
         fileId: a.documentId,
         fields: 'id,name,description,mimeType,size,createdTime,modifiedTime,webViewLink,owners(displayName,emailAddress),lastModifyingUser(displayName,emailAddress),shared,parents,version',
+        supportsAllDrives: true,
       });
 
       const file = response.data;

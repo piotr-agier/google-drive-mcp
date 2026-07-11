@@ -15,6 +15,50 @@ export function isServiceAccountMode(): boolean {
   return !!process.env.GOOGLE_APPLICATION_CREDENTIALS;
 }
 
+export type ActiveAuthMode = 'service_account' | 'external_token' | 'oauth';
+
+/**
+ * Env vars whose mere presence overrides the local `tokens.json` OAuth flow.
+ * Keyed by the mode they force. Used to explain to users *why* their
+ * authenticated `tokens.json` is being bypassed (see issue #137).
+ */
+export const AUTH_MODE_OVERRIDE_ENV_VARS: Record<Exclude<ActiveAuthMode, 'oauth'>, string> = {
+  service_account: 'GOOGLE_APPLICATION_CREDENTIALS',
+  external_token: 'GOOGLE_DRIVE_MCP_ACCESS_TOKEN',
+};
+
+/**
+ * The single source of truth for which auth mode `authenticate()` (src/auth.ts)
+ * selects, based purely on env-var presence. Service-account and external-token
+ * modes take strict priority over the local `tokens.json` OAuth flow;
+ * `authenticate()` switches on this value.
+ */
+export function getActiveAuthMode(): ActiveAuthMode {
+  if (isServiceAccountMode()) return 'service_account';
+  if (isExternalTokenMode()) return 'external_token';
+  return 'oauth';
+}
+
+/**
+ * The user-facing warning for the issue #137 trap: an override env var forces
+ * service-account/external-token mode while an authenticated `tokens.json`
+ * exists on disk and is therefore silently ignored. Returns `null` when no such
+ * token file exists (nothing is being bypassed). Pure — the caller supplies the
+ * token path and its existence, so both the startup warning and `authGetStatus`
+ * emit identical wording.
+ */
+export function describeBypassedTokens(
+  mode: Exclude<ActiveAuthMode, 'oauth'>,
+  tokenPath: string,
+  tokenExists: boolean,
+): string | null {
+  if (!tokenExists) return null;
+  const envVar = AUTH_MODE_OVERRIDE_ENV_VARS[mode];
+  return `The local OAuth token at ${tokenPath} exists but is IGNORED because ` +
+    `${envVar} is set (active auth mode: ${mode}). Unset ${envVar} to use your ` +
+    `authenticated Google account (see issue #137).`;
+}
+
 /**
  * Build `GoogleAuth` options from the current environment.
  *

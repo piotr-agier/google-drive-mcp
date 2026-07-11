@@ -35,6 +35,7 @@ import { join, dirname } from 'path';
 import {
   getExtensionFromFilename,
   escapeDriveQuery,
+  ALL_DRIVES_LIST_PARAMS,
 } from './utils.js';
 import type { AccountOps, AddAccountResult, ToolContext } from './types.js';
 import { errorResponse } from './types.js';
@@ -338,6 +339,9 @@ async function resolvePath(pathStr: string, drive: drive_v3.Drive): Promise<stri
       q: `'${currentFolderId}' in parents and name = '${escapedPart}' and mimeType = '${FOLDER_MIME_TYPE}' and trashed = false`,
       fields: 'files(id)',
       spaces: 'drive',
+      // Parent-scoped probe with a create-on-empty fallback: the two flags
+      // already surface Shared Drive items, and we avoid corpora=allDrives so
+      // an incompleteSearch partial result can't make us create a duplicate.
       includeItemsFromAllDrives: true,
       supportsAllDrives: true
     });
@@ -393,6 +397,9 @@ async function checkFileExists(name: string, parentFolderId: string = 'root', dr
       q: query,
       fields: 'files(id, name, mimeType)',
       pageSize: 1,
+      // Dedup guard: keep only the two flags (no corpora=allDrives) so an
+      // incompleteSearch partial result can't miss an existing file and let a
+      // duplicate be created.
       includeItemsFromAllDrives: true,
       supportsAllDrives: true
     });
@@ -645,14 +652,14 @@ function registerResourceHandlers(s: Server): void {
       fields: string,
       pageToken?: string,
       q: string,
+      corpora: string,
       includeItemsFromAllDrives: boolean,
       supportsAllDrives: boolean
     } = {
       pageSize,
       fields: "nextPageToken, files(id, name, mimeType)",
       q: `trashed = false`,
-      includeItemsFromAllDrives: true,
-      supportsAllDrives: true
+      ...ALL_DRIVES_LIST_PARAMS
     };
 
     if (request.params?.cursor) {
@@ -661,6 +668,9 @@ function registerResourceHandlers(s: Server): void {
 
     const res = await drive.files.list(params);
     log('Listed files', { count: res.data.files?.length });
+    if (res.data.incompleteSearch) {
+      log('ListResources: incomplete search — some shared-drive items may be missing');
+    }
     const files = res.data.files || [];
 
     return {

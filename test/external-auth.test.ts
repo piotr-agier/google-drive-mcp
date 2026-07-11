@@ -9,6 +9,7 @@ import {
   buildServiceAccountAuthOptions,
 } from '../src/auth/externalAuth.js';
 import { SCOPE_ALIASES } from '../src/auth/scopes.js';
+import { withEnv as setEnv } from './helpers/env.js';
 
 // ---------------------------------------------------------------------------
 // Helpers — save & restore env vars around each test
@@ -23,23 +24,18 @@ const EXTERNAL_VARS = [
   'GOOGLE_DRIVE_MCP_SCOPES',
 ] as const;
 
-function clearExternalEnv() {
-  for (const v of EXTERNAL_VARS) delete process.env[v];
-}
-
+// Wraps a test body: force-clears every EXTERNAL_VAR (so ambient config can't
+// leak in), applies `vars`, and restores everything afterward — built on the
+// shared withEnv primitive so the save/restore logic lives in one place.
 function withEnv(vars: Record<string, string>, fn: () => void | Promise<void>) {
   return async () => {
-    const saved: Record<string, string | undefined> = {};
-    for (const v of EXTERNAL_VARS) saved[v] = process.env[v];
-    clearExternalEnv();
-    for (const [k, v] of Object.entries(vars)) process.env[k] = v;
+    const cleared: Record<string, string | undefined> = {};
+    for (const v of EXTERNAL_VARS) cleared[v] = undefined;
+    const env = setEnv({ ...cleared, ...vars });
     try {
       await fn();
     } finally {
-      clearExternalEnv();
-      for (const [k, v] of Object.entries(saved)) {
-        if (v !== undefined) process.env[k] = v;
-      }
+      env.restore();
     }
   };
 }

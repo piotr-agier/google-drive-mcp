@@ -3,6 +3,25 @@
 // -----------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// Drive list params
+// ---------------------------------------------------------------------------
+
+/**
+ * The `files.list` params that surface Shared Drive items across *all* drives
+ * the user can reach. Spread into broad (non-parent-scoped) listings so every
+ * such endpoint stays consistent and a new one can't silently omit a flag and
+ * re-hide Shared Drive results (issue #137). Parent-scoped probes deliberately
+ * use only `includeItemsFromAllDrives`/`supportsAllDrives` without
+ * `corpora: 'allDrives'`, which is the only corpus that can return
+ * `incompleteSearch` partial results.
+ */
+export const ALL_DRIVES_LIST_PARAMS = {
+  corpora: 'allDrives',
+  includeItemsFromAllDrives: true,
+  supportsAllDrives: true,
+} as const;
+
+// ---------------------------------------------------------------------------
 // Calendar helpers
 // ---------------------------------------------------------------------------
 

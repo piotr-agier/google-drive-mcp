@@ -7,14 +7,17 @@ import { initializeOAuth2Client } from './auth/client.js';
 import {
   createExternalOAuth2Client,
   createServiceAccountAuth,
+  describeBypassedTokens,
   isExternalTokenMode,
   isServiceAccountMode,
   validateExternalTokenConfig,
 } from './auth/externalAuth.js';
+import { getSecureTokenPath } from './auth/utils.js';
 import { resolveOAuthScopes } from './auth/scopes.js';
 import { AuthServer } from './auth/server.js';
 import { SessionStore } from './auth/sessionStore.js';
 import { AccountRecord, AuthMode } from './auth/types.js';
+import { existsSync } from 'fs';
 
 export { initializeOAuth2Client } from './auth/client.js';
 export { AuthServer } from './auth/server.js';
@@ -46,6 +49,23 @@ export interface AuthSystem {
 }
 
 /**
+ * When an env var forces service-account/external-token mode, the user's
+ * authenticated `tokens.json` is silently ignored. If such a file exists, say
+ * so loudly on stderr — this is the trap behind issue #137, where a broad
+ * `auth/drive` token appears valid yet every Drive call comes back empty
+ * because the process is actually acting as an empty service account.
+ */
+function warnIfLocalTokensBypassed(mode: 'service_account' | 'external_token'): void {
+  try {
+    const tokenPath = getSecureTokenPath();
+    const msg = describeBypassedTokens(mode, tokenPath, existsSync(tokenPath));
+    if (msg) console.error(`⚠  ${msg}`);
+  } catch {
+    // A diagnostic warning must never break authentication.
+  }
+}
+
+/**
  * Build the multi-account auth system.
  *
  * - Detects mode from env (service account > external token > local OAuth).
@@ -60,6 +80,7 @@ export async function buildAuthSystem(
   console.error('Initializing authentication...');
 
   if (isServiceAccountMode()) {
+    warnIfLocalTokensBypassed('service_account');
     const client = await createServiceAccountAuth();
     const store = new AccountStore({ mode: 'service-account' });
     await store.reload();
@@ -68,6 +89,7 @@ export async function buildAuthSystem(
   }
 
   if (isExternalTokenMode()) {
+    warnIfLocalTokensBypassed('external_token');
     validateExternalTokenConfig();
     const client = createExternalOAuth2Client();
     const store = new AccountStore({ mode: 'external-token' });

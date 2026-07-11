@@ -61,3 +61,13 @@ export function resolveOAuthScopes(): string[] {
   if (scopes.length === 0) return [...DEFAULT_SCOPES];
   return [...new Set(scopes)];
 }
+
+/**
+ * Scopes requested by `manage_accounts add`: the operator-configured OAuth scopes
+ * (`GOOGLE_DRIVE_MCP_SCOPES` via `resolveOAuthScopes`) plus `USERINFO_SCOPES` so the
+ * new account's email and stable subject id can be discovered right after consent.
+ * Mirrors the boot flow, which also honors `GOOGLE_DRIVE_MCP_SCOPES`.
+ */
+export function resolveAddAccountScopes(): string[] {
+  return [...resolveOAuthScopes(), ...USERINFO_SCOPES];
+}

@@ -248,6 +248,14 @@ test('AccountStore reload rejects a v2 file with null accounts (finding 14)', as
   await assert.rejects(() => store.reload(), /Unrecognized tokens\.json format/);
 });
 
+test('AccountStore reload rejects a v2 file whose accounts is an array (finding 14)', async () => {
+  const filePath = await mktmp();
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify({ version: 2, accounts: [] }));
+  const store = new AccountStore({ filePath, mode: 'local-oauth' });
+  await assert.rejects(() => store.reload(), /Unrecognized tokens\.json format/);
+});
+
 test('AccountStore quarantines a corrupt file and resets to empty (finding 6)', async () => {
   const filePath = await mktmp();
   await fs.mkdir(path.dirname(filePath), { recursive: true });

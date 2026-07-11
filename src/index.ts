@@ -250,6 +250,9 @@ async function addAccountFlow(alias: string, openBrowser = true): Promise<AddAcc
         resolveCompletion(record);
       } catch (err) {
         rejectCompletion(err as Error);
+        // Rethrow so the AuthServer callback renders its failure page instead of
+        // "success" when persistence failed — keeps the browser and tool in sync.
+        throw err;
       }
     },
   });
@@ -316,22 +319,6 @@ function buildAccountOps(): AccountOps {
     remove: removeAccountFlow,
     setDefault: setDefaultAccountFlow,
   };
-}
-
-// Synchronous accessors for back-compat legacy fields on ToolContext. These
-// assume the default account is already loaded (authSystem initialized) and
-// its client already cached. The CallToolRequest handler does this warm-up
-// before building the context.
-function getDriveSync(alias: string): drive_v3.Drive {
-  const drive = _driveByAlias.get(alias);
-  if (!drive) throw new Error(`Drive service not initialized for account "${alias}"`);
-  return drive;
-}
-
-function getCalendarSync(alias: string): calendar_v3.Calendar {
-  const cal = _calendarByAlias.get(alias);
-  if (!cal) throw new Error(`Calendar service not initialized for account "${alias}"`);
-  return cal;
 }
 
 // -----------------------------------------------------------------------------
@@ -509,11 +496,12 @@ async function buildToolContext(
   // the normal path the resolver always supplies a usable account and any build
   // error (e.g. the revoked-grant reconnect hint) propagates to the caller.
   let drive: drive_v3.Drive | undefined;
+  let calendar: calendar_v3.Calendar | undefined;
   let authClient: any;
   if (account) {
     try {
       drive = await getDriveFor(account);
-      await getCalendarFor(account); // pre-warm calendar cache
+      calendar = await getCalendarFor(account); // pre-warm calendar cache
       authClient = await sys.factory.getClient(account.alias);
     } catch (err) {
       if (!opts.tolerateClientFailure) throw err;
@@ -529,8 +517,8 @@ async function buildToolContext(
   return {
     authClient,
     google,
-    getDrive: () => (account ? getDriveSync(account.alias) : noAccount()),
-    getCalendar: () => (account ? getCalendarSync(account.alias) : noAccount()),
+    getDrive: () => drive ?? noAccount(),
+    getCalendar: () => calendar ?? noAccount(),
     log,
     resolvePath: (pathStr) => (drive ? resolvePath(pathStr, drive) : noAccount()),
     resolveFolderId: (input) => (drive ? resolveFolderId(input, drive) : noAccount()),
@@ -1274,11 +1262,11 @@ export function _getAuthSystemForTesting(): AuthSystem | null {
  * so test-side instrumentation on it (markers, spies) flows into the
  * per-account ctx that handlers receive.
  */
-export function _addSyntheticAccountForTesting(
+export async function _addSyntheticAccountForTesting(
   alias: string,
   client: any,
   opts?: { setDefault?: boolean; scope?: string },
-): void {
+): Promise<void> {
   if (!authSystem) {
     throw new Error('_setAuthClientForTesting must be called before _addSyntheticAccountForTesting');
   }
@@ -1303,19 +1291,12 @@ export function _addSyntheticAccountForTesting(
     addedAt: new Date().toISOString(),
     lastRefreshedAt: new Date().toISOString(),
   };
+  // setSyntheticAccount unconditionally promotes its arg to default; remember the
+  // current default first so we can restore it unless the caller wanted a switch.
+  const prevDefault = authSystem.store.getDefault();
   authSystem.store.setSyntheticAccount(record, client);
-  // setSyntheticAccount unconditionally promotes its arg to default; restore
-  // unless the caller explicitly wanted a default switch.
-  if (!opts?.setDefault) {
-    // setSyntheticAccount last writer wins on default — re-pin the original.
-    // Look up the first non-this-alias account and pin it back.
-    const others = authSystem.store.list().filter((a) => a.alias !== alias);
-    if (others.length > 0) {
-      // Mutate via the underlying data — synchronous, no disk in test mode.
-      // Use the public setDefault path to keep semantics consistent.
-      // Note: setDefault enqueues; in test mode it's a no-op write so safe.
-      void authSystem.store.setDefault(others[0].alias);
-    }
+  if (!opts?.setDefault && prevDefault && prevDefault !== alias) {
+    await authSystem.store.setDefault(prevDefault);
   }
   // Evict any cached drive/calendar services for the new alias so subsequent
   // ctx access rebuilds them through the factory (which returns the synthetic

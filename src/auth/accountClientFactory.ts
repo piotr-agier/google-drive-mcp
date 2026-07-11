@@ -53,13 +53,6 @@ export class AccountClientFactory {
     return client;
   }
 
-  /** Read-through access without refresh — useful for diagnostics only. */
-  peekClient(alias: string): OAuth2Client | undefined {
-    const synthetic = this.store.getSyntheticClient(alias);
-    if (synthetic) return synthetic as OAuth2Client;
-    return this.clients.get(alias);
-  }
-
   /** Drop a cached client (e.g. after `remove`). */
   evict(alias: string): void {
     this.clients.delete(alias);

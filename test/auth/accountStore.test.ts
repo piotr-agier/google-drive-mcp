@@ -107,7 +107,7 @@ test('AccountStore write failure does not poison subsequent writes', async () =>
   const filePath = await mktmp();
   const store = new AccountStore({ filePath, mode: 'local-oauth' });
   await store.reload();
-  // Force a write failure: make the directory read-only so atomic rename fails.
+  // Trigger a write that rejects (see below) and assert it doesn't poison the queue.
   const firstBad: Promise<void> = (async () => {
     // setDefault of a missing alias throws inside the mutate callback → chained rejection.
     await assert.rejects(() => store.setDefault('does-not-exist'), /does not exist/);

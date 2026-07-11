@@ -111,8 +111,8 @@ describe('HTTP per-session account routing', () => {
     mod = await getServerModule();
     mod._setAuthClientForTesting({ request: async () => ({ data: 'mock' }) });
     // Two extra synthetic accounts on top of the default 'test' account.
-    mod._addSyntheticAccountForTesting('alpha', { _marker: 'alpha-client' });
-    mod._addSyntheticAccountForTesting('beta', { _marker: 'beta-client' });
+    await mod._addSyntheticAccountForTesting('alpha', { _marker: 'alpha-client' });
+    await mod._addSyntheticAccountForTesting('beta', { _marker: 'beta-client' });
 
     // Record the auth marker for every drive-service construction.
     originalDriveFactory = google.drive as any;

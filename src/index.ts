@@ -4,7 +4,8 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
-import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
+import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
+import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import {
   CallToolRequestSchema,
   ListResourcesRequestSchema,
@@ -37,11 +38,12 @@ import {
   getExtensionFromFilename,
   escapeDriveQuery,
 } from './utils.js';
-import type { AccountOps, AddAccountResult, ToolContext } from './types.js';
+import type { AccountOps, AddAccountResult, ToolContext, ToolResult } from './types.js';
 import { errorResponse } from './types.js';
 import { loadRuntimeConfig, parseBoolEnv, type RuntimeConfig } from './utils/cliArgs.js';
 import { GOOGLE_CALLBACK_PATH, loadTeamConfig } from './auth/team/config.js';
 import { createTeamRuntime, type TeamRuntime } from './auth/team/runtime.js';
+import { coversScopes } from './auth/accountResolver.js';
 
 import * as driveTools from './tools/drive.js';
 import * as docsTools from './tools/docs.js';
@@ -547,6 +549,127 @@ async function buildToolContext(
 }
 
 // -----------------------------------------------------------------------------
+// TEAM-MODE DISPATCH
+// -----------------------------------------------------------------------------
+
+/**
+ * Team-mode tool dispatch: identity comes exclusively from the bearer token's
+ * `sub` (propagated by the transport as extra.authInfo), never from tool
+ * arguments or any shared default — the AccountResolver path stays untouched
+ * and unreachable. The `account` argument and `manage_accounts` are rejected
+ * outright so no alias-addressed route into another user's data exists.
+ */
+async function handleTeamToolCall(
+  toolName: string,
+  rawArgs: Record<string, unknown>,
+  extra: { sessionId?: string; authInfo?: { extra?: Record<string, unknown> } } | undefined,
+): Promise<ToolResult> {
+  const runtime = teamRuntime!;
+  const sub = extra?.authInfo?.extra?.sub;
+  log('Handling tool request (team)', { tool: toolName });
+  try {
+    if (typeof sub !== 'string' || sub.length === 0) {
+      // requireBearerAuth guarantees an identity on every /mcp request;
+      // defense-in-depth in case dispatch is ever reached another way.
+      return errorResponse('Unauthenticated request: no user identity is attached to this call.');
+    }
+    if (toolName === 'manage_accounts') {
+      return errorResponse(
+        'manage_accounts is not available in team mode — each member signs in through the ' +
+          "connector's OAuth flow and always acts as themselves.",
+      );
+    }
+    if (rawArgs.account !== undefined) {
+      return errorResponse(
+        "The 'account' parameter is not available in team mode — every call runs as the " +
+          'signed-in user.',
+      );
+    }
+
+    if (!ADMIN_TOOLS.has(toolName)) {
+      const meta = TOOL_META[toolName] ?? FALLBACK_META;
+      const user = await runtime.store.getUser(sub);
+      if (!user) {
+        return errorResponse(
+          'Your team sign-in is no longer on file on this server. Reconnect this connector to sign in again.',
+        );
+      }
+      if (!coversScopes(user.grantedScopes.join(' '), meta.acceptableScopes)) {
+        return errorResponse(
+          `Your Google authorization lacks the required scope for this operation: ` +
+            `${meta.acceptableScopes.join(', ')}. Reconnect this connector and approve all ` +
+            'requested permissions.',
+        );
+      }
+    }
+
+    const sessionId = extra?.sessionId ?? STDIO_SESSION_ID;
+    const ctx = await buildTeamToolContext(sessionId, sub);
+    for (const mod of domainModules) {
+      const result = await mod.handleTool(toolName, rawArgs, ctx);
+      if (result !== null) return result;
+    }
+    return errorResponse('Tool not found');
+  } catch (error) {
+    log('Error in team tool request handler', { error: (error as Error).message });
+    return errorResponse((error as Error).message);
+  }
+}
+
+/**
+ * Team-mode sibling of buildToolContext: every client comes from the
+ * per-sub TeamClientFactory, and the multi-account surface is stubbed to fail
+ * loudly — in team mode there is exactly one identity per request.
+ */
+async function buildTeamToolContext(sessionId: string, sub: string): Promise<ToolContext> {
+  const runtime = teamRuntime!;
+  const drive = await runtime.clientFactory.getDrive(sub);
+  const calendar = await runtime.clientFactory.getCalendar(sub);
+  const authClient = await runtime.clientFactory.getClient(sub);
+
+  const notInTeamMode = (what: string) => () => {
+    throw new Error(`${what} is not available in team mode.`);
+  };
+
+  return {
+    authClient,
+    google,
+    getDrive: () => drive,
+    getCalendar: () => calendar,
+    log,
+    resolvePath: (pathStr) => resolvePath(pathStr, drive),
+    resolveFolderId: (input) => resolveFolderId(input, drive),
+    checkFileExists: (name, parentFolderId) => checkFileExists(name, parentFolderId, drive),
+    validateTextFileExtension,
+    runtimeConfig,
+
+    sessionId,
+    resolveAccount: async () => {
+      throw new Error(
+        'Account selection is not available in team mode — every call runs as the signed-in user.',
+      );
+    },
+    getDriveFor: async () => {
+      throw new Error('getDriveFor is not available in team mode.');
+    },
+    getCalendarFor: async () => {
+      throw new Error('getCalendarFor is not available in team mode.');
+    },
+    getAuthClientFor: async () => {
+      throw new Error('getAuthClientFor is not available in team mode.');
+    },
+    accountOps: {
+      mode: 'external-token',
+      list: notInTeamMode('Account management'),
+      getDefault: notInTeamMode('Account management'),
+      add: notInTeamMode('Account management') as unknown as AccountOps['add'],
+      remove: notInTeamMode('Account management') as unknown as AccountOps['remove'],
+      setDefault: notInTeamMode('Account management') as unknown as AccountOps['setDefault'],
+    },
+  };
+}
+
+// -----------------------------------------------------------------------------
 // SERVER FACTORY
 // -----------------------------------------------------------------------------
 
@@ -574,12 +697,19 @@ function createMcpServer(config: RuntimeConfig = runtimeConfig): Server {
   }
 
   s.setRequestHandler(ListToolsRequestSchema, async () => {
-    return {
-      tools: domainModules.flatMap((m) => m.toolDefinitions).map(withAccountParam),
-    };
+    const definitions = domainModules.flatMap((m) => m.toolDefinitions);
+    if (teamRuntime) {
+      // Team mode: identity comes from the bearer, so the `account` parameter
+      // is never injected and local account management is not offered.
+      return { tools: definitions.filter((d) => d.name !== 'manage_accounts') };
+    }
+    return { tools: definitions.map(withAccountParam) };
   });
 
   s.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    if (teamRuntime) {
+      return handleTeamToolCall(request.params.name, request.params.arguments ?? {}, extra);
+    }
     await ensureAuthSystem();
     const toolName = request.params.name;
     const rawArgs = request.params.arguments ?? {};
@@ -1058,6 +1188,9 @@ async function startStdioTransport(): Promise<void> {
 interface HttpSession {
   transport: StreamableHTTPServerTransport;
   server: Server;
+  /** Team mode: the Google sub the session was initialized by. Every later
+   * request must present a bearer for the same user (session hijack guard). */
+  sub?: string;
 }
 
 /**
@@ -1104,8 +1237,28 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
     );
     app.get(GOOGLE_CALLBACK_PATH, teamAuth.callbackHandler);
   }
+  // Bearer guard for the three /mcp routes only — an app.use() would break the
+  // AS routes mounted above, which are unauthenticated by design. The
+  // resource_metadata pointer in WWW-Authenticate is what tells MCP clients
+  // where to start the OAuth flow after a 401.
+  const mcpGuards = teamAuth
+    ? [
+        requireBearerAuth({
+          verifier: teamAuth.provider,
+          resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(teamAuth.config.issuerUrl),
+        }),
+      ]
+    : [];
   const sessions = new Map<string, HttpSession>();
   const sessionTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  /** Team mode: a session may only be touched by the user who initialized it.
+   * A mismatch is answered exactly like an unknown session so other users
+   * cannot even probe that the session id exists. */
+  function sessionBelongsToCaller(session: HttpSession, req: { auth?: { extra?: Record<string, unknown> } }): boolean {
+    if (!teamAuth) return true;
+    return session.sub !== undefined && session.sub === req.auth?.extra?.sub;
+  }
 
   function resetSessionTimer(sid: string) {
     const existing = sessionTimers.get(sid);
@@ -1131,15 +1284,17 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
     }
   }
 
-  app.post('/mcp', async (req, res) => {
+  app.post('/mcp', ...mcpGuards, async (req, res) => {
     try {
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
-      // If we have an existing session, delegate to it
-      if (sessionId && sessions.has(sessionId)) {
-        const session = sessions.get(sessionId)!;
-        resetSessionTimer(sessionId);
-        await session.transport.handleRequest(req, res, req.body);
+      // If we have an existing session owned by this caller, delegate to it.
+      // A foreign user presenting a leaked session id falls through and gets
+      // the same 400 as an unknown session.
+      const existingSession = sessionId ? sessions.get(sessionId) : undefined;
+      if (existingSession && sessionBelongsToCaller(existingSession, req)) {
+        resetSessionTimer(sessionId!);
+        await existingSession.transport.handleRequest(req, res, req.body);
         return;
       }
 
@@ -1160,7 +1315,11 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
       // Per-session isolation needs no wiring here: the SDK injects the
       // transport's sessionId into each request's `extra`, which the shared
       // handlers use to key per-session account state.
-      const sessionServer = createMcpServer();
+      // Team mode force-disables the resources capability: its handlers read
+      // the shared default account — the wrong identity model for multi-user.
+      const sessionServer = createMcpServer(
+        teamAuth ? { ...runtimeConfig, disableResources: true } : runtimeConfig,
+      );
 
       await sessionServer.connect(transport);
 
@@ -1179,7 +1338,11 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
 
       const sid = transport.sessionId;
       if (sid) {
-        sessions.set(sid, { transport, server: sessionServer });
+        sessions.set(sid, {
+          transport,
+          server: sessionServer,
+          sub: teamAuth ? (req.auth?.extra?.sub as string | undefined) : undefined,
+        });
         resetSessionTimer(sid);
         if (authSystem) authSystem.sessions.getOrCreate(sid);
         log(`New session created: ${sid}`);
@@ -1196,10 +1359,11 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
     }
   });
 
-  app.get('/mcp', async (req, res) => {
+  app.get('/mcp', ...mcpGuards, async (req, res) => {
     try {
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
-      if (!sessionId || !sessions.has(sessionId)) {
+      const session = sessionId ? sessions.get(sessionId) : undefined;
+      if (!session || !sessionBelongsToCaller(session, req)) {
         res.status(400).json({
           jsonrpc: '2.0',
           error: { code: -32600, message: 'Bad Request: missing or invalid session ID' },
@@ -1207,8 +1371,7 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
         });
         return;
       }
-      const session = sessions.get(sessionId)!;
-      resetSessionTimer(sessionId);
+      resetSessionTimer(sessionId!);
       await session.transport.handleRequest(req, res);
     } catch (error) {
       log('Error handling GET /mcp', { error: (error as Error).message });
@@ -1222,10 +1385,11 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
     }
   });
 
-  app.delete('/mcp', async (req, res) => {
+  app.delete('/mcp', ...mcpGuards, async (req, res) => {
     try {
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
-      if (!sessionId || !sessions.has(sessionId)) {
+      const session = sessionId ? sessions.get(sessionId) : undefined;
+      if (!session || !sessionBelongsToCaller(session, req)) {
         res.status(400).json({
           jsonrpc: '2.0',
           error: { code: -32600, message: 'Bad Request: missing or invalid session ID' },
@@ -1233,11 +1397,10 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
         });
         return;
       }
-      const session = sessions.get(sessionId)!;
       await session.transport.close();
       await session.server.close();
-      sessions.delete(sessionId);
-      if (authSystem) authSystem.sessions.delete(sessionId);
+      sessions.delete(sessionId!);
+      if (authSystem) authSystem.sessions.delete(sessionId!);
       res.status(200).end();
     } catch (error) {
       log('Error handling DELETE /mcp', { error: (error as Error).message });
@@ -1356,6 +1519,16 @@ export function _setAuthClientForTesting(client: any) {
  */
 export function _getAuthSystemForTesting(): AuthSystem | null {
   return authSystem;
+}
+
+/**
+ * Inject (or clear) a team runtime for testing. Production wiring happens in
+ * startHttpTransport; tests build a runtime with an in-memory store and a fake
+ * Google IdP, then pass the same runtime to createHttpApp({ teamAuth }) —
+ * dispatch keys off this module-level state, the HTTP layer off the option.
+ */
+export function _setTeamRuntimeForTesting(runtime: TeamRuntime | null) {
+  teamRuntime = runtime;
 }
 
 /**

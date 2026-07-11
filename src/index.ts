@@ -4,6 +4,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
+import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import {
   CallToolRequestSchema,
   ListResourcesRequestSchema,
@@ -38,7 +39,9 @@ import {
 } from './utils.js';
 import type { AccountOps, AddAccountResult, ToolContext } from './types.js';
 import { errorResponse } from './types.js';
-import { loadRuntimeConfig, type RuntimeConfig } from './utils/cliArgs.js';
+import { loadRuntimeConfig, parseBoolEnv, type RuntimeConfig } from './utils/cliArgs.js';
+import { GOOGLE_CALLBACK_PATH, loadTeamConfig } from './auth/team/config.js';
+import { createTeamRuntime, type TeamRuntime } from './auth/team/runtime.js';
 
 import * as driveTools from './tools/drive.js';
 import * as docsTools from './tools/docs.js';
@@ -52,6 +55,11 @@ const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 // Auth system — initialized on first request.
 let authSystem: AuthSystem | null = null;
 let authSystemPromise: Promise<AuthSystem> | null = null;
+
+// Team mode (issue #109) — set at startup when --team is active. Team mode
+// never touches the AuthSystem above: identity comes from the request bearer,
+// not from tokens.json.
+let teamRuntime: TeamRuntime | null = null;
 
 // Per-account Drive/Calendar service caches, keyed by account alias.
 const _driveByAlias = new Map<string, drive_v3.Drive>();
@@ -773,6 +781,12 @@ Transport Options:
   --port <number>            HTTP listen port (default: 3100)
   --host <address>           HTTP bind address (default: 127.0.0.1)
 
+Team Mode (multi-user HTTP deployments):
+  --team                     Enable team mode: the HTTP transport becomes an OAuth 2.1
+                             authorization server. Each team member signs in with their own
+                             Google account and every tool call runs as the caller.
+  --issuer-url <url>         Public https URL this server is reachable at (required with --team)
+
 Options:
   --no-resources[=<bool>]    Disable the MCP resource protocol (gdrive:/// listing/reading);
                              tools stay available. Bare flag disables; --no-resources=false
@@ -801,6 +815,21 @@ Environment Variables:
   MCP_TRANSPORT                         Transport mode: stdio or http (default: stdio)
   MCP_HTTP_PORT                         HTTP listen port (default: 3100)
   MCP_HTTP_HOST                         HTTP bind address (default: 127.0.0.1)
+
+  Team Mode:
+  MCP_TEAM_MODE                         Enable team mode (1/0, true/false; same as --team)
+  MCP_TEAM_ISSUER_URL                   Public https URL of this server (same as --issuer-url)
+  MCP_TEAM_ALLOWED_DOMAINS              Comma-separated Workspace domains allowed to sign in
+                                        (default: any Google account; enforced on the hd claim)
+  MCP_TEAM_ALLOWED_REDIRECT_URIS        Comma-separated allowlist for client registration redirect
+                                        URIs (default: open; set to https://claude.ai/api/mcp/auth_callback
+                                        for claude.ai-only teams)
+  MCP_TEAM_TOKEN_TTL                    Access-token lifetime in seconds, 60-86400 (default: 3600)
+  MCP_TEAM_STORE                        Token store backend: file or memory (default: file)
+  MCP_TEAM_STORE_PATH                   Store file path (default: <config dir>/team-store.json)
+  MCP_TRUST_PROXY                       Trusted reverse-proxy hop count, e.g. 1 on Cloud Run
+                                        (default: unset — direct connections)
+  MCP_HTTP_ALLOWED_HOSTS                Extra Host-header allowlist entries besides the issuer host
 
   Service Account Mode:
   GOOGLE_APPLICATION_CREDENTIALS        Path to service account JSON key file
@@ -890,6 +919,8 @@ interface CliArgs {
   transport: 'stdio' | 'http';
   httpPort: number;
   httpHost: string;
+  team: boolean;
+  issuerUrl?: string;
 }
 
 function parseCliArgs(): CliArgs {
@@ -899,6 +930,8 @@ function parseCliArgs(): CliArgs {
   let transport: string | undefined;
   let httpPort: string | undefined;
   let httpHost: string | undefined;
+  let team: boolean | undefined;
+  let issuerUrl: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -918,6 +951,14 @@ function parseCliArgs(): CliArgs {
     }
     if (arg === '--host' && i + 1 < args.length) {
       httpHost = args[++i];
+      continue;
+    }
+    if (arg === '--team') {
+      team = true;
+      continue;
+    }
+    if (arg === '--issuer-url' && i + 1 < args.length) {
+      issuerUrl = args[++i];
       continue;
     }
 
@@ -944,12 +985,20 @@ function parseCliArgs(): CliArgs {
     process.exit(1);
   }
 
+  const resolvedTeam = team ?? parseBoolEnv(process.env.MCP_TEAM_MODE, false);
+  if (resolvedTeam && resolvedTransport !== 'http') {
+    console.error('Team mode requires the HTTP transport. Start with --transport http.');
+    process.exit(1);
+  }
+
   return {
     command,
     authAlias,
     transport: resolvedTransport,
     httpPort: resolvedPort,
     httpHost: httpHost || process.env.MCP_HTTP_HOST || '127.0.0.1',
+    team: resolvedTeam,
+    issuerUrl,
   };
 }
 
@@ -1019,11 +1068,42 @@ const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 interface CreateHttpAppOptions {
   sessionIdleTimeoutMs?: number;
+  /** Present = team mode: mount the OAuth 2.1 authorization-server surface. */
+  teamAuth?: TeamRuntime;
 }
 
 function createHttpApp(host: string, options?: CreateHttpAppOptions) {
   const idleTimeoutMs = options?.sessionIdleTimeoutMs ?? SESSION_IDLE_TIMEOUT_MS;
-  const app = createMcpExpressApp({ host });
+  const teamAuth = options?.teamAuth;
+  // In team mode the SDK's automatic (localhost-only) Host validation is
+  // replaced with an explicit allowlist derived from the issuer URL — for
+  // non-localhost binds the SDK otherwise applies no Host validation at all.
+  const app = createMcpExpressApp(
+    teamAuth ? { host, allowedHosts: teamAuth.config.allowedHosts } : { host },
+  );
+  if (teamAuth) {
+    if (teamAuth.config.trustProxy !== undefined) {
+      // Without this, every user behind a reverse proxy shares the proxy's IP
+      // and therefore one rate-limit bucket on /token and /register.
+      app.set('trust proxy', teamAuth.config.trustProxy);
+    }
+    // AS endpoints: /authorize, /token, /register, /revoke and the
+    // .well-known metadata. Must be mounted at the app root, before /mcp.
+    app.use(
+      mcpAuthRouter({
+        provider: teamAuth.provider,
+        issuerUrl: teamAuth.config.issuerUrl,
+        resourceServerUrl: teamAuth.config.issuerUrl,
+        scopesSupported: teamAuth.config.advertisedScopes,
+        resourceName: 'Google Drive MCP',
+        // The SDK default expires client secrets after 30 days, which would
+        // silently break long-lived connectors monthly; team-store growth is
+        // bounded by the client cap instead.
+        clientRegistrationOptions: { clientSecretExpirySeconds: 0 },
+      }),
+    );
+    app.get(GOOGLE_CALLBACK_PATH, teamAuth.callbackHandler);
+  }
   const sessions = new Map<string, HttpSession>();
   const sessionTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -1179,7 +1259,30 @@ async function startHttpTransport(args: CliArgs): Promise<void> {
     const { httpPort, httpHost } = args;
     console.error(`Starting Google Drive MCP server (HTTP on ${httpHost}:${httpPort})...`);
 
-    const { app, sessions } = createHttpApp(httpHost);
+    if (args.team) {
+      let teamConfig;
+      try {
+        teamConfig = loadTeamConfig({ transport: args.transport, issuerUrlArg: args.issuerUrl });
+      } catch (err) {
+        console.error(`Team mode configuration error: ${(err as Error).message}`);
+        process.exit(1);
+      }
+      teamRuntime = await createTeamRuntime(teamConfig);
+      // Print every derived URL so a proxy/issuer misconfiguration is
+      // debuggable from the startup log alone.
+      console.error(
+        `Team mode enabled.\n` +
+          `  Issuer:          ${teamConfig.issuerUrl.href}\n` +
+          `  Google callback: ${teamConfig.googleRedirectUri} (register this redirect URI)\n` +
+          `  AS metadata:     ${new URL('/.well-known/oauth-authorization-server', teamConfig.issuerUrl).href}\n` +
+          `  Store:           ${teamConfig.store === 'file' ? teamConfig.storePath : 'in-memory'}\n` +
+          (teamConfig.allowedDomains.length > 0
+            ? `  Allowed domains: ${teamConfig.allowedDomains.join(', ')}\n`
+            : '  Allowed domains: (any Google account)\n'),
+      );
+    }
+
+    const { app, sessions } = createHttpApp(httpHost, teamRuntime ? { teamAuth: teamRuntime } : undefined);
 
     const httpServer = app.listen(httpPort, httpHost, () => {
       log(`HTTP server listening on ${httpHost}:${httpPort}`);
@@ -1187,6 +1290,7 @@ async function startHttpTransport(args: CliArgs): Promise<void> {
 
     const shutdown = async () => {
       log('Shutting down HTTP server...');
+      teamRuntime?.stop();
       for (const [sid, session] of sessions) {
         await session.transport.close();
         await session.server.close();

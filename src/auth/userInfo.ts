@@ -12,6 +12,9 @@ const DEFAULT_TIMEOUT_MS = 5_000;
 export interface UserInfo {
   email: string;
   sub: string;
+  /** Google Workspace hosted domain. Absent for consumer accounts — team
+   * mode's domain allowlist fails closed on absence. */
+  hd?: string;
 }
 
 /**
@@ -29,18 +32,18 @@ export async function fetchUserInfo(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await client.request<{ sub?: string; email?: string }>({
+    const res = await client.request<{ sub?: string; email?: string; hd?: string }>({
       url: USERINFO_URL,
       method: 'GET',
       signal: controller.signal,
     });
-    const { sub, email } = res.data;
+    const { sub, email, hd } = res.data;
     if (!sub || !email) {
       throw new Error(
         `Userinfo response missing sub or email (got keys: ${Object.keys(res.data ?? {}).join(', ')}).`,
       );
     }
-    return { sub, email };
+    return { sub, email, ...(hd ? { hd } : {}) };
   } finally {
     clearTimeout(timer);
   }

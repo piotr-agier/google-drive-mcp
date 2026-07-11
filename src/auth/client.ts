@@ -82,6 +82,69 @@ export async function initializeOAuth2Client(): Promise<OAuth2Client> {
   }
 }
 
+/**
+ * Load web-application OAuth client credentials for team mode.
+ *
+ * Team mode's Google callback is a public URL, and Google restricts
+ * desktop-type ("installed") clients to loopback redirect URIs — so a
+ * "Web application" client is required. The env pair takes precedence (suits
+ * secret-manager injection on Cloud Run); otherwise the keys file must carry
+ * a `web` section (or the direct client_id form, where the type is the
+ * operator's responsibility). An installed-only keys file fails with an
+ * actionable error naming the redirect URI to register.
+ */
+export async function loadWebCredentials(
+  redirectUri: string,
+): Promise<{ client_id: string; client_secret: string }> {
+  const envId = process.env.GOOGLE_DRIVE_MCP_CLIENT_ID;
+  const envSecret = process.env.GOOGLE_DRIVE_MCP_CLIENT_SECRET;
+  if (envId && envSecret) {
+    return { client_id: envId, client_secret: envSecret };
+  }
+
+  const webClientHint =
+    `Team mode requires an OAuth client of type "Web application". Create one in ` +
+    `Google Cloud Console (APIs & Services → Credentials), add\n  ${redirectUri}\n` +
+    `as an authorized redirect URI, and provide it via gcp-oauth.keys.json (the "web" ` +
+    `form) or the GOOGLE_DRIVE_MCP_CLIENT_ID / GOOGLE_DRIVE_MCP_CLIENT_SECRET env pair.`;
+
+  const paths = getKeysFilePaths();
+  for (const keysPath of paths) {
+    let keys: Record<string, unknown>;
+    try {
+      keys = JSON.parse(await fs.readFile(keysPath, 'utf-8'));
+    } catch (err) {
+      if (err instanceof SyntaxError) {
+        throw new Error(`Invalid credentials file at ${keysPath}: ${err.message}`);
+      }
+      continue; // not found — try the next path
+    }
+    const web = keys.web as OAuthCredentials | undefined;
+    if (web?.client_id && web.client_secret) {
+      return { client_id: web.client_id, client_secret: web.client_secret };
+    }
+    if (keys.client_id && keys.client_secret) {
+      // Direct form carries no type marker; the operator owns the client type.
+      return {
+        client_id: keys.client_id as string,
+        client_secret: keys.client_secret as string,
+      };
+    }
+    if (keys.installed) {
+      throw new Error(
+        `The credentials file at ${keysPath} contains a desktop-type ("installed") OAuth ` +
+          `client, which Google restricts to loopback redirect URIs.\n${webClientHint}`,
+      );
+    }
+    throw new Error(
+      `The credentials file at ${keysPath} has no usable "web" client entry.\n${webClientHint}`,
+    );
+  }
+  throw new Error(
+    `No team-mode OAuth client credentials found (searched: ${paths.join(', ')}).\n${webClientHint}`,
+  );
+}
+
 export async function loadCredentials(): Promise<{ client_id: string; client_secret?: string }> {
   try {
     const credentials = await loadCredentialsWithFallback();

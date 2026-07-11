@@ -27,7 +27,7 @@ function parseIntOr(value: string | undefined, fallback: number): number {
 const TRUTHY = new Set(['1', 'true', 'yes', 'on']);
 const FALSY = new Set(['0', 'false', 'no', 'off']);
 
-function parseBoolEnv(value: string | undefined, fallback: boolean): boolean {
+export function parseBoolEnv(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined) return fallback;
   const v = value.trim().toLowerCase();
   if (TRUTHY.has(v)) return true;

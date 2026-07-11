@@ -353,6 +353,10 @@ describe('Sheets tools', () => {
       });
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('Set column width'));
+      const req = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate')[0].args[0].requestBody.requests[0];
+      assert.deepEqual(req.updateDimensionProperties.range, { sheetId: 0, dimension: 'COLUMNS', startIndex: 0, endIndex: 3 });
+      assert.deepEqual(req.updateDimensionProperties.properties, { pixelSize: 120 });
+      assert.equal(req.updateDimensionProperties.fields, 'pixelSize');
     });
 
     it('setColumnWidth rejects negative pixelSize', async () => {
@@ -360,6 +364,15 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', sheetId: 0, startColumn: 0, endColumn: 3, pixelSize: -1,
       });
       assert.equal(res.isError, true);
+    });
+
+    it('setColumnWidth rejects reversed range', async () => {
+      const res = await callTool(ctx.client, 'setColumnWidth', {
+        spreadsheetId: 'sheet-1', sheetId: 0, startColumn: 5, endColumn: 2, pixelSize: 120,
+      });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.includes('startColumn must be less than endColumn'));
+      assert.equal(ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate').length, 0);
     });
 
     it('setColumnWidth validation error', async () => {
@@ -373,6 +386,26 @@ describe('Sheets tools', () => {
       });
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('Set row height'));
+      const req = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate')[0].args[0].requestBody.requests[0];
+      assert.deepEqual(req.updateDimensionProperties.range, { sheetId: 0, dimension: 'ROWS', startIndex: 0, endIndex: 5 });
+      assert.deepEqual(req.updateDimensionProperties.properties, { pixelSize: 30 });
+      assert.equal(req.updateDimensionProperties.fields, 'pixelSize');
+    });
+
+    it('setRowHeight rejects negative pixelSize', async () => {
+      const res = await callTool(ctx.client, 'setRowHeight', {
+        spreadsheetId: 'sheet-1', sheetId: 0, startRow: 0, endRow: 5, pixelSize: -1,
+      });
+      assert.equal(res.isError, true);
+    });
+
+    it('setRowHeight rejects reversed range', async () => {
+      const res = await callTool(ctx.client, 'setRowHeight', {
+        spreadsheetId: 'sheet-1', sheetId: 0, startRow: 5, endRow: 2, pixelSize: 30,
+      });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.includes('startRow must be less than endRow'));
+      assert.equal(ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate').length, 0);
     });
 
     it('setRowHeight validation error', async () => {
@@ -386,6 +419,8 @@ describe('Sheets tools', () => {
       });
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('Auto-resized columns'));
+      const req = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate')[0].args[0].requestBody.requests[0];
+      assert.deepEqual(req.autoResizeDimensions.dimensions, { sheetId: 0, dimension: 'COLUMNS', startIndex: 0, endIndex: 3 });
     });
 
     it('autoResizeColumns validation error', async () => {
@@ -399,6 +434,8 @@ describe('Sheets tools', () => {
       });
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('Auto-resized rows'));
+      const req = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate')[0].args[0].requestBody.requests[0];
+      assert.deepEqual(req.autoResizeDimensions.dimensions, { sheetId: 0, dimension: 'ROWS', startIndex: 0, endIndex: 5 });
     });
 
     it('autoResizeRows validation error', async () => {
@@ -412,6 +449,10 @@ describe('Sheets tools', () => {
       });
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('Hid columns'));
+      const req = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate')[0].args[0].requestBody.requests[0];
+      assert.deepEqual(req.updateDimensionProperties.range, { sheetId: 0, dimension: 'COLUMNS', startIndex: 2, endIndex: 4 });
+      assert.deepEqual(req.updateDimensionProperties.properties, { hiddenByUser: true });
+      assert.equal(req.updateDimensionProperties.fields, 'hiddenByUser');
     });
 
     it('showSheetDimension happy path (rows)', async () => {
@@ -420,6 +461,10 @@ describe('Sheets tools', () => {
       });
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('Showed rows'));
+      const req = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate')[0].args[0].requestBody.requests[0];
+      assert.deepEqual(req.updateDimensionProperties.range, { sheetId: 0, dimension: 'ROWS', startIndex: 2, endIndex: 4 });
+      assert.deepEqual(req.updateDimensionProperties.properties, { hiddenByUser: false });
+      assert.equal(req.updateDimensionProperties.fields, 'hiddenByUser');
     });
 
     it('hideSheetDimension validation error', async () => {
@@ -432,6 +477,15 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', sheetId: 0, dimension: 'CELLS', startIndex: 0, endIndex: 1,
       });
       assert.equal(res.isError, true);
+    });
+
+    it('hideSheetDimension rejects reversed range', async () => {
+      const res = await callTool(ctx.client, 'hideSheetDimension', {
+        spreadsheetId: 'sheet-1', sheetId: 0, dimension: 'COLUMNS', startIndex: 4, endIndex: 2,
+      });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.includes('startIndex must be less than endIndex'));
+      assert.equal(ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate').length, 0);
     });
   });
 

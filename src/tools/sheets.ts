@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { sheets_v4 } from 'googleapis';
 import type { ToolDefinition, ToolResult, ToolContext } from '../types.js';
 import { errorResponse } from '../types.js';
 import { parseA1Range, convertA1ToGridRange, escapeDriveQuery, type GridRange } from '../utils.js';
@@ -183,7 +184,7 @@ const SetColumnWidthSchema = z.object({
   startColumn: z.number().int().min(0),
   endColumn: z.number().int().min(0),
   pixelSize: z.number().int().min(0, "pixelSize must be >= 0")
-});
+}).refine(a => a.startColumn < a.endColumn, { message: "startColumn must be less than endColumn" });
 
 const SetRowHeightSchema = z.object({
   spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
@@ -191,21 +192,21 @@ const SetRowHeightSchema = z.object({
   startRow: z.number().int().min(0),
   endRow: z.number().int().min(0),
   pixelSize: z.number().int().min(0, "pixelSize must be >= 0")
-});
+}).refine(a => a.startRow < a.endRow, { message: "startRow must be less than endRow" });
 
 const AutoResizeColumnsSchema = z.object({
   spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
   sheetId: z.number().int(),
   startColumn: z.number().int().min(0),
   endColumn: z.number().int().min(0)
-});
+}).refine(a => a.startColumn < a.endColumn, { message: "startColumn must be less than endColumn" });
 
 const AutoResizeRowsSchema = z.object({
   spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
   sheetId: z.number().int(),
   startRow: z.number().int().min(0),
   endRow: z.number().int().min(0)
-});
+}).refine(a => a.startRow < a.endRow, { message: "startRow must be less than endRow" });
 
 const HideShowDimensionSchema = z.object({
   spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
@@ -213,7 +214,7 @@ const HideShowDimensionSchema = z.object({
   dimension: z.enum(["COLUMNS", "ROWS"]),
   startIndex: z.number().int().min(0),
   endIndex: z.number().int().min(0)
-});
+}).refine(a => a.startIndex < a.endIndex, { message: "startIndex must be less than endIndex" });
 
 // ---------------------------------------------------------------------------
 // Tool Definitions
@@ -626,7 +627,7 @@ export const toolDefinitions: ToolDefinition[] = [
         spreadsheetId: { type: "string", description: "Spreadsheet ID" },
         sheetId: { type: "number", description: "Sheet ID (from getSpreadsheetInfo / listSheets). The default first sheet is usually 0." },
         startColumn: { type: "number", description: "0-based start column index (inclusive)" },
-        endColumn: { type: "number", description: "0-based end column index (exclusive)" },
+        endColumn: { type: "number", description: "0-based end column index (exclusive); must be greater than startColumn" },
         pixelSize: { type: "number", description: "Column width in pixels (must be >= 0)" }
       },
       required: ["spreadsheetId", "sheetId", "startColumn", "endColumn", "pixelSize"]
@@ -641,7 +642,7 @@ export const toolDefinitions: ToolDefinition[] = [
         spreadsheetId: { type: "string", description: "Spreadsheet ID" },
         sheetId: { type: "number", description: "Sheet ID (from getSpreadsheetInfo / listSheets). The default first sheet is usually 0." },
         startRow: { type: "number", description: "0-based start row index (inclusive)" },
-        endRow: { type: "number", description: "0-based end row index (exclusive)" },
+        endRow: { type: "number", description: "0-based end row index (exclusive); must be greater than startRow" },
         pixelSize: { type: "number", description: "Row height in pixels (must be >= 0)" }
       },
       required: ["spreadsheetId", "sheetId", "startRow", "endRow", "pixelSize"]
@@ -656,7 +657,7 @@ export const toolDefinitions: ToolDefinition[] = [
         spreadsheetId: { type: "string", description: "Spreadsheet ID" },
         sheetId: { type: "number", description: "Sheet ID (from getSpreadsheetInfo / listSheets). The default first sheet is usually 0." },
         startColumn: { type: "number", description: "0-based start column index (inclusive)" },
-        endColumn: { type: "number", description: "0-based end column index (exclusive)" }
+        endColumn: { type: "number", description: "0-based end column index (exclusive); must be greater than startColumn" }
       },
       required: ["spreadsheetId", "sheetId", "startColumn", "endColumn"]
     }
@@ -670,7 +671,7 @@ export const toolDefinitions: ToolDefinition[] = [
         spreadsheetId: { type: "string", description: "Spreadsheet ID" },
         sheetId: { type: "number", description: "Sheet ID (from getSpreadsheetInfo / listSheets). The default first sheet is usually 0." },
         startRow: { type: "number", description: "0-based start row index (inclusive)" },
-        endRow: { type: "number", description: "0-based end row index (exclusive)" }
+        endRow: { type: "number", description: "0-based end row index (exclusive); must be greater than startRow" }
       },
       required: ["spreadsheetId", "sheetId", "startRow", "endRow"]
     }
@@ -685,7 +686,7 @@ export const toolDefinitions: ToolDefinition[] = [
         sheetId: { type: "number", description: "Sheet ID (from getSpreadsheetInfo / listSheets). The default first sheet is usually 0." },
         dimension: { type: "string", description: "Which dimension to hide", enum: ["COLUMNS", "ROWS"] },
         startIndex: { type: "number", description: "0-based start index (inclusive)" },
-        endIndex: { type: "number", description: "0-based end index (exclusive)" }
+        endIndex: { type: "number", description: "0-based end index (exclusive); must be greater than startIndex" }
       },
       required: ["spreadsheetId", "sheetId", "dimension", "startIndex", "endIndex"]
     }
@@ -700,7 +701,7 @@ export const toolDefinitions: ToolDefinition[] = [
         sheetId: { type: "number", description: "Sheet ID (from getSpreadsheetInfo / listSheets). The default first sheet is usually 0." },
         dimension: { type: "string", description: "Which dimension to show", enum: ["COLUMNS", "ROWS"] },
         startIndex: { type: "number", description: "0-based start index (inclusive)" },
-        endIndex: { type: "number", description: "0-based end index (exclusive)" }
+        endIndex: { type: "number", description: "0-based end index (exclusive); must be greater than startIndex" }
       },
       required: ["spreadsheetId", "sheetId", "dimension", "startIndex", "endIndex"]
     }
@@ -727,6 +728,29 @@ async function resolveGridRange(
     return `Sheet "${sheetName}" not found`;
   }
   return convertA1ToGridRange(a1Range, sheet.properties.sheetId!);
+}
+
+/** Build a half-open [startIndex, endIndex) dimension range for a sheet. */
+function dimensionRange(
+  sheetId: number,
+  dimension: 'COLUMNS' | 'ROWS',
+  startIndex: number,
+  endIndex: number
+): sheets_v4.Schema$DimensionRange {
+  return { sheetId, dimension, startIndex, endIndex };
+}
+
+/** Issue a batchUpdate carrying a single request against the given spreadsheet. */
+async function batchUpdateOne(
+  ctx: ToolContext,
+  spreadsheetId: string,
+  request: sheets_v4.Schema$Request
+) {
+  const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+  return sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: { requests: [request] },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1544,22 +1568,11 @@ export async function handleTool(
       if (!validation.success) return errorResponse(validation.error.errors[0].message);
       const a = validation.data;
 
-      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: a.spreadsheetId,
-        requestBody: {
-          requests: [{
-            updateDimensionProperties: {
-              range: {
-                sheetId: a.sheetId,
-                dimension: 'COLUMNS',
-                startIndex: a.startColumn,
-                endIndex: a.endColumn,
-              },
-              properties: { pixelSize: a.pixelSize },
-              fields: 'pixelSize',
-            },
-          }],
+      await batchUpdateOne(ctx, a.spreadsheetId, {
+        updateDimensionProperties: {
+          range: dimensionRange(a.sheetId, 'COLUMNS', a.startColumn, a.endColumn),
+          properties: { pixelSize: a.pixelSize },
+          fields: 'pixelSize',
         },
       });
 
@@ -1571,22 +1584,11 @@ export async function handleTool(
       if (!validation.success) return errorResponse(validation.error.errors[0].message);
       const a = validation.data;
 
-      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: a.spreadsheetId,
-        requestBody: {
-          requests: [{
-            updateDimensionProperties: {
-              range: {
-                sheetId: a.sheetId,
-                dimension: 'ROWS',
-                startIndex: a.startRow,
-                endIndex: a.endRow,
-              },
-              properties: { pixelSize: a.pixelSize },
-              fields: 'pixelSize',
-            },
-          }],
+      await batchUpdateOne(ctx, a.spreadsheetId, {
+        updateDimensionProperties: {
+          range: dimensionRange(a.sheetId, 'ROWS', a.startRow, a.endRow),
+          properties: { pixelSize: a.pixelSize },
+          fields: 'pixelSize',
         },
       });
 
@@ -1598,20 +1600,9 @@ export async function handleTool(
       if (!validation.success) return errorResponse(validation.error.errors[0].message);
       const a = validation.data;
 
-      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: a.spreadsheetId,
-        requestBody: {
-          requests: [{
-            autoResizeDimensions: {
-              dimensions: {
-                sheetId: a.sheetId,
-                dimension: 'COLUMNS',
-                startIndex: a.startColumn,
-                endIndex: a.endColumn,
-              },
-            },
-          }],
+      await batchUpdateOne(ctx, a.spreadsheetId, {
+        autoResizeDimensions: {
+          dimensions: dimensionRange(a.sheetId, 'COLUMNS', a.startColumn, a.endColumn),
         },
       });
 
@@ -1623,20 +1614,9 @@ export async function handleTool(
       if (!validation.success) return errorResponse(validation.error.errors[0].message);
       const a = validation.data;
 
-      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: a.spreadsheetId,
-        requestBody: {
-          requests: [{
-            autoResizeDimensions: {
-              dimensions: {
-                sheetId: a.sheetId,
-                dimension: 'ROWS',
-                startIndex: a.startRow,
-                endIndex: a.endRow,
-              },
-            },
-          }],
+      await batchUpdateOne(ctx, a.spreadsheetId, {
+        autoResizeDimensions: {
+          dimensions: dimensionRange(a.sheetId, 'ROWS', a.startRow, a.endRow),
         },
       });
 
@@ -1650,22 +1630,11 @@ export async function handleTool(
       const a = validation.data;
       const hide = toolName === 'hideSheetDimension';
 
-      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: a.spreadsheetId,
-        requestBody: {
-          requests: [{
-            updateDimensionProperties: {
-              range: {
-                sheetId: a.sheetId,
-                dimension: a.dimension,
-                startIndex: a.startIndex,
-                endIndex: a.endIndex,
-              },
-              properties: { hiddenByUser: hide },
-              fields: 'hiddenByUser',
-            },
-          }],
+      await batchUpdateOne(ctx, a.spreadsheetId, {
+        updateDimensionProperties: {
+          range: dimensionRange(a.sheetId, a.dimension, a.startIndex, a.endIndex),
+          properties: { hiddenByUser: hide },
+          fields: 'hiddenByUser',
         },
       });
 

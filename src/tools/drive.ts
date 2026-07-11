@@ -9,12 +9,12 @@ import pdfLib from 'pdf-lib';
 const { PDFDocument } = pdfLib;
 import type { ToolDefinition, ToolContext, ToolResult } from '../types.js';
 import { errorResponse } from '../types.js';
-import { escapeDriveQuery, getMimeTypeFromFilename, isTextMime, TEXT_MIME_TYPES, ALL_DRIVES_LIST_PARAMS } from '../utils.js';
+import { escapeDriveQuery, getMimeTypeFromFilename, isTextMime, TEXT_MIME_TYPES, ALL_DRIVES_LIST_PARAMS, PARENT_SCOPED_LIST_PARAMS } from '../utils.js';
 import { downloadTextContent } from './text-content.js';
 import { downloadDriveFile, GOOGLE_WORKSPACE_EXPORT_FORMATS } from '../download-file.js';
 import { getSecureTokenPath } from '../auth/utils.js';
 import { SCOPE_ALIASES, SCOPE_PRESETS, resolveOAuthScopes, splitScopes } from '../auth/scopes.js';
-import { getActiveAuthMode, describeBypassedTokens } from '../auth/externalAuth.js';
+import { getActiveAuthMode, describeBypassedTokens, AUTH_MODE_OVERRIDE_ENV_VARS, type ActiveAuthMode } from '../auth/externalAuth.js';
 import { getEffectiveIdentity } from '../auth/identity.js';
 
 // ---------------------------------------------------------------------------
@@ -309,6 +309,49 @@ function resolveScopeStatus(ctx: ToolContext): { requestedScopes: string[]; gran
   const grantedScopes = getGrantedScopesFromAuthClient(ctx);
   const missingScopes = requestedScopes.filter((s) => !grantedScopes.includes(s));
   return { requestedScopes, grantedScopes, missingScopes };
+}
+
+export type AuthDiagnosticStatus =
+  | 'needs_reauth'
+  | 'scope_mismatch'
+  | 'identity_error'
+  | 'warning'
+  | 'ok';
+
+/**
+ * The authGetStatus verdict, ordered most-actionable first. Extracted as a pure
+ * function so the ladder's ordering — the subtle part — stays unit-testable.
+ *
+ * needs_reauth outranks everything in oauth mode: a missing token/refresh token
+ * is the root cause and a failing about.get is just its symptom (a refresh
+ * token is meaningless for service-account/external modes, so it's oauth-only).
+ *
+ * A *reliable* scope shortfall (grantedScopes known and short) outranks
+ * identity_error: an under-scoped token's about.get 403 IS the symptom of the
+ * missing scope, so re-auth-with-scopes is the real fix — don't send the user
+ * chasing an identity problem. The reliability guard matters because
+ * grantedScopes is often empty for disk-loaded tokens (making missingScopes
+ * falsely list everything); when it's empty we fall through to identity_error
+ * so a genuine wrong/empty identity isn't masked, and the trailing
+ * scope_mismatch preserves prior behavior for that empty case. warning is last
+ * so it never masks a specific diagnosis.
+ */
+export function computeAuthStatus(input: {
+  authMode: ActiveAuthMode;
+  tokenFileExists: boolean;
+  hasRefreshToken: boolean;
+  grantedScopes: string[];
+  missingScopes: string[];
+  identityError: boolean;
+  warningCount: number;
+}): AuthDiagnosticStatus {
+  const scopesReliable = input.grantedScopes.length > 0;
+  return (input.authMode === 'oauth' && (!input.tokenFileExists || !input.hasRefreshToken)) ? 'needs_reauth'
+    : (scopesReliable && input.missingScopes.length > 0) ? 'scope_mismatch'
+    : input.identityError ? 'identity_error'
+    : input.missingScopes.length > 0 ? 'scope_mismatch'
+    : input.warningCount > 0 ? 'warning'
+    : 'ok';
 }
 
 // ---------------------------------------------------------------------------
@@ -1005,7 +1048,9 @@ export async function handleTool(
         pageToken: data.pageToken,
         fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size)",
         orderBy: "name",
-        ...ALL_DRIVES_LIST_PARAMS
+        // Parent-scoped: two flags only, no corpora=allDrives, so the listing
+        // can never come back as an incompleteSearch partial result (#137).
+        ...PARENT_SCOPED_LIST_PARAMS
       });
 
       const files = res.data.files || [];
@@ -1693,7 +1738,10 @@ export async function handleTool(
         q: `'${data.folderId}' in parents and mimeType='application/pdf' and trashed=false`,
         pageSize: data.maxResults,
         fields: 'files(id,name,mimeType)',
-        ...ALL_DRIVES_LIST_PARAMS,
+        // Parent-scoped: two flags only, no corpora=allDrives, so this PDF list
+        // can never be an incompleteSearch partial result that silently skips
+        // files before the conversion loop (#137).
+        ...PARENT_SCOPED_LIST_PARAMS,
       });
 
       const files = list.data.files || [];
@@ -1929,17 +1977,30 @@ export async function handleTool(
       // Env-var *presence* forces service-account/external mode over tokens.json,
       // so a valid-looking token file can be silently bypassed (issue #137).
       const authMode = getActiveAuthMode();
-      const envOverrides = {
-        GOOGLE_APPLICATION_CREDENTIALS: !!process.env.GOOGLE_APPLICATION_CREDENTIALS,
-        GOOGLE_DRIVE_MCP_ACCESS_TOKEN: !!process.env.GOOGLE_DRIVE_MCP_ACCESS_TOKEN,
-        GOOGLE_DRIVE_MCP_TOKEN_PATH: !!process.env.GOOGLE_DRIVE_MCP_TOKEN_PATH,
-        XDG_CONFIG_HOME: !!process.env.XDG_CONFIG_HOME,
-      };
+      const envOverrides: Record<string, boolean> = {};
+      // Mode-forcing vars come from the single source of truth so this list
+      // can't drift from the modes authenticate() actually selects (#137).
+      for (const varName of Object.values(AUTH_MODE_OVERRIDE_ENV_VARS)) {
+        envOverrides[varName] = !!process.env[varName];
+      }
+      // These don't force a mode but change which tokens.json is read.
+      envOverrides.GOOGLE_DRIVE_MCP_TOKEN_PATH = !!process.env.GOOGLE_DRIVE_MCP_TOKEN_PATH;
+      envOverrides.XDG_CONFIG_HOME = !!process.env.XDG_CONFIG_HOME;
 
       // Ask Google who the live Drive client actually is. This is the
       // load-bearing check for #137: a wrong/empty identity is otherwise
-      // invisible (all calls return empty with no error). Never throws.
-      const identity = await getEffectiveIdentity(ctx.getDrive());
+      // invisible (all calls return empty with no error). On the admin path
+      // this tool tolerates a missing/unbuildable client (zero accounts, a
+      // revoked grant), so getDrive() can throw — capture that as an
+      // unresolved identity rather than crashing the very diagnostic meant to
+      // explain it. getEffectiveIdentity never throws.
+      let drive: drive_v3.Drive | undefined;
+      try {
+        drive = ctx.getDrive();
+      } catch {
+        drive = undefined;
+      }
+      const identity = await getEffectiveIdentity(drive);
 
       const warnings: string[] = [];
       if (authMode !== 'oauth') {
@@ -1968,20 +2029,15 @@ export async function handleTool(
         warnings,
       };
 
-      // Ordered most-actionable first. needs_reauth outranks identity_error:
-      // in oauth mode a missing token/refresh token is the root cause and the
-      // failing about.get is just its symptom (a refresh token is meaningless
-      // for service-account/external modes, so needs_reauth is oauth-only).
-      // identity_error is the fallback when creds look complete yet Google
-      // rejects them. warning is last so it never masks a specific diagnosis —
-      // an intentional override with a leftover tokens.json still surfaces as
-      // 'warning' but no longer hides scope_mismatch/needs_reauth.
-      const status =
-        (authMode === 'oauth' && (!tokenFileExists || !payload.hasRefreshToken)) ? 'needs_reauth' :
-        identity.error ? 'identity_error' :
-        missingScopes.length > 0 ? 'scope_mismatch' :
-        warnings.length > 0 ? 'warning' :
-        'ok';
+      const status = computeAuthStatus({
+        authMode,
+        tokenFileExists,
+        hasRefreshToken: payload.hasRefreshToken,
+        grantedScopes,
+        missingScopes,
+        identityError: !!identity.error,
+        warningCount: warnings.length,
+      });
 
       const identityLine = identity.error
         ? `identity=UNRESOLVED (${identity.error})`

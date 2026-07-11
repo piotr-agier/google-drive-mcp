@@ -36,6 +36,7 @@ import {
   getExtensionFromFilename,
   escapeDriveQuery,
   ALL_DRIVES_LIST_PARAMS,
+  PARENT_SCOPED_LIST_PARAMS,
 } from './utils.js';
 import type { AccountOps, AddAccountResult, ToolContext } from './types.js';
 import { errorResponse } from './types.js';
@@ -339,11 +340,10 @@ async function resolvePath(pathStr: string, drive: drive_v3.Drive): Promise<stri
       q: `'${currentFolderId}' in parents and name = '${escapedPart}' and mimeType = '${FOLDER_MIME_TYPE}' and trashed = false`,
       fields: 'files(id)',
       spaces: 'drive',
-      // Parent-scoped probe with a create-on-empty fallback: the two flags
-      // already surface Shared Drive items, and we avoid corpora=allDrives so
-      // an incompleteSearch partial result can't make us create a duplicate.
-      includeItemsFromAllDrives: true,
-      supportsAllDrives: true
+      // Parent-scoped probe with a create-on-empty fallback: PARENT_SCOPED_LIST_PARAMS
+      // surfaces Shared Drive items without corpora=allDrives, so an
+      // incompleteSearch partial result can't make us create a duplicate.
+      ...PARENT_SCOPED_LIST_PARAMS
     });
 
     if (!response.data.files?.length) {
@@ -397,11 +397,10 @@ async function checkFileExists(name: string, parentFolderId: string = 'root', dr
       q: query,
       fields: 'files(id, name, mimeType)',
       pageSize: 1,
-      // Dedup guard: keep only the two flags (no corpora=allDrives) so an
+      // Dedup guard: PARENT_SCOPED_LIST_PARAMS (no corpora=allDrives) so an
       // incompleteSearch partial result can't miss an existing file and let a
       // duplicate be created.
-      includeItemsFromAllDrives: true,
-      supportsAllDrives: true
+      ...PARENT_SCOPED_LIST_PARAMS
     });
 
     if (res.data.files && res.data.files.length > 0) {
@@ -647,15 +646,7 @@ function registerResourceHandlers(s: Server): void {
     const account = await getDefaultAccount();
     const drive = await getDriveFor(account);
     const pageSize = 1000;
-    const params: {
-      pageSize: number,
-      fields: string,
-      pageToken?: string,
-      q: string,
-      corpora: string,
-      includeItemsFromAllDrives: boolean,
-      supportsAllDrives: boolean
-    } = {
+    const params: drive_v3.Params$Resource$Files$List = {
       pageSize,
       fields: "nextPageToken, files(id, name, mimeType)",
       q: `trashed = false`,

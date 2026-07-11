@@ -43,9 +43,10 @@ export function getActiveAuthMode(): ActiveAuthMode {
  * The user-facing warning for the issue #137 trap: an override env var forces
  * service-account/external-token mode while an authenticated `tokens.json`
  * exists on disk and is therefore silently ignored. Returns `null` when no such
- * token file exists (nothing is being bypassed). Pure — the caller supplies the
- * token path and its existence, so both the startup warning and `authGetStatus`
- * emit identical wording.
+ * token file exists (nothing is being bypassed). The caller supplies the token
+ * path and its existence so both the startup warning and `authGetStatus` emit
+ * identical wording; the set of currently-active override env vars is read from
+ * `process.env` here (consistent with the mode predicates in this module).
  */
 export function describeBypassedTokens(
   mode: Exclude<ActiveAuthMode, 'oauth'>,
@@ -54,9 +55,17 @@ export function describeBypassedTokens(
 ): string | null {
   if (!tokenExists) return null;
   const envVar = AUTH_MODE_OVERRIDE_ENV_VARS[mode];
+  // Every override var that is currently set — unsetting only the winning one
+  // just hands control to the next override, so tokens.json stays bypassed.
+  const setOverrideVars = Object.values(AUTH_MODE_OVERRIDE_ENV_VARS).filter(
+    (v) => !!process.env[v],
+  );
+  const remedy =
+    setOverrideVars.length > 1
+      ? `Unset ${setOverrideVars.join(' and ')} to use your authenticated Google account`
+      : `Unset ${envVar} to use your authenticated Google account`;
   return `The local OAuth token at ${tokenPath} exists but is IGNORED because ` +
-    `${envVar} is set (active auth mode: ${mode}). Unset ${envVar} to use your ` +
-    `authenticated Google account (see issue #137).`;
+    `${envVar} is set (active auth mode: ${mode}). ${remedy} (see issue #137).`;
 }
 
 /**

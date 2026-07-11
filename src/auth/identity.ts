@@ -23,16 +23,48 @@ export interface EffectiveIdentity {
 }
 
 /**
+ * How long to wait for `about.get` before giving up. A diagnostic must return
+ * promptly even when Google is unreachable, so this is deliberately far shorter
+ * than the 120s default API timeout — a hung identity lookup would otherwise
+ * hang the very tool you reach for when the network is misbehaving.
+ */
+const DEFAULT_IDENTITY_TIMEOUT_MS = 10_000;
+
+/** The identity shape returned when the lookup can't produce a real answer. */
+function errorIdentity(error: string): EffectiveIdentity {
+  return {
+    emailAddress: null,
+    displayName: null,
+    storageUsage: null,
+    storageLimit: null,
+    error,
+  };
+}
+
+/**
  * Ask the Drive API which account the current client is acting as, via
  * `about.get`. Requires only a `drive`/`drive.readonly` scope, both of which
- * are in DEFAULT_SCOPES. Never throws — a failure is returned as `{ error }`
- * so callers (e.g. authGetStatus) can surface it without crashing.
+ * are in DEFAULT_SCOPES. Never throws — a failure (including a missing client
+ * or a timeout) is returned as `{ error }` so callers (e.g. authGetStatus) can
+ * surface it without crashing. `drive` may be undefined when the caller has no
+ * usable client (no account, or a client that failed to build).
  */
-export async function getEffectiveIdentity(drive: drive_v3.Drive): Promise<EffectiveIdentity> {
+export async function getEffectiveIdentity(
+  drive: drive_v3.Drive | undefined,
+  timeoutMs: number = DEFAULT_IDENTITY_TIMEOUT_MS,
+): Promise<EffectiveIdentity> {
+  if (!drive) {
+    return errorIdentity(
+      "No authenticated Drive client (no account, or the default account's client could not be built).",
+    );
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await drive.about.get({
-      fields: 'user(displayName,emailAddress),storageQuota(limit,usage)',
-    });
+    const res = await drive.about.get(
+      { fields: 'user(displayName,emailAddress),storageQuota(limit,usage)' },
+      { signal: controller.signal },
+    );
     const user = res.data.user;
     const quota = res.data.storageQuota;
     return {
@@ -42,12 +74,11 @@ export async function getEffectiveIdentity(drive: drive_v3.Drive): Promise<Effec
       storageLimit: quota?.limit ?? null,
     };
   } catch (e: unknown) {
-    return {
-      emailAddress: null,
-      displayName: null,
-      storageUsage: null,
-      storageLimit: null,
-      error: e instanceof Error ? e.message : String(e),
-    };
+    if (controller.signal.aborted) {
+      return errorIdentity(`Identity lookup timed out after ${timeoutMs}ms`);
+    }
+    return errorIdentity(e instanceof Error ? e.message : String(e));
+  } finally {
+    clearTimeout(timer);
   }
 }

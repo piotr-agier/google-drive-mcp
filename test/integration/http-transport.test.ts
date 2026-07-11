@@ -317,7 +317,9 @@ describe('HTTP transport — session idle timeout', () => {
 
   before(async () => {
     const mod = await setupMocks();
-    const result = mod.createHttpApp('127.0.0.1', { sessionIdleTimeoutMs: 50 });
+    // Wide margins on purpose: with the whole suite running in parallel,
+    // event-loop lag of tens of ms is routine and tighter values flake.
+    const result = mod.createHttpApp('127.0.0.1', { sessionIdleTimeoutMs: 400 });
     sessions = result.sessions;
     const started = await startServer(result.app);
     httpServer = started.httpServer;
@@ -332,7 +334,7 @@ describe('HTTP transport — session idle timeout', () => {
     const sid = await initializeSession(baseUrl);
     assert.ok(sessions.has(sid));
 
-    await delay(150);
+    await delay(1000);
 
     const res = await fetch(`${baseUrl}/mcp`, {
       method: 'POST',
@@ -347,7 +349,7 @@ describe('HTTP transport — session idle timeout', () => {
     const sid = await initializeSession(baseUrl);
 
     // Wait less than timeout, then send a request to reset timer
-    await delay(30);
+    await delay(150);
     const midRes = await fetch(`${baseUrl}/mcp`, {
       method: 'POST',
       headers: { ...MCP_HEADERS, 'mcp-session-id': sid },
@@ -357,7 +359,7 @@ describe('HTTP transport — session idle timeout', () => {
     await midRes.text();
 
     // Wait again — total time since last activity < timeout
-    await delay(30);
+    await delay(150);
     const res = await fetch(`${baseUrl}/mcp`, {
       method: 'POST',
       headers: { ...MCP_HEADERS, 'mcp-session-id': sid },

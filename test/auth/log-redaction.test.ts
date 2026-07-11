@@ -115,8 +115,9 @@ function makeRecord(overrides: Partial<AccountRecord> = {}): AccountRecord {
   };
 }
 
-/** Wait until `predicate()` returns truthy or `timeoutMs` elapses. */
-async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+/** Wait until `predicate()` returns truthy or `timeoutMs` elapses. Generous
+ * default: under full-suite parallel load, 2s was routinely exceeded. */
+async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (predicate()) return;

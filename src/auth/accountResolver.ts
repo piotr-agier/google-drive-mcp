@@ -114,7 +114,8 @@ export class AccountResolver {
       throw new Error(
         `No authenticated account has any of the required scopes: ${ctx.acceptableScopes.join(', ')}. ` +
           `Run manage_accounts add to connect an account with the needed scopes, or ` +
-          `manage_accounts remove <alias> followed by manage_accounts add <alias> to re-consent.`,
+          `re-consent an existing account with broader scopes by running ` +
+          `manage_accounts add <alias> (re-runs the consent screen in place; no removal needed).`,
       );
     }
     // A configured default exists but is scope-short: don't silently substitute

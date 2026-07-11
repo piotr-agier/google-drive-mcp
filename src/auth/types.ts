@@ -84,8 +84,8 @@ export const ALIAS_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/;
  * - `stdio`, `service-account`, `external-token`, `test` are used internally
  *   as session ids or synthetic-account names.
  * - `default` is the auto-assigned alias for the sole account produced by the
- *   v1→v2 migration; reserving it prevents users colliding with migrated
- *   installs and also discourages a poor choice of label.
+ *   v1→v2 migration and by the first-time boot flow; reserving it prevents
+ *   users colliding with those installs and also discourages a poor label.
  * - `all` and `*` are held for a future fanout-over-everything shorthand
  *   (Phase 3+), so existing accounts can never shadow the keyword.
  */

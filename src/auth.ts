@@ -2,7 +2,7 @@
 import { OAuth2Client } from 'google-auth-library';
 import { AccountClientFactory } from './auth/accountClientFactory.js';
 import { AccountResolver } from './auth/accountResolver.js';
-import { AccountStore } from './auth/accountStore.js';
+import { AccountStore, buildRecordFromV1 } from './auth/accountStore.js';
 import { initializeOAuth2Client } from './auth/client.js';
 import {
   createExternalOAuth2Client,
@@ -14,10 +14,8 @@ import {
 import { resolveOAuthScopes } from './auth/scopes.js';
 import { AuthServer } from './auth/server.js';
 import { SessionStore } from './auth/sessionStore.js';
-import { TokenManager } from './auth/tokenManager.js';
 import { AccountRecord, AuthMode } from './auth/types.js';
 
-export { TokenManager } from './auth/tokenManager.js';
 export { initializeOAuth2Client } from './auth/client.js';
 export { AuthServer } from './auth/server.js';
 export { SCOPE_ALIASES, SCOPE_PRESETS, DEFAULT_SCOPES, resolveOAuthScopes } from './auth/scopes.js';
@@ -57,7 +55,7 @@ export interface AuthSystem {
  *   If no accounts are registered, runs the interactive auth flow via AuthServer.
  */
 export async function buildAuthSystem(
-  opts: { interactiveIfEmpty?: boolean } = {},
+  opts: { interactiveIfEmpty?: boolean; openBrowser?: boolean } = {},
 ): Promise<AuthSystem> {
   console.error('Initializing authentication...');
 
@@ -100,15 +98,31 @@ export async function buildAuthSystem(
       // don't launch the legacy first-time browser auth here.
       return assembleSystem('local-oauth', store);
     }
-    // First-time auth: run the interactive browser flow.
+    // First-time auth: run the interactive browser flow. Tokens are persisted
+    // additively into the v2 store under the reserved alias 'default' — the
+    // flat v1 file is never written.
     const oauth2Client = await initializeOAuth2Client();
-    const tokenManager = new TokenManager(oauth2Client);
-    const authServer = new AuthServer(oauth2Client);
-    const started = await authServer.start(true);
+    const authServer = new AuthServer(oauth2Client, {
+      onTokens: async (tokens) => {
+        // Same record a v1→v2 migration would have produced: alias 'default',
+        // pendingIdentity, sub derived from the token material, scope from
+        // tokens.scope (DEFAULT_SCOPES fallback). A throw here renders the
+        // failure page and keeps authCompletedSuccessfully false.
+        const record = buildRecordFromV1(tokens);
+        await store.upsert(record);
+        if (!store.getDefault()) {
+          await store.setDefault(record.alias);
+        }
+      },
+    });
+    const started = await authServer.start(opts.openBrowser ?? true);
     if (!started) {
       throw new Error('Authentication failed. Please check your credentials and try again.');
     }
-    // Wait for the OAuth callback to populate tokens.json.
+    // Wait for the OAuth callback. authCompletedSuccessfully flips only after
+    // onTokens has resolved, so the store already holds the persisted account
+    // — no re-read or token validation needed here (the factory refreshes
+    // lazily on first client use).
     await new Promise<void>((resolve) => {
       const poll = setInterval(async () => {
         if (authServer.authCompletedSuccessfully) {
@@ -118,9 +132,6 @@ export async function buildAuthSystem(
         }
       }, 1000);
     });
-    // Validate + refresh, then re-read tokens.json (now in v1 shape) and migrate to v2.
-    await tokenManager.validateTokens();
-    await store.reload();
   } else {
     console.error(`Authentication: loaded ${store.list().length} account(s) from ${store.getFilePath()}`);
   }
@@ -179,56 +190,3 @@ export async function authenticate(): Promise<OAuth2Client> {
   return system.factory.getClient(defaultAlias);
 }
 
-/**
- * @deprecated Legacy single-account auth. NOT wired to the CLI — the `auth` command
- * runs `runAuthServer` in index.ts, which persists additively into the multi-account
- * AccountStore. This function still uses the legacy no-`onTokens` AuthServer path,
- * which flat-overwrites a v2 multi-account tokens.json with a single credential; do
- * not call it on a multi-account install. Kept only for backward-compatible imports.
- */
-export async function runAuthCommand(): Promise<void> {
-  try {
-    console.error('Google Drive MCP - Manual Authentication');
-    console.error('════════════════════════════════════════\n');
-
-    // Initialize OAuth client
-    const oauth2Client = await initializeOAuth2Client();
-
-    // Create and start the auth server
-    const authServer = new AuthServer(oauth2Client);
-
-    // Start with browser opening (true by default)
-    const success = await authServer.start(true);
-
-    if (!success && !authServer.authCompletedSuccessfully) {
-      // Failed to start and tokens weren't already valid
-      console.error(
-        "Authentication failed. Could not start server or validate existing tokens. Check port availability (3000-3004) and try again."
-      );
-      process.exit(1);
-    } else if (authServer.authCompletedSuccessfully) {
-      // Auth was successful (either existing tokens were valid or flow completed just now)
-      console.error("\n✅ Authentication successful!");
-      console.error("You can now use the Google Drive MCP server.");
-      process.exit(0); // Exit cleanly if auth is already done
-    }
-
-    // If we reach here, the server started and is waiting for the browser callback
-    console.error(
-      "Authentication server started. Please complete the authentication in your browser..."
-    );
-
-    // Wait for completion
-    const intervalId = setInterval(() => {
-      if (authServer.authCompletedSuccessfully) {
-        clearInterval(intervalId);
-        console.error("\n✅ Authentication completed successfully!");
-        console.error("You can now use the Google Drive MCP server.");
-        process.exit(0);
-      }
-    }, 1000);
-  } catch (error) {
-    console.error("\n❌ Authentication failed:", error);
-    process.exit(1);
-  }
-}

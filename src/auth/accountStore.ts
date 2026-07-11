@@ -303,12 +303,14 @@ export class AccountStore {
 // v1 detection & conversion
 // ---------------------------------------------------------------------------
 
+// Field nullability matches google-auth-library's `Credentials`, so a fresh
+// token response can be passed here directly (see buildRecordFromV1).
 interface V1TokenShape {
-  access_token?: string;
-  refresh_token?: string;
-  scope?: string;
-  expiry_date?: number;
-  token_type?: string;
+  access_token?: string | null;
+  refresh_token?: string | null;
+  scope?: string | null;
+  expiry_date?: number | null;
+  token_type?: string | null;
 }
 
 function looksLikeV1(parsed: unknown): boolean {
@@ -321,7 +323,13 @@ function looksLikeV1(parsed: unknown): boolean {
   );
 }
 
-function buildRecordFromV1(v1: V1TokenShape): AccountRecord {
+/**
+ * Convert a flat v1 token shape into a v2 AccountRecord under the reserved
+ * alias 'default'. Used by the v1→v2 file migration AND by buildAuthSystem's
+ * first-time bootstrap, which feeds the fresh OAuth token response through
+ * here so both paths produce an identical record.
+ */
+export function buildRecordFromV1(v1: V1TokenShape): AccountRecord {
   const refreshToken = v1.refresh_token ?? '';
   const seed = refreshToken || v1.access_token || 'no-token';
   const sub = crypto.createHash('sha256').update(seed).digest('hex').slice(0, 24);

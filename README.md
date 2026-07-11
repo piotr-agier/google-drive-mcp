@@ -425,7 +425,7 @@ CLI flags take priority over environment variables.
 
 The HTTP endpoint is `POST /mcp` for JSON-RPC requests, `GET /mcp` for SSE streaming, and `DELETE /mcp` to close a session. After the initial `initialize` request, all subsequent requests must include the `mcp-session-id` header returned in the initialize response.
 
-When binding to `127.0.0.1` (default), DNS rebinding protection is automatically enabled. For remote deployments (`0.0.0.0`), use service account or external token authentication and ensure the endpoint is behind a reverse proxy with TLS. **Without authentication and TLS, anyone who can reach the port gets full access to the configured Google Drive account.**
+When binding to `127.0.0.1` (default), DNS rebinding protection is automatically enabled. For remote deployments (`0.0.0.0`), prefer [Team Mode](#team-mode-multi-user-http-deployments), which authenticates every request with per-user OAuth; a single-identity remote deployment (service account or external token) must sit behind a reverse proxy with TLS and its own access control. **Without authentication and TLS, anyone who can reach the port gets full access to the configured Google Drive account.**
 
 ### MCP client configuration (HTTP)
 
@@ -438,6 +438,50 @@ When binding to `127.0.0.1` (default), DNS rebinding protection is automatically
   }
 }
 ```
+
+## Team Mode (multi-user HTTP deployments)
+
+The default HTTP transport serves one identity to every caller. Team mode turns the server into a shared, multi-user service: it becomes an [MCP-spec OAuth 2.1 authorization server](https://modelcontextprotocol.io/specification/draft/basic/authorization), each team member signs in with their own Google account, and **every tool call runs as the caller**. This is the mode to use when exposing the server to a team through claude.ai's custom-connector flow (or any MCP client that speaks the OAuth authorization flow).
+
+How it works (two-hop OAuth): the MCP client registers itself via Dynamic Client Registration and sends the user to this server's `/authorize`; the server forwards them to Google's consent screen; on return it stores the user's Google refresh token (keyed by their stable Google account id) and issues its own opaque bearer tokens to the MCP client. Every `/mcp` request must carry such a bearer, and the identity it proves is the identity all tools act as.
+
+### Setup
+
+1. **Create a "Web application" OAuth client** in [Google Cloud Console](https://console.cloud.google.com/) (APIs & Services → Credentials). Team mode cannot use a Desktop client — Google restricts those to loopback redirect URIs.
+2. **Add the redirect URI** `https://<your-server>/oauth/google/callback` to the client (the exact URI is printed at startup).
+3. **Provide the credentials** either as a `gcp-oauth.keys.json` with a `web` section, or via `GOOGLE_DRIVE_MCP_CLIENT_ID` / `GOOGLE_DRIVE_MCP_CLIENT_SECRET` (convenient with a secret manager).
+4. **Start the server**:
+
+```bash
+google-drive-mcp start --transport http --host 0.0.0.0 --port 3100 \
+  --team --issuer-url https://drive-mcp.example.com
+```
+
+5. **Connect from claude.ai**: add a custom connector pointing at `https://drive-mcp.example.com/mcp`. Each member is sent through the Google consent screen on connect and acts as themselves afterwards.
+
+### Team mode configuration
+
+| Env Var | CLI Flag | Default | Description |
+|---------|----------|---------|-------------|
+| `MCP_TEAM_MODE` | `--team` | off | Enable team mode (requires `--transport http`) |
+| `MCP_TEAM_ISSUER_URL` | `--issuer-url` | — | Public https URL of this server (required; http allowed only for localhost) |
+| `MCP_TEAM_ALLOWED_DOMAINS` | — | any Google account | Comma-separated Workspace domains allowed to sign in. Enforced on Google's `hd` claim, so consumer Gmail accounts are rejected when set |
+| `MCP_TEAM_ALLOWED_REDIRECT_URIS` | — | open | Allowlist for client-registration redirect URIs. For claude.ai-only teams set `https://claude.ai/api/mcp/auth_callback` |
+| `MCP_TEAM_TOKEN_TTL` | — | `3600` | Access-token lifetime in seconds (60–86400) |
+| `MCP_TEAM_STORE` | — | `file` | `file` or `memory`. The file store survives restarts; the memory store forces re-consent on every restart |
+| `MCP_TEAM_STORE_PATH` | — | `<config dir>/team-store.json` | Location of the persistent store |
+| `MCP_TRUST_PROXY` | — | unset | Trusted reverse-proxy hop count (`1` behind Cloud Run/nginx). Without it, all users behind the proxy share one rate-limit bucket |
+| `MCP_HTTP_ALLOWED_HOSTS` | — | issuer hostname | Extra allowed `Host` header values |
+
+Team mode is mutually exclusive with service-account and external-token modes, never reads or writes `tokens.json`, and disables `manage_accounts`, the per-tool `account` parameter, and the `gdrive:///` resources capability — identity always comes from the bearer token. Google scopes follow `GOOGLE_DRIVE_MCP_SCOPES` as usual; each user's tool access is additionally gated by the scopes they actually granted at their own consent screen.
+
+### Security notes
+
+- **`team-store.json` is the deployment's most sensitive file.** It holds every member's Google refresh token (necessarily in cleartext — they must be replayed to Google) plus registered clients; MCP tokens are stored only as SHA-256 hashes. It is written with mode `0600` — protect the volume accordingly.
+- **TLS is required.** Run behind a reverse proxy that terminates https for the issuer URL; the issuer must be https (enforced at startup, localhost excepted for development).
+- **Every authorization shows a Google consent screen** (`prompt=consent`). This is deliberate: with one Google client serving dynamically registered MCP clients, silent re-consent would let a malicious registered client mint tokens for anyone who clicks a link.
+- **Single process assumption.** In-flight sign-ins and authorization codes live in memory, and the file store serializes writes per process — run exactly one instance (e.g. Cloud Run `--max-instances=1`). On platforms with ephemeral filesystems, mount a volume for `MCP_TEAM_STORE_PATH` or members re-consent after every redeploy.
+- **Revocation**: a user can disconnect the connector client-side, revoke the app at [Google Account Permissions](https://myaccount.google.com/permissions) (the server detects the dead grant, drops that user's tokens, and forces a fresh sign-in), or an operator can delete the user's entry from `team-store.json`.
 
 ## Available Tools
 
@@ -1187,7 +1231,9 @@ The fastest fix is exactly what the error tells you: remove and re-add the alias
 
 ### Per-session caveat (HTTP transport)
 
-With the Streamable HTTP transport, multiple MCP sessions sharing the same server process also share the same active default account. A `set_default` in one session is visible to the others. Per-session isolation of the default is a planned follow-up; until then, treat the HTTP transport as single-user.
+With the Streamable HTTP transport in its default (single-user) mode, multiple MCP sessions sharing the same server process also share the same active default account. A `set_default` in one session is visible to the others — treat the default HTTP transport as single-user.
+
+For genuinely multi-user deployments, use [Team Mode](#team-mode-multi-user-http-deployments): each request is authenticated with a per-user bearer token and every tool call runs as the caller, so no session can see or select another user's account.
 
 ## Authentication Flow
 

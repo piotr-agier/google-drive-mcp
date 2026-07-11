@@ -65,6 +65,36 @@ export function getKeysFilePaths(): string[] {
   return paths;
 }
 
+/**
+ * Render an error for logging without leaking credential material.
+ *
+ * Passing raw errors to console.error is unsafe in the auth layer: gaxios
+ * errors carry the full request config (a token-refresh POST body embeds the
+ * refresh token and client secret), and JSON.parse SyntaxErrors echo fragments
+ * of the unparseable source — which for a token or credentials file is secret
+ * material. Extract only known-safe fields.
+ */
+export function describeErrorForLog(err: unknown): string {
+  if (err instanceof SyntaxError) return 'SyntaxError: invalid JSON';
+  if (err === null || typeof err !== 'object') return String(err);
+  const e = err as {
+    name?: unknown;
+    message?: unknown;
+    code?: unknown;
+    response?: { status?: unknown; data?: { error?: unknown; error_description?: unknown } };
+  };
+  const parts: string[] = [];
+  if (typeof e.message === 'string' && e.message.length > 0) parts.push(e.message);
+  else if (typeof e.name === 'string') parts.push(e.name);
+  if (e.code !== undefined) parts.push(`code=${String(e.code)}`);
+  if (e.response?.status !== undefined) parts.push(`status=${String(e.response.status)}`);
+  if (typeof e.response?.data?.error === 'string') parts.push(`error=${e.response.data.error}`);
+  if (typeof e.response?.data?.error_description === 'string') {
+    parts.push(`error_description=${e.response.data.error_description}`);
+  }
+  return parts.length > 0 ? parts.join(' ') : 'unknown error';
+}
+
 // Interface for OAuth credentials
 export interface OAuthCredentials {
   client_id: string;

@@ -3,6 +3,7 @@ import { Credentials, OAuth2Client } from 'google-auth-library';
 import http from 'http';
 import open from 'open';
 import { loadCredentials } from './client.js';
+import { describeErrorForLog } from './utils.js';
 import { resolveOAuthScopes } from './scopes.js';
 import { escapeHtml } from './html.js';
 
@@ -179,8 +180,10 @@ export class AuthServer {
         `http://127.0.0.1:${port}/oauth2callback`
       );
     } catch (error) {
-        // Could not load credentials, cannot proceed with auth flow
-        console.error('Failed to load credentials for auth flow:', error);
+        // Could not load credentials, cannot proceed with auth flow.
+        // describeErrorForLog: a JSON.parse SyntaxError echoes fragments of the
+        // credentials file (client secret) into its message.
+        console.error(`Failed to load credentials for auth flow: ${describeErrorForLog(error)}`);
         this.authCompletedSuccessfully = false;
         await this.stop(); // Stop the server we just started
         return false;

@@ -20,6 +20,7 @@ import {
 } from './types.js';
 import { DEFAULT_SCOPES, splitScopes } from './scopes.js';
 import {
+  describeErrorForLog,
   getAdditionalLegacyPaths,
   getLegacyTokenPath,
   getSecureTokenPath,
@@ -244,9 +245,11 @@ export class AccountStore {
         this.data = emptyFile();
         return;
       }
+      // describeErrorForLog: a JSON.parse SyntaxError echoes fragments of the
+      // token file into its message.
       console.error(
-        `AccountStore: could not re-read ${this.filePath} before write; keeping in-memory state.`,
-        err,
+        `AccountStore: could not re-read ${this.filePath} before write; keeping in-memory state. ` +
+          `(${describeErrorForLog(err)})`,
       );
     }
   }
@@ -292,7 +295,9 @@ export class AccountStore {
       } catch (err) {
         if (isENOENT(err)) continue;
         // Malformed file at a legacy path — log and continue, don't fail boot.
-        console.error(`Skipping unreadable legacy token file ${legacyPath}:`, err);
+        console.error(
+          `Skipping unreadable legacy token file ${legacyPath}: ${describeErrorForLog(err)}`,
+        );
       }
     }
     return false;

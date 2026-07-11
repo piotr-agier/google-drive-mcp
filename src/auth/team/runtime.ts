@@ -7,6 +7,7 @@
 import type { RequestHandler } from 'express';
 import { loadWebCredentials } from '../client.js';
 import { makeGoogleCallbackHandler } from './callback.js';
+import { TeamClientFactory } from './clientFactory.js';
 import type { TeamConfig } from './config.js';
 import { FileTeamStore } from './fileStore.js';
 import { GoogleIdp, GoogleIdpClient } from './googleIdp.js';
@@ -21,6 +22,7 @@ export interface TeamRuntime {
   store: TeamStore;
   idp: GoogleIdp;
   provider: TeamOAuthProvider;
+  clientFactory: TeamClientFactory;
   callbackHandler: RequestHandler;
   /** Stops the background sweep timer (tests, shutdown). */
   stop(): void;
@@ -29,9 +31,9 @@ export interface TeamRuntime {
 export interface TeamRuntimeOverrides {
   store?: TeamStore;
   idp?: GoogleIdp;
-  /** Called after a user (re-)authorizes; the dispatch layer hooks per-user
-   * client-cache eviction here. */
-  onUserAuthorized?: (sub: string) => void;
+  /** Google OAuth client pair for the per-user client factory. Defaults to the
+   * loaded web credentials; tests with a fake IdP get inert placeholders. */
+  clientCredentials?: { client_id: string; client_secret: string };
 }
 
 export async function createTeamRuntime(
@@ -44,8 +46,9 @@ export async function createTeamRuntime(
   await store.init();
 
   let idp = overrides.idp;
+  let credentials = overrides.clientCredentials;
   if (!idp) {
-    const credentials = await loadWebCredentials(config.googleRedirectUri);
+    credentials ??= await loadWebCredentials(config.googleRedirectUri);
     idp = new GoogleIdpClient({
       clientId: credentials.client_id,
       clientSecret: credentials.client_secret,
@@ -54,13 +57,18 @@ export async function createTeamRuntime(
       hdHint: config.allowedDomains.length === 1 ? config.allowedDomains[0] : undefined,
     });
   }
+  // A faked IdP (tests) never reaches Google, so placeholder credentials are safe.
+  credentials ??= { client_id: 'unused-test-client', client_secret: 'unused-test-secret' };
 
   const provider = new TeamOAuthProvider({ store, idp, config });
+  const clientFactory = new TeamClientFactory(store, credentials);
   const callbackHandler = makeGoogleCallbackHandler({
     store,
     idp,
     config,
-    onUserAuthorized: overrides.onUserAuthorized,
+    // A re-authorization replaces the Google grant; cached clients built from
+    // the old grant must not survive it.
+    onUserAuthorized: (sub) => clientFactory.evict(sub),
   });
 
   const sweeper = setInterval(() => {
@@ -75,6 +83,7 @@ export async function createTeamRuntime(
     store,
     idp,
     provider,
+    clientFactory,
     callbackHandler,
     stop: () => clearInterval(sweeper),
   };

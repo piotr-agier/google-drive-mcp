@@ -251,8 +251,50 @@ const AuthTestFileAccessSchema = z.object({
 
 const ManageAccountsSchema = z.object({
   action: z.enum(['list', 'add', 'remove', 'set_default']),
-  account_id: z.string().optional(),
+  // Nullable so a client can pass JSON `null` to `set_default` to clear the current
+  // default (per the tool description); add/remove still reject a missing/null alias.
+  account_id: z.string().nullable().optional(),
 });
+
+// Give the user up to 5 minutes to complete OAuth consent before giving up.
+const ADD_ACCOUNT_CONSENT_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Race an in-flight account-add's `completion` against a timeout. On timeout (or any
+ * failure) call `cancel()` to stop the embedded OAuth callback server, so we don't leak
+ * the listening port or let a late consent silently register the account after we've
+ * reported failure. `cancel()` is idempotent, so the success path's own teardown
+ * (in `addAccountFlow`) is unaffected.
+ */
+export async function awaitConsentCompletion<T>(
+  result: { completion: Promise<T>; cancel: () => Promise<void> },
+  timeoutMs: number,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`Timed out after ${timeoutMs / 1000}s waiting for OAuth consent.`)),
+      timeoutMs,
+    );
+  });
+  try {
+    return await Promise.race([result.completion, timeout]);
+  } catch (err) {
+    await result.cancel().catch(() => undefined);
+    throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Map a `set_default` `account_id` to its target. A non-empty string is a real alias
+ * (including the literal "null"); JSON `null`, `undefined`, or an empty string all clear
+ * the current default.
+ */
+export function resolveSetDefaultTarget(account_id: string | null | undefined): string | null {
+  return typeof account_id === 'string' && account_id.length > 0 ? account_id : null;
+}
 
 function getGrantedScopesFromAuthClient(ctx: ToolContext): string[] {
   const scopeRaw = ctx.authClient?.credentials?.scope;
@@ -594,9 +636,9 @@ export const toolDefinitions: ToolDefinition[] = [
           description: "Which account-lifecycle operation to perform."
         },
         account_id: {
-          type: "string",
+          type: ["string", "null"],
           description:
-            "Account alias. Required for add/remove/set_default. Must match /^[a-z0-9][a-z0-9_-]{0,31}$/ and not be reserved (e.g. 'default', 'all', '*'). Set to null with set_default to clear the default."
+            "Account alias. Required for add/remove/set_default. Must match /^[a-z0-9][a-z0-9_-]{0,31}$/ and not be reserved (e.g. 'default', 'all', '*'). Pass JSON null with set_default to clear the current default."
         }
       },
       required: ["action"]
@@ -1994,37 +2036,29 @@ export async function handleTool(
 
           case 'add': {
             if (!account_id) return errorResponse(`action 'add' requires account_id (alias).`);
-            const { authUrl, completion } = await ctx.accountOps.add(account_id);
-            // Give the user up to 5 minutes to complete consent.
-            const timeoutMs = 5 * 60 * 1000;
-            let timer: ReturnType<typeof setTimeout> | null = null;
-            const timeout = new Promise<never>((_resolve, reject) => {
-              timer = setTimeout(
-                () => reject(new Error(`Timed out after ${timeoutMs / 1000}s waiting for OAuth consent.`)),
-                timeoutMs,
-              );
-            });
-            try {
-              const record = await Promise.race([completion, timeout]);
-              const payload = {
-                added: {
-                  alias: record.alias,
-                  email: record.email,
-                  sub: record.sub,
-                  pendingIdentity: !!record.pendingIdentity,
-                },
-                authUrl,
-              };
-              return {
-                content: [{
-                  type: 'text',
-                  text: `Account added.\n${JSON.stringify(payload, null, 2)}`,
-                }],
-                isError: false,
-              };
-            } finally {
-              if (timer) clearTimeout(timer);
-            }
+            const { authUrl, completion, cancel } = await ctx.accountOps.add(account_id);
+            // Give the user up to 5 minutes to complete consent; on timeout, tear down
+            // the embedded OAuth server so its callback port isn't leaked (finding 12).
+            const record = await awaitConsentCompletion(
+              { completion, cancel },
+              ADD_ACCOUNT_CONSENT_TIMEOUT_MS,
+            );
+            const payload = {
+              added: {
+                alias: record.alias,
+                email: record.email,
+                sub: record.sub,
+                pendingIdentity: !!record.pendingIdentity,
+              },
+              authUrl,
+            };
+            return {
+              content: [{
+                type: 'text',
+                text: `Account added.\n${JSON.stringify(payload, null, 2)}`,
+              }],
+              isError: false,
+            };
           }
 
           case 'remove': {
@@ -2037,7 +2071,7 @@ export async function handleTool(
           }
 
           case 'set_default': {
-            const next = account_id && account_id !== 'null' ? account_id : null;
+            const next = resolveSetDefaultTarget(account_id);
             await ctx.accountOps.setDefault(next);
             return {
               content: [{

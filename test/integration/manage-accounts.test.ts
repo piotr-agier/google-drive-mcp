@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it, before, after } from 'node:test';
 import { setupTestServer, callTool, type TestContext } from '../helpers/setup-server.js';
+import { resolveSetDefaultTarget, awaitConsentCompletion } from '../../src/tools/drive.js';
 
 // The test harness seeds an AccountStore in 'test' mode with a single synthetic
 // account aliased 'test'. manage_accounts list should see it; add/remove/
@@ -194,5 +195,86 @@ describe('manage_accounts with zero accounts', () => {
     const payload = JSON.parse(result.content[0].text);
     assert.equal(payload.defaultAccount, null);
     assert.deepEqual(payload.accounts, []);
+  });
+});
+
+// Finding 13: `set_default` must treat the literal alias "null" as a real account and
+// only clear the default on JSON null / undefined / empty. resolveSetDefaultTarget is the seam.
+describe('resolveSetDefaultTarget (finding 13)', () => {
+  it('treats the literal string "null" as a real alias, not the clear sentinel', () => {
+    assert.equal(resolveSetDefaultTarget('null'), 'null');
+  });
+
+  it('clears the default for JSON null, undefined, or empty string', () => {
+    assert.equal(resolveSetDefaultTarget(null), null);
+    assert.equal(resolveSetDefaultTarget(undefined), null);
+    assert.equal(resolveSetDefaultTarget(''), null);
+  });
+
+  it('passes an ordinary alias through', () => {
+    assert.equal(resolveSetDefaultTarget('work'), 'work');
+  });
+});
+
+// Finding 13 (schema): the tool documents passing JSON null to `set_default` to clear the
+// default, so the zod schema must accept null. In the test-mode harness set_default is
+// refused for being outside local-oauth mode — which proves null cleared validation and
+// reached the handler (before the fix it failed zod with "Expected string, received null").
+describe('manage_accounts set_default accepts JSON null (finding 13)', () => {
+  let ctx: TestContext;
+
+  before(async () => {
+    ctx = await setupTestServer();
+  });
+
+  after(async () => {
+    await ctx.cleanup();
+  });
+
+  it('null account_id reaches the mode guard, not a zod type error', async () => {
+    const result = await callTool(ctx.client, 'manage_accounts', {
+      action: 'set_default',
+      account_id: null,
+    });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /only supported in local-OAuth mode/);
+    assert.doesNotMatch(result.content[0].text, /Expected string|Invalid|received null/);
+  });
+});
+
+// Finding 12: an abandoned `add` must tear down the embedded OAuth server on timeout so
+// its callback port isn't leaked. awaitConsentCompletion is the seam.
+describe('awaitConsentCompletion (finding 12)', () => {
+  it('cancels the auth server exactly once on timeout', async () => {
+    let cancelled = 0;
+    const never = new Promise<{ alias: string }>(() => {});
+    await assert.rejects(
+      awaitConsentCompletion({ completion: never, cancel: async () => { cancelled += 1; } }, 10),
+      /Timed out .* waiting for OAuth consent/,
+    );
+    assert.equal(cancelled, 1, 'cancel() must run once on timeout');
+  });
+
+  it('returns the record and does not cancel on success', async () => {
+    let cancelled = 0;
+    const rec = { alias: 'work' };
+    const got = await awaitConsentCompletion(
+      { completion: Promise.resolve(rec), cancel: async () => { cancelled += 1; } },
+      60_000,
+    );
+    assert.equal(got, rec);
+    assert.equal(cancelled, 0, 'success path leaves teardown to addAccountFlow');
+  });
+
+  it('cancels once and rethrows when completion rejects', async () => {
+    let cancelled = 0;
+    await assert.rejects(
+      awaitConsentCompletion(
+        { completion: Promise.reject(new Error('boom')), cancel: async () => { cancelled += 1; } },
+        60_000,
+      ),
+      /boom/,
+    );
+    assert.equal(cancelled, 1);
   });
 });

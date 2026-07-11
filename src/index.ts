@@ -27,7 +27,7 @@ import {
 } from './auth.js';
 import type { AccountRecord, RedactedAccountView } from './auth/types.js';
 import { ALIAS_PATTERN, RESERVED_ALIASES } from './auth/types.js';
-import { DEFAULT_SCOPES, USERINFO_SCOPES } from './auth/scopes.js';
+import { resolveAddAccountScopes } from './auth/scopes.js';
 import { fetchUserInfo } from './auth/userInfo.js';
 import { fileURLToPath } from 'url';
 import { readFileSync } from 'fs';
@@ -196,7 +196,7 @@ async function addAccountFlow(alias: string, openBrowser = true): Promise<AddAcc
 
   // Fresh OAuth2Client for this flow — will receive tokens on callback.
   const flowClient = await initializeOAuth2Client();
-  const scopes = [...DEFAULT_SCOPES, ...USERINFO_SCOPES];
+  const scopes = resolveAddAccountScopes();
 
   let resolveCompletion!: (rec: AccountRecord) => void;
   let rejectCompletion!: (err: Error) => void;

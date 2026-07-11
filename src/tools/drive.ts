@@ -9,11 +9,13 @@ import pdfLib from 'pdf-lib';
 const { PDFDocument } = pdfLib;
 import type { ToolDefinition, ToolContext, ToolResult } from '../types.js';
 import { errorResponse } from '../types.js';
-import { escapeDriveQuery, getMimeTypeFromFilename, isTextMime, TEXT_MIME_TYPES } from '../utils.js';
+import { escapeDriveQuery, getMimeTypeFromFilename, isTextMime, TEXT_MIME_TYPES, ALL_DRIVES_LIST_PARAMS } from '../utils.js';
 import { downloadTextContent } from './text-content.js';
 import { downloadDriveFile, GOOGLE_WORKSPACE_EXPORT_FORMATS } from '../download-file.js';
 import { getSecureTokenPath } from '../auth/utils.js';
 import { SCOPE_ALIASES, SCOPE_PRESETS, resolveOAuthScopes, splitScopes } from '../auth/scopes.js';
+import { getActiveAuthMode, describeBypassedTokens } from '../auth/externalAuth.js';
+import { getEffectiveIdentity } from '../auth/identity.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -758,9 +760,7 @@ export async function handleTool(
         pageSize: Math.min(pageSize || 50, 100),
         pageToken: pageToken,
         fields: "nextPageToken, files(id, name, mimeType, createdTime, modifiedTime, size, parents)",
-        corpora: "allDrives",
-        includeItemsFromAllDrives: true,
-        supportsAllDrives: true
+        ...ALL_DRIVES_LIST_PARAMS
       });
 
       // Resolve folder paths from parent IDs (with dedup for concurrent lookups)
@@ -1005,8 +1005,7 @@ export async function handleTool(
         pageToken: data.pageToken,
         fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size)",
         orderBy: "name",
-        includeItemsFromAllDrives: true,
-        supportsAllDrives: true
+        ...ALL_DRIVES_LIST_PARAMS
       });
 
       const files = res.data.files || [];
@@ -1694,8 +1693,7 @@ export async function handleTool(
         q: `'${data.folderId}' in parents and mimeType='application/pdf' and trashed=false`,
         pageSize: data.maxResults,
         fields: 'files(id,name,mimeType)',
-        includeItemsFromAllDrives: true,
-        supportsAllDrives: true,
+        ...ALL_DRIVES_LIST_PARAMS,
       });
 
       const files = list.data.files || [];
@@ -1927,9 +1925,39 @@ export async function handleTool(
       const expiryDate = ctx.authClient?.credentials?.expiry_date as number | undefined;
       const expiresInSec = expiryDate ? Math.floor((expiryDate - Date.now()) / 1000) : null;
 
+      // Which auth mode is actually active, and which override env vars are set.
+      // Env-var *presence* forces service-account/external mode over tokens.json,
+      // so a valid-looking token file can be silently bypassed (issue #137).
+      const authMode = getActiveAuthMode();
+      const envOverrides = {
+        GOOGLE_APPLICATION_CREDENTIALS: !!process.env.GOOGLE_APPLICATION_CREDENTIALS,
+        GOOGLE_DRIVE_MCP_ACCESS_TOKEN: !!process.env.GOOGLE_DRIVE_MCP_ACCESS_TOKEN,
+        GOOGLE_DRIVE_MCP_TOKEN_PATH: !!process.env.GOOGLE_DRIVE_MCP_TOKEN_PATH,
+        XDG_CONFIG_HOME: !!process.env.XDG_CONFIG_HOME,
+      };
+
+      // Ask Google who the live Drive client actually is. This is the
+      // load-bearing check for #137: a wrong/empty identity is otherwise
+      // invisible (all calls return empty with no error). Never throws.
+      const identity = await getEffectiveIdentity(ctx.getDrive());
+
+      const warnings: string[] = [];
+      if (authMode !== 'oauth') {
+        const bypassWarning = describeBypassedTokens(authMode, tokenPath, tokenFileExists);
+        if (bypassWarning) warnings.push(bypassWarning);
+      }
+      if (identity.error) {
+        warnings.push(`Could not resolve the acting Google account via about.get: ${identity.error}`);
+      } else if (!identity.emailAddress) {
+        warnings.push('The acting Google account has no email — this is often an empty or misconfigured service account.');
+      }
+
       const payload = {
+        authMode,
+        identity,
         tokenFilePath: tokenPath,
         tokenFileExists,
+        envOverrides,
         hasAccessToken: !!ctx.authClient?.credentials?.access_token,
         hasRefreshToken: !!ctx.authClient?.credentials?.refresh_token,
         expiryDate: expiryDate || null,
@@ -1937,14 +1965,32 @@ export async function handleTool(
         requestedScopes,
         grantedScopes,
         missingScopes,
+        warnings,
       };
 
+      // Ordered most-actionable first. needs_reauth outranks identity_error:
+      // in oauth mode a missing token/refresh token is the root cause and the
+      // failing about.get is just its symptom (a refresh token is meaningless
+      // for service-account/external modes, so needs_reauth is oauth-only).
+      // identity_error is the fallback when creds look complete yet Google
+      // rejects them. warning is last so it never masks a specific diagnosis —
+      // an intentional override with a leftover tokens.json still surfaces as
+      // 'warning' but no longer hides scope_mismatch/needs_reauth.
       const status =
-        !tokenFileExists || !payload.hasRefreshToken ? 'needs_reauth' :
+        (authMode === 'oauth' && (!tokenFileExists || !payload.hasRefreshToken)) ? 'needs_reauth' :
+        identity.error ? 'identity_error' :
         missingScopes.length > 0 ? 'scope_mismatch' :
+        warnings.length > 0 ? 'warning' :
         'ok';
 
-      let text = `Auth status (${status}):\n${JSON.stringify(payload, null, 2)}\n\nSummary: token file ${tokenFileExists ? 'found' : 'missing'}, missing scopes=${missingScopes.length}.`;
+      const identityLine = identity.error
+        ? `identity=UNRESOLVED (${identity.error})`
+        : `identity=${identity.emailAddress || '(no email)'}`;
+
+      let text = `Auth status (${status}):\n${JSON.stringify(payload, null, 2)}\n\nSummary: mode=${authMode}, ${identityLine}, token file ${tokenFileExists ? 'found' : 'missing'}, missing scopes=${missingScopes.length}.`;
+      if (warnings.length > 0) {
+        text += `\n\n⚠ ${warnings.join('\n⚠ ')}`;
+      }
       if (grantedScopes.length === 0 && payload.hasAccessToken) {
         text += '\nNote: granted scopes may appear empty when the token was loaded from disk. This does not necessarily indicate missing permissions.';
       }
@@ -1996,8 +2042,7 @@ export async function handleTool(
           const list = await ctx.getDrive().files.list({
             pageSize: 1,
             fields: 'files(id,name,mimeType)',
-            includeItemsFromAllDrives: true,
-            supportsAllDrives: true,
+            ...ALL_DRIVES_LIST_PARAMS,
           });
           check = { mode: 'list', visibleCount: list.data.files?.length || 0, sample: list.data.files?.[0] || null };
         }

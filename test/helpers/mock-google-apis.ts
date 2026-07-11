@@ -86,6 +86,12 @@ export function createDriveMock() {
   const drives = {
     list: stub(tracker, 'drives.list', { drives: [] }),
   };
+  const about = {
+    get: stub(tracker, 'about.get', {
+      user: { displayName: 'Test User', emailAddress: 'test-user@example.com' },
+      storageQuota: { limit: '16106127360', usage: '1024' },
+    }),
+  };
   const replies = {
     create: stub(tracker, 'replies.create', { id: 'reply-1', content: 'reply text' }),
   };
@@ -100,7 +106,7 @@ export function createDriveMock() {
     list: stub(tracker, 'revisions.list', { revisions: [{ id: '1', modifiedTime: '2026-01-01T10:00:00Z', lastModifyingUser: { displayName: 'User' } }] }),
     get: stub(tracker, 'revisions.get', { id: '1', modifiedTime: '2026-01-01T10:00:00Z', exportLinks: { 'application/pdf': 'https://example.com/export.pdf' } }),
   };
-  return { service: { files, comments, replies, permissions, revisions, drives }, tracker };
+  return { service: { files, comments, replies, permissions, revisions, drives, about }, tracker };
 }
 
 // ---------------------------------------------------------------------------

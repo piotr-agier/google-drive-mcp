@@ -1,7 +1,7 @@
 // Shared test helper for temporarily mutating process.env.
 
 /** Temporarily set (undefined = unset) env vars; returns restore() to revert. */
-export function withEnv(vars: Record<string, string | undefined>): { restore: () => void } {
+export function setEnv(vars: Record<string, string | undefined>): { restore: () => void } {
   const prev: Record<string, string | undefined> = {};
   for (const [k, v] of Object.entries(vars)) {
     prev[k] = process.env[k];

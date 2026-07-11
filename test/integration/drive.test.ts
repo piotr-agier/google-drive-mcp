@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { PDFDocument } from 'pdf-lib';
 import { setupTestServer, callTool, type TestContext } from '../helpers/setup-server.js';
-import { withEnv } from '../helpers/env.js';
+import { setEnv } from '../helpers/env.js';
 
 describe('Drive tools', () => {
   let ctx: TestContext;
@@ -310,12 +310,15 @@ describe('Drive tools', () => {
       assert.equal(res.isError, false);
     });
 
-    it('passes corpora=allDrives so shared-drive folder children are listed', async () => {
+    it('lists shared-drive folder children via the two flags, without corpora=allDrives', async () => {
+      // Parent-scoped ('<id>' in parents): the two flags surface Shared Drive
+      // children, and corpora=allDrives is deliberately omitted so the listing
+      // can never come back as an incompleteSearch partial result (#137).
       ctx.mocks.drive.service.files.list._setImpl(async () => ({ data: { files: [] } }));
       await callTool(ctx.client, 'listFolder', { folderId: 'shared-folder-id' });
       const listCalls = ctx.mocks.drive.tracker.getCalls('files.list');
       const args = listCalls[listCalls.length - 1].args[0];
-      assert.equal(args.corpora, 'allDrives');
+      assert.equal(args.corpora, undefined);
       assert.equal(args.includeItemsFromAllDrives, true);
       assert.equal(args.supportsAllDrives, true);
       ctx.mocks.drive.service.files.list._resetImpl();
@@ -622,7 +625,7 @@ describe('Drive tools', () => {
     });
 
     it('authGetStatus reports the effective identity and oauth mode', async () => {
-      const saved = withEnv({ GOOGLE_APPLICATION_CREDENTIALS: undefined, GOOGLE_DRIVE_MCP_ACCESS_TOKEN: undefined });
+      const saved = setEnv({ GOOGLE_APPLICATION_CREDENTIALS: undefined, GOOGLE_DRIVE_MCP_ACCESS_TOKEN: undefined });
       ctx.mocks.drive.service.about.get._setImpl(async () => ({
         data: { user: { displayName: 'Ada L', emailAddress: 'ada@example.com' }, storageQuota: { limit: '100', usage: '1' } },
       }));
@@ -642,7 +645,7 @@ describe('Drive tools', () => {
       const dir = await mkdtemp(join(tmpdir(), 'gdmcp-tok-'));
       const tokenFile = join(dir, 'tokens.json');
       await writeFile(tokenFile, '{}');
-      const saved = withEnv({
+      const saved = setEnv({
         GOOGLE_APPLICATION_CREDENTIALS: '/tmp/fake-service-account.json',
         GOOGLE_DRIVE_MCP_TOKEN_PATH: tokenFile,
       });
@@ -664,7 +667,7 @@ describe('Drive tools', () => {
       // credentials (making about.get throw is exactly what the old ladder
       // mislabeled as identity_error). A non-existent token path makes
       // tokenFileExists false.
-      const saved = withEnv({
+      const saved = setEnv({
         GOOGLE_APPLICATION_CREDENTIALS: undefined,
         GOOGLE_DRIVE_MCP_ACCESS_TOKEN: undefined,
         GOOGLE_DRIVE_MCP_TOKEN_PATH: '/tmp/gdmcp-nonexistent-token-path/tokens.json',
@@ -684,7 +687,7 @@ describe('Drive tools', () => {
     it('authGetStatus surfaces an identity-resolution failure as identity_error', async () => {
       // Use service_account mode so the oauth-only needs_reauth branch is
       // skipped and a failing about.get genuinely surfaces as identity_error.
-      const saved = withEnv({
+      const saved = setEnv({
         GOOGLE_APPLICATION_CREDENTIALS: '/tmp/fake-service-account.json',
         GOOGLE_DRIVE_MCP_ACCESS_TOKEN: undefined,
         GOOGLE_DRIVE_MCP_TOKEN_PATH: '/tmp/gdmcp-nonexistent-token-path/tokens.json',

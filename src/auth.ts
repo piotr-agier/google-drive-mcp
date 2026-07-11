@@ -8,8 +8,7 @@ import {
   createExternalOAuth2Client,
   createServiceAccountAuth,
   describeBypassedTokens,
-  isExternalTokenMode,
-  isServiceAccountMode,
+  getActiveAuthMode,
   validateExternalTokenConfig,
 } from './auth/externalAuth.js';
 import { getSecureTokenPath } from './auth/utils.js';
@@ -55,7 +54,9 @@ export interface AuthSystem {
  * `auth/drive` token appears valid yet every Drive call comes back empty
  * because the process is actually acting as an empty service account.
  */
-function warnIfLocalTokensBypassed(mode: 'service_account' | 'external_token'): void {
+function warnIfLocalTokensBypassed(): void {
+  const mode = getActiveAuthMode();
+  if (mode === 'oauth') return;
   try {
     const tokenPath = getSecureTokenPath();
     const msg = describeBypassedTokens(mode, tokenPath, existsSync(tokenPath));
@@ -79,8 +80,10 @@ export async function buildAuthSystem(
 ): Promise<AuthSystem> {
   console.error('Initializing authentication...');
 
-  if (isServiceAccountMode()) {
-    warnIfLocalTokensBypassed('service_account');
+  const mode = getActiveAuthMode();
+
+  if (mode === 'service_account') {
+    warnIfLocalTokensBypassed();
     const client = await createServiceAccountAuth();
     const store = new AccountStore({ mode: 'service-account' });
     await store.reload();
@@ -88,8 +91,8 @@ export async function buildAuthSystem(
     return assembleSystem('service-account', store);
   }
 
-  if (isExternalTokenMode()) {
-    warnIfLocalTokensBypassed('external_token');
+  if (mode === 'external_token') {
+    warnIfLocalTokensBypassed();
     validateExternalTokenConfig();
     const client = createExternalOAuth2Client();
     const store = new AccountStore({ mode: 'external-token' });
@@ -196,10 +199,11 @@ function buildSyntheticRecord(alias: 'service-account' | 'external-token'): Acco
 export async function authenticate(): Promise<OAuth2Client> {
   // Preserve legacy fast paths used by tests: synthetic-mode callers expect
   // the mode-specific client directly without touching AccountStore.
-  if (isServiceAccountMode()) {
+  const mode = getActiveAuthMode();
+  if (mode === 'service_account') {
     return (await createServiceAccountAuth()) as OAuth2Client;
   }
-  if (isExternalTokenMode()) {
+  if (mode === 'external_token') {
     validateExternalTokenConfig();
     return createExternalOAuth2Client();
   }

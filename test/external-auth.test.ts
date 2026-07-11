@@ -7,9 +7,10 @@ import {
   validateExternalTokenConfig,
   createExternalOAuth2Client,
   buildServiceAccountAuthOptions,
+  describeBypassedTokens,
 } from '../src/auth/externalAuth.js';
 import { SCOPE_ALIASES } from '../src/auth/scopes.js';
-import { withEnv as setEnv } from './helpers/env.js';
+import { setEnv } from './helpers/env.js';
 
 // ---------------------------------------------------------------------------
 // Helpers — save & restore env vars around each test
@@ -236,5 +237,40 @@ test('authenticate uses external token when no service account', withEnv(
     const { authenticate } = await import('../src/auth.js');
     const client = await authenticate();
     assert.equal(client.credentials.access_token, 'ya29.test');
+  },
+));
+
+// ---------------------------------------------------------------------------
+// describeBypassedTokens — issue #137 remediation advice
+// ---------------------------------------------------------------------------
+
+test('describeBypassedTokens returns null when no local token file exists', withEnv(
+  { GOOGLE_APPLICATION_CREDENTIALS: '/x/sa.json' },
+  () => {
+    assert.equal(describeBypassedTokens('service_account', '/home/u/tokens.json', false), null);
+  },
+));
+
+test('describeBypassedTokens names only the one set override var', withEnv(
+  { GOOGLE_APPLICATION_CREDENTIALS: '/x/sa.json' },
+  () => {
+    const msg = describeBypassedTokens('service_account', '/home/u/tokens.json', true);
+    assert.ok(msg);
+    assert.ok(msg!.includes('Unset GOOGLE_APPLICATION_CREDENTIALS to use your authenticated Google account'));
+    assert.ok(!msg!.includes('GOOGLE_DRIVE_MCP_ACCESS_TOKEN'), 'does not mention an unset override var');
+  },
+));
+
+test('describeBypassedTokens tells the user to unset BOTH override vars when both are set (finding #6)', withEnv(
+  { GOOGLE_APPLICATION_CREDENTIALS: '/x/sa.json', GOOGLE_DRIVE_MCP_ACCESS_TOKEN: 'ya29.test' },
+  () => {
+    // Unsetting only the winning var just hands control to the other override,
+    // so tokens.json stays bypassed — the remedy must name both.
+    const msg = describeBypassedTokens('service_account', '/home/u/tokens.json', true);
+    assert.ok(msg);
+    assert.ok(
+      msg!.includes('Unset GOOGLE_APPLICATION_CREDENTIALS and GOOGLE_DRIVE_MCP_ACCESS_TOKEN'),
+      'names both override vars in the remedy',
+    );
   },
 ));

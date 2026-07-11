@@ -125,6 +125,8 @@ export interface AccessTokenRecord {
   /** Rotation family shared with the refresh token minted alongside it, so
    * family revocation kills both. */
   familyId: string;
+  /** RFC 8707 resource the token was bound to at the code exchange. */
+  resource?: string;
 }
 
 /** A minted MCP refresh token. Keyed by sha256 of the token.
@@ -137,6 +139,8 @@ export interface RefreshTokenRecord {
   familyId: string;
   createdAt: number;
   expiresAt: number;
+  /** RFC 8707 resource the token family was bound to. */
+  resource?: string;
   /** Set on rotation: hash of the successor token. */
   supersededByHash?: string;
   /** Superseded token remains exchangeable until this instant. */

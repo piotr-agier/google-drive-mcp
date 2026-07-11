@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.3.0](https://github.com/piotr-agier/google-drive-mcp/compare/v2.2.0...v2.3.0) (2026-07-11)
+
 Substantial internal refactor to introduce **multi-account support**: one running server can now hold OAuth credentials for several Google accounts (e.g. personal + Workspace) and route each tool call to the right identity. The change is strictly additive at the contract level — existing single-account users upgrade with no re-consent, no config changes, and no user-visible behavior change.
 
 ### Features

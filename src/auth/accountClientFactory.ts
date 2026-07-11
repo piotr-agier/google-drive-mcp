@@ -15,6 +15,7 @@ import { Credentials, OAuth2Client } from 'google-auth-library';
 import { AccountStore } from './accountStore.js';
 import { loadCredentials } from './client.js';
 import { AccountRecord } from './types.js';
+import { describeErrorForLog } from './utils.js';
 
 /** Buffer before access-token expiry that triggers a refresh (ms). */
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
@@ -83,7 +84,11 @@ export class AccountClientFactory {
       // Intentionally fire-and-forget: the library emits synchronously in the
       // middle of a request. We persist asynchronously via the write queue.
       this.persistRefreshedTokens(alias, newCreds).catch((err) => {
-        console.error(`Failed to persist refreshed tokens for "${alias}":`, err);
+        // Never log the raw error: a gaxios error would print the request
+        // config, including token material.
+        console.error(
+          `Failed to persist refreshed tokens for "${alias}": ${describeErrorForLog(err)}`,
+        );
       });
     });
 
@@ -134,7 +139,9 @@ export class AccountClientFactory {
               `Run:  manage_accounts add ${alias}  to reconnect it.`,
           );
         }
-        console.error(`Token refresh failed for "${alias}":`, err);
+        // Never log the raw error: gaxios embeds the refresh POST body (refresh
+        // token + client secret) in err.config.
+        console.error(`Token refresh failed for "${alias}": ${describeErrorForLog(err)}`);
         // Transient failure — don't throw; let the caller's API call surface it.
       }
     })().finally(() => {

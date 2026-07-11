@@ -26,7 +26,9 @@ test('auth callback server binds to 127.0.0.1, not all interfaces', async () => 
   const savedPort = process.env.GOOGLE_DRIVE_MCP_AUTH_PORT;
   process.env.GOOGLE_DRIVE_MCP_AUTH_PORT = '45123';
 
-  const server = new AuthServer(new OAuth2Client());
+  // onTokens is required (AuthServer never persists tokens itself), but this
+  // test only exercises the port binder, so a no-op callback suffices.
+  const server = new AuthServer(new OAuth2Client(), { onTokens: async () => {} });
   try {
     const boundPort = await (
       server as unknown as {

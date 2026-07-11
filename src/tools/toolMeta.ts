@@ -60,6 +60,8 @@ export const TOOL_META: Record<string, ToolMeta> = {
   listPermissions: read(DRIVE_READ_SCOPES),
   getRevisions: read(DRIVE_READ_SCOPES),
 
+  readTextFile: read(DRIVE_READ_SCOPES),
+
   createTextFile: write(DRIVE_WRITE_SCOPES),
   updateTextFile: write(DRIVE_WRITE_SCOPES),
   createFolder: write(DRIVE_WRITE_SCOPES),
@@ -82,15 +84,20 @@ export const TOOL_META: Record<string, ToolMeta> = {
 
   // ---- Docs ----
   readGoogleDoc: read(DOCS_READ_SCOPES),
+  readGoogleDocPaginated: read(DOCS_READ_SCOPES),
   listDocumentTabs: read(DOCS_READ_SCOPES),
   listComments: read(DRIVE_READ_SCOPES),
   getComment: read(DRIVE_READ_SCOPES),
   getGoogleDocContent: read(DOCS_READ_SCOPES),
+  getGoogleDocContentPaginated: read(DOCS_READ_SCOPES),
   listGoogleDocs: read(DRIVE_READ_SCOPES),
   getDocumentInfo: read(DOCS_READ_SCOPES),
   readSmartChips: read(DOCS_READ_SCOPES),
 
   createGoogleDoc: write(DOCS_WRITE_SCOPES),
+  // createDocFromHTML uploads via drive.files.create (HTML → Doc conversion),
+  // so it needs a drive-family write scope, not the docs scope.
+  createDocFromHTML: write(DRIVE_WRITE_SCOPES),
   updateGoogleDoc: write(DOCS_WRITE_SCOPES),
   insertText: write(DOCS_WRITE_SCOPES),
   deleteRange: write(DOCS_WRITE_SCOPES),
@@ -134,6 +141,12 @@ export const TOOL_META: Record<string, ToolMeta> = {
   addDataValidation: write(SHEETS_WRITE_SCOPES),
   protectRange: write(SHEETS_WRITE_SCOPES),
   addNamedRange: write(SHEETS_WRITE_SCOPES),
+  setColumnWidth: write(SHEETS_WRITE_SCOPES),
+  setRowHeight: write(SHEETS_WRITE_SCOPES),
+  autoResizeColumns: write(SHEETS_WRITE_SCOPES),
+  autoResizeRows: write(SHEETS_WRITE_SCOPES),
+  hideSheetDimension: write(SHEETS_WRITE_SCOPES),
+  showSheetDimension: write(SHEETS_WRITE_SCOPES),
 
   // ---- Slides ----
   getGoogleSlidesContent: read(SLIDES_READ_SCOPES),

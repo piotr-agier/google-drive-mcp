@@ -346,6 +346,8 @@ test('resolver: multiple accounts, none eligible, throws the generic shortage me
     (err: Error) => {
       assert.match(err.message, /No authenticated account has any of the required scopes/);
       assert.match(err.message, /manage_accounts add/);
+      // Recovery advice must be non-destructive: in-place re-consent, no remove.
+      assert.doesNotMatch(err.message, /manage_accounts remove/);
       return true;
     },
   );

@@ -760,7 +760,7 @@ function showHelp(): void {
 Google Drive MCP Server v${VERSION}
 
 Usage:
-  npx @yourusername/google-drive-mcp [command] [options]
+  npx @piotr-agier/google-drive-mcp [command] [options]
 
 Commands:
   auth     Run the authentication flow
@@ -782,11 +782,11 @@ Options:
   --retry-base-delay=<ms>    Base delay for retry backoff in ms (default: 1000)
 
 Examples:
-  npx @yourusername/google-drive-mcp auth
-  npx @yourusername/google-drive-mcp start
-  npx @yourusername/google-drive-mcp start --transport http --port 3100
-  npx @yourusername/google-drive-mcp version
-  npx @yourusername/google-drive-mcp
+  npx @piotr-agier/google-drive-mcp auth
+  npx @piotr-agier/google-drive-mcp start
+  npx @piotr-agier/google-drive-mcp start --transport http --port 3100
+  npx @piotr-agier/google-drive-mcp version
+  npx @piotr-agier/google-drive-mcp
 
 Environment Variables:
   GOOGLE_DRIVE_OAUTH_CREDENTIALS        Path to OAuth credentials file
@@ -838,9 +838,9 @@ async function runAuthServer(alias?: string): Promise<void> {
       alias ?? sys.store.getDefault() ?? sys.store.list()[0]?.alias ?? 'default';
 
     // Fresh install bootstrapping a reserved alias (e.g. 'default'): addAccountFlow
-    // can't create a reserved alias, so use the standard first-time flow, which
-    // creates 'default' via v1→v2 migration. Safe: the store is empty here, so there
-    // is nothing to overwrite.
+    // can't create a reserved alias, so use the standard first-time flow, whose
+    // onTokens callback persists the account as 'default' directly into the v2
+    // store. Safe: the store is empty here, so there is nothing to overwrite.
     if (sys.store.list().length === 0 && RESERVED_ALIASES.has(target)) {
       authSystem = await buildAuthSystem();
       const created = requireAuthSystem().store.getDefault() ?? 'default';
@@ -1077,8 +1077,9 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
       });
-      // We don't know the session id until after handleRequest — build the
-      // server with a placeholder and rewire when the id is assigned.
+      // Per-session isolation needs no wiring here: the SDK injects the
+      // transport's sessionId into each request's `extra`, which the shared
+      // handlers use to key per-session account state.
       const sessionServer = createMcpServer();
 
       await sessionServer.connect(transport);

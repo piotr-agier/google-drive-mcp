@@ -1,6 +1,5 @@
 import express from 'express';
 import { Credentials, OAuth2Client } from 'google-auth-library';
-import { TokenManager } from './tokenManager.js';
 import http from 'http';
 import open from 'open';
 import { loadCredentials } from './client.js';
@@ -14,12 +13,13 @@ export type PromptMode =
 
 export interface AuthServerOptions {
   /**
-   * When provided, tokens from the OAuth callback are handed to this callback
-   * instead of being persisted by the internal TokenManager. Used by
-   * `manage_accounts add` so new accounts land in `AccountStore` directly
-   * rather than overwriting a shared single-account token file.
+   * Receives the tokens from the OAuth callback. AuthServer never persists
+   * tokens itself — the caller owns persistence into `AccountStore`
+   * (buildAuthSystem's first-time bootstrap and `manage_accounts add`).
+   * A throw here renders the failure page and leaves
+   * `authCompletedSuccessfully` false.
    */
-  onTokens?: (tokens: Credentials) => Promise<void>;
+  onTokens: (tokens: Credentials) => Promise<void>;
   /**
    * Google OAuth `prompt` parameter. Defaults to `'consent'` for the
    * first-time server-boot flow; the add-a-new-account flow overrides this
@@ -36,20 +36,18 @@ export interface AuthServerOptions {
 }
 
 export class AuthServer {
-  private baseOAuth2Client: OAuth2Client; // Used by TokenManager for validation/refresh
+  private baseOAuth2Client: OAuth2Client; // Fallback for consent-URL generation on the '/' route before start() creates the flow client
   private flowOAuth2Client: OAuth2Client | null = null; // Used specifically for the auth code flow
   private app: express.Express;
   private server: http.Server | null = null;
-  private tokenManager: TokenManager;
-  private readonly onTokens?: (tokens: Credentials) => Promise<void>;
+  private readonly onTokens: (tokens: Credentials) => Promise<void>;
   private readonly promptMode: PromptMode;
   private readonly scopes: readonly string[];
   public readonly portRange: { start: number; end: number };
   public authCompletedSuccessfully = false; // Flag for standalone script
 
-  constructor(oauth2Client: OAuth2Client, opts: AuthServerOptions = {}) {
+  constructor(oauth2Client: OAuth2Client, opts: AuthServerOptions) {
     this.baseOAuth2Client = oauth2Client;
-    this.tokenManager = new TokenManager(oauth2Client);
     this.onTokens = opts.onTokens;
     this.promptMode = opts.promptMode ?? 'consent';
     this.scopes = opts.scopes ?? resolveOAuthScopes();
@@ -98,20 +96,9 @@ export class AuthServer {
       }
       try {
         const { tokens } = await this.flowOAuth2Client.getToken(code);
-        // Route tokens either to the multi-account callback (manage_accounts
-        // add) or to the legacy single-file TokenManager path.
-        if (this.onTokens) {
-          await this.onTokens(tokens);
-        } else {
-          await this.tokenManager.saveTokens(tokens);
-        }
+        await this.onTokens(tokens);
         this.authCompletedSuccessfully = true;
 
-        // Get the path where tokens were saved — only meaningful on the
-        // legacy single-file path. Suppress for onTokens flows.
-        const tokenPath = this.onTokens ? '(managed by AccountStore)' : this.tokenManager.getTokenPath();
-
-        // Send a more informative HTML response including the path
         res.send(`
           <!DOCTYPE html>
           <html lang="en">
@@ -130,8 +117,7 @@ export class AuthServer {
           <body>
               <div class="container">
                   <h1>Authentication Successful!</h1>
-                  <p>Your authentication tokens have been saved successfully to:</p>
-                  <p><code>${escapeHtml(tokenPath)}</code></p>
+                  <p>Your account has been connected and securely stored.</p>
                   <p>You can now close this browser window.</p>
               </div>
           </body>
@@ -177,13 +163,6 @@ export class AuthServer {
   }
 
   async start(openBrowser = true): Promise<boolean> {
-    // Only validate pre-existing tokens on the legacy single-file path — the
-    // multi-account add flow should always proceed to a fresh consent.
-    if (!this.onTokens && (await this.tokenManager.validateTokens())) {
-      this.authCompletedSuccessfully = true;
-      return true;
-    }
-
     // Try to start the server and get the port
     const port = await this.startServerOnAvailablePort();
     if (port === null) {

@@ -162,13 +162,16 @@ export class TeamClientFactory {
    */
   private async handleRevokedGrant(sub: string, user: TeamUserRecord): Promise<void> {
     try {
-      await this.store.upsertUser({
-        ...user,
+      // Atomic read-modify-write: flag reauth against the FRESHEST record so a
+      // re-authorization that landed concurrently (fresh refresh token) is not
+      // overwritten by this handler's stale snapshot.
+      await this.store.updateUser(sub, (current) => ({
+        ...current,
         googleAccessToken: undefined,
         googleTokenExpiry: undefined,
         needsReauth: true,
         updatedAt: new Date().toISOString(),
-      });
+      }));
       await this.store.revokeTokensForSub(sub);
     } catch (err) {
       console.error(
@@ -182,15 +185,16 @@ export class TeamClientFactory {
     sub: string,
     newCreds: { access_token?: string | null; refresh_token?: string | null; expiry_date?: number | null; scope?: string },
   ): Promise<void> {
-    const current = await this.store.getUser(sub);
-    if (!current) return; // user removed while a refresh was in flight
-    await this.store.upsertUser({
+    // Atomic read-modify-write (no-op if the user was removed mid-flight): merge
+    // the refreshed credentials into the freshest record so a concurrent writer
+    // — e.g. a re-auth upsert — is not clobbered by a stale snapshot.
+    await this.store.updateUser(sub, (current) => ({
       ...current,
       googleAccessToken: newCreds.access_token ?? current.googleAccessToken,
       googleRefreshToken: newCreds.refresh_token ?? current.googleRefreshToken,
       googleTokenExpiry: newCreds.expiry_date ?? current.googleTokenExpiry,
       grantedScopes: newCreds.scope ? newCreds.scope.split(/\s+/).filter(Boolean) : current.grantedScopes,
       updatedAt: new Date().toISOString(),
-    });
+    }));
   }
 }

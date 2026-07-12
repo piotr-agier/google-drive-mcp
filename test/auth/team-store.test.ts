@@ -135,7 +135,7 @@ function makeRefreshToken(overrides: Partial<RefreshTokenRecord> = {}): RefreshT
 }
 
 for (const factory of factories) {
-  test(`${factory.name}: clients round-trip and enforce the cap`, async () => {
+  test(`${factory.name}: clients round-trip and LRU-evict the idle one at the cap`, async () => {
     const { store, cleanup } = await factory.create({ maxClients: 2 });
     try {
       await store.saveClient(makeClient('a'));
@@ -143,13 +143,98 @@ for (const factory of factories) {
       assert.equal((await store.getClient('a'))?.client_id, 'a');
       assert.equal(await store.getClient('missing'), undefined);
 
-      await assert.rejects(
-        () => store.saveClient(makeClient('c')),
-        TeamStoreCapacityError,
+      // At the cap, a new registration evicts the least-recently-used client
+      // (here 'a', registered first and never used) instead of throwing — DCR
+      // must not be permanently lockable by unauthenticated registrations.
+      await store.saveClient(makeClient('c'));
+      assert.equal(await store.getClient('a'), undefined, 'idle LRU client evicted');
+      assert.ok(await store.getClient('b'));
+      assert.ok(await store.getClient('c'));
+
+      // Updating an existing client at the cap is an update, not an insert.
+      await store.saveClient({ ...makeClient('b'), client_name: 'renamed' });
+      assert.equal((await store.getClient('b'))?.client_name, 'renamed');
+      assert.ok(await store.getClient('c'));
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${factory.name}: an active client survives eviction; the idle one is reclaimed`, async () => {
+    const { store, cleanup } = await factory.create({ maxClients: 2 });
+    try {
+      await store.saveClient(makeClient('active'));
+      await store.saveClient(makeClient('idle'));
+      // Issuing a token marks 'active' as recently used, so 'idle' becomes the
+      // LRU victim when a third client registers.
+      await store.saveAccessToken(makeAccessToken({ clientId: 'active', sub: 'sub-x' }));
+
+      await store.saveClient(makeClient('newcomer'));
+      assert.ok(await store.getClient('active'), 'token-issuing client protected');
+      assert.equal(await store.getClient('idle'), undefined, 'idle client reclaimed');
+      assert.ok(await store.getClient('newcomer'));
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${factory.name}: updateUser atomically mutates the freshest record and no-ops on a missing sub`, async () => {
+    const { store, cleanup } = await factory.create();
+    try {
+      await store.upsertUser(makeUser('sub-a', { needsReauth: true }));
+      await store.updateUser('sub-a', (u) => ({ ...u, needsReauth: false, email: 'renamed@example.com' }));
+      const updated = await store.getUser('sub-a');
+      assert.equal(updated?.needsReauth, false);
+      assert.equal(updated?.email, 'renamed@example.com');
+      // Preserves untouched fields.
+      assert.equal(updated?.googleRefreshToken, 'google-rt-sub-a');
+
+      // A missing sub is a no-op: the mutator never runs and nothing is created.
+      let mutatorRan = false;
+      await store.updateUser('ghost', (u) => {
+        mutatorRan = true;
+        return u;
+      });
+      assert.equal(mutatorRan, false);
+      assert.equal(await store.getUser('ghost'), undefined);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${factory.name}: flush resolves and leaves data intact`, async () => {
+    const { store, cleanup } = await factory.create();
+    try {
+      await store.upsertUser(makeUser('sub-a'));
+      await store.flush();
+      assert.equal((await store.getUser('sub-a'))?.sub, 'sub-a');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${factory.name}: superseded tombstones are hard-capped per sub`, async () => {
+    const { store, cleanup } = await factory.create({ maxTokensPerSub: 50, maxTombstonesPerSub: 2 });
+    try {
+      const now = Date.now();
+      // Build four tombstones for sub-1 (save fresh, then supersede). Each new
+      // mint trims the excess, so the retained set never exceeds the cap and the
+      // oldest tombstones are the ones reclaimed.
+      const tombstones = [now - 4000, now - 3000, now - 2000, now - 1000].map((createdAt) =>
+        makeRefreshToken({ createdAt }),
       );
-      // Updating an existing client at the cap is allowed.
-      await store.saveClient({ ...makeClient('a'), client_name: 'renamed' });
-      assert.equal((await store.getClient('a'))?.client_name, 'renamed');
+      for (const t of tombstones) {
+        await store.saveRefreshToken(t);
+        await store.updateRefreshToken({ ...t, supersededByHash: 'succ', graceUntil: now + 60_000 });
+      }
+
+      const survivors = await Promise.all(tombstones.map((t) => store.getRefreshToken(t.tokenHash)));
+      assert.ok(
+        survivors.filter(Boolean).length <= 2,
+        `at most maxTombstonesPerSub survive, got ${survivors.filter(Boolean).length}`,
+      );
+      assert.equal(survivors[0], undefined, 'the oldest tombstone was reclaimed');
+      assert.equal(survivors[1], undefined, 'the next-oldest tombstone was reclaimed');
     } finally {
       await cleanup();
     }
@@ -471,6 +556,66 @@ test('FileTeamStore: corrupt file is quarantined and the store starts empty', as
     // A fresh, valid file was re-established.
     const parsed = JSON.parse(await fs.readFile(filePath, 'utf-8'));
     assert.equal(parsed.version, 1);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('FileTeamStore: a non-ENOENT read error is NOT quarantined — init throws and leaves the file untouched', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'gdrive-mcp-teamstore-'));
+  // A directory at the store path makes readFile fail with EISDIR — an IO error
+  // that is NOT content corruption. The store must refuse to start rather than
+  // rename a possibly-intact file aside and wipe every member's grant.
+  const storePath = path.join(dir, 'team-store.json');
+  await fs.mkdir(storePath);
+  try {
+    const store = new FileTeamStore(storePath);
+    await assert.rejects(() => store.init(), /could not be read/);
+    // No quarantine backup was created.
+    const entries = await fs.readdir(dir);
+    assert.ok(
+      !entries.some((e) => e.includes('.corrupt-')),
+      `expected no quarantine backup, got: ${entries.join(', ')}`,
+    );
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('FileTeamStore: flush drains queued writes to disk', async () => {
+  const { dir, filePath, store } = await makeFileStore();
+  try {
+    // Enqueue several durable writes without awaiting each, then flush.
+    const pending = [
+      store.upsertUser(makeUser('sub-a')),
+      store.saveClient(makeClient('client-a')),
+      store.saveAccessToken(makeAccessToken({ clientId: 'client-a' })),
+    ];
+    await store.flush();
+    // flush resolves only once the queue tail has run, so all writes are on disk.
+    await Promise.all(pending);
+    const parsed = JSON.parse(await fs.readFile(filePath, 'utf-8'));
+    assert.ok(parsed.users['sub-a']);
+    assert.ok(parsed.clients['client-a']);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('FileTeamStore: client LRU metadata persists across a restart', async () => {
+  const { dir, filePath, store } = await makeFileStore();
+  try {
+    await store.saveClient(makeClient('a'));
+    await store.saveClient(makeClient('b'));
+    // Mark 'b' recently used so 'a' is the unambiguous LRU victim after reopen.
+    await store.saveAccessToken(makeAccessToken({ clientId: 'b', sub: 'sub-b' }));
+
+    const reopened = new FileTeamStore(filePath, { caps: { maxClients: 2 } });
+    await reopened.init();
+    await reopened.saveClient(makeClient('c'));
+    assert.equal(await reopened.getClient('a'), undefined, 'persisted-LRU client evicted');
+    assert.ok(await reopened.getClient('b'));
+    assert.ok(await reopened.getClient('c'));
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }

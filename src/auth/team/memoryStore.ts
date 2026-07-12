@@ -23,6 +23,13 @@ import {
 
 export class InMemoryTeamStore implements TeamStore {
   protected clients = new Map<string, OAuthClientInformationFull>();
+  /** Recency rank per client — a monotonic tick (seeded from ms epoch, but
+   * strictly increasing so two events in the same millisecond still order).
+   * Drives LRU eviction at the client cap so idle registrations are reclaimed
+   * before active connectors. Persisted alongside clients by the file store. */
+  protected clientLastUsed = new Map<string, number>();
+  /** Last recency tick handed out; see nextClientTick. */
+  private lastClientTick = 0;
   protected users = new Map<string, TeamUserRecord>();
   protected accessTokens = new Map<string, AccessTokenRecord>();
   protected refreshTokens = new Map<string, RefreshTokenRecord>();
@@ -37,6 +44,10 @@ export class InMemoryTeamStore implements TeamStore {
 
   async init(): Promise<void> {
     // Nothing to load.
+  }
+
+  async flush(): Promise<void> {
+    // In-memory: no durable writes are queued.
   }
 
   /**
@@ -58,10 +69,16 @@ export class InMemoryTeamStore implements TeamStore {
 
   async saveClient(client: OAuthClientInformationFull): Promise<void> {
     await this.mutateDurable(() => {
+      // At the cap, reclaim the least-recently-used client rather than
+      // rejecting: DCR is unauthenticated, so throwing here would let a flood
+      // of never-used registrations permanently lock out real connectors. An
+      // idle attacker registration is the LRU victim; an active connector
+      // (which issues tokens) keeps its lastUsed fresh and survives.
       if (!this.clients.has(client.client_id) && this.clients.size >= this.caps.maxClients) {
-        throw new TeamStoreCapacityError('registered clients', this.caps.maxClients);
+        this.evictLruClient();
       }
       this.clients.set(client.client_id, client);
+      this.clientLastUsed.set(client.client_id, this.nextClientTick());
     });
   }
 
@@ -137,6 +154,20 @@ export class InMemoryTeamStore implements TeamStore {
     });
   }
 
+  async updateUser(
+    sub: string,
+    mutator: (current: TeamUserRecord) => TeamUserRecord,
+  ): Promise<void> {
+    await this.mutateDurable(() => {
+      // Read the freshest record INSIDE the serialized mutation (the file store
+      // merges from disk first), so a concurrent writer's update to the same
+      // user is not clobbered by a stale caller snapshot.
+      const current = this.users.get(sub);
+      if (!current) return;
+      this.users.set(sub, mutator(current));
+    });
+  }
+
   // -------------------------------------------------------------------------
   // MCP tokens
   // -------------------------------------------------------------------------
@@ -144,6 +175,7 @@ export class InMemoryTeamStore implements TeamStore {
   async saveAccessToken(token: AccessTokenRecord): Promise<void> {
     await this.mutateDurable(() => {
       this.evictOldestIfAtCap(this.accessTokens, token.sub, (t) => t.expiresAt);
+      this.touchClient(token.clientId);
       this.accessTokens.set(token.tokenHash, token);
     });
   }
@@ -166,6 +198,17 @@ export class InMemoryTeamStore implements TeamStore {
         (t) => t.createdAt,
         (t) => t.supersededByHash === undefined,
       );
+      // Independent backstop on tombstones: TOMBSTONE_TTL_MS bounds their
+      // lifetime, but a burst of rotations between sweeps could still pile up,
+      // so hard-cap the retained tombstones per user too.
+      this.evictOldestIfAtCap(
+        this.refreshTokens,
+        token.sub,
+        (t) => t.createdAt,
+        (t) => t.supersededByHash !== undefined,
+        this.caps.maxTombstonesPerSub,
+      );
+      this.touchClient(token.clientId);
       this.refreshTokens.set(token.tokenHash, token);
     });
   }
@@ -208,8 +251,10 @@ export class InMemoryTeamStore implements TeamStore {
       for (const [hash, token] of this.accessTokens) {
         if (token.expiresAt <= now) this.accessTokens.delete(hash);
       }
-      // Superseded refresh tokens are kept until expiresAt as reuse-detection
-      // tombstones (post-grace reuse must still trigger family revocation).
+      // Superseded refresh tokens are kept as reuse-detection tombstones until
+      // expiresAt — bounded to TOMBSTONE_TTL_MS past rotation (see provider), so
+      // post-grace reuse within the detection horizon still revokes the family
+      // while the store stays bounded.
       for (const [hash, token] of this.refreshTokens) {
         if (token.expiresAt <= now) this.refreshTokens.delete(hash);
       }
@@ -236,6 +281,7 @@ export class InMemoryTeamStore implements TeamStore {
     sub: string,
     ageOf: (token: T) => number,
     counts: (token: T) => boolean = () => true,
+    cap: number = this.caps.maxTokensPerSub,
   ): void {
     let count = 0;
     let oldestHash: string | undefined;
@@ -249,8 +295,49 @@ export class InMemoryTeamStore implements TeamStore {
         oldestHash = hash;
       }
     }
-    if (count >= this.caps.maxTokensPerSub && oldestHash !== undefined) {
+    if (count >= cap && oldestHash !== undefined) {
       map.delete(oldestHash);
+    }
+  }
+
+  /** Evict the least-recently-used client (registered or issued a token least
+   * recently). A client missing a lastUsed entry is treated as the oldest. */
+  private evictLruClient(): void {
+    let oldestId: string | undefined;
+    let oldestSeen = Infinity;
+    for (const id of this.clients.keys()) {
+      const seen = this.clientLastUsed.get(id) ?? 0;
+      if (seen < oldestSeen) {
+        oldestSeen = seen;
+        oldestId = id;
+      }
+    }
+    if (oldestId !== undefined) {
+      this.clients.delete(oldestId);
+      this.clientLastUsed.delete(oldestId);
+    }
+  }
+
+  /** Mark a client active (bumps its LRU position). No-op for unknown clients
+   * so token records for an already-evicted client don't resurrect its meta. */
+  private touchClient(clientId: string): void {
+    if (this.clients.has(clientId)) {
+      this.clientLastUsed.set(clientId, this.nextClientTick());
+    }
+  }
+
+  /** Next recency tick: wall-clock, but forced strictly above the previous tick
+   * so events within one millisecond still order deterministically. */
+  private nextClientTick(): number {
+    this.lastClientTick = Math.max(Date.now(), this.lastClientTick + 1);
+    return this.lastClientTick;
+  }
+
+  /** After loading persisted client recency ticks, advance the counter past the
+   * highest so new ticks always outrank restored ones. */
+  protected seedClientClock(): void {
+    for (const v of this.clientLastUsed.values()) {
+      if (v > this.lastClientTick) this.lastClientTick = v;
     }
   }
 }

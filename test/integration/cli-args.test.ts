@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const DIST_INDEX = join(process.cwd(), 'dist', 'index.js');
@@ -129,6 +130,39 @@ describe('Team mode CLI validation', () => {
     const result = await run([], { MCP_TEAM_MODE: '1' });
     assert.equal(result.exitCode, 1);
     assert.match(result.stderr, /requires the HTTP transport/);
+  });
+
+  it('MCP_TEAM_MODE does not block utility commands like version', async () => {
+    // The transport guard applies only to server-start; version/help/auth must
+    // still run with MCP_TEAM_MODE set (they default to the stdio transport).
+    const result = await run(['--version'], { MCP_TEAM_MODE: '1' });
+    assert.equal(result.exitCode, 0);
+    assert.ok(result.stdout.includes(PKG.version), `expected version in: ${result.stdout}`);
+  });
+
+  it('a malformed credentials file fails with an actionable, secret-free error', async () => {
+    const secret = 'TOPSECRET-client-secret-DO-NOT-LEAK-abcdef';
+    const dir = mkdtempSync(join(tmpdir(), 'gdrive-mcp-cli-'));
+    const keysPath = join(dir, 'gcp-oauth.keys.json');
+    // Malformed JSON that embeds the secret next to the syntax error, so an
+    // unsanitized JSON.parse SyntaxError message would echo it.
+    writeFileSync(keysPath, `{"web":{"client_secret":"${secret}" OOPS`);
+    try {
+      const result = await run(
+        ['--team', '--transport', 'http', '--port', '18930', '--issuer-url', 'http://127.0.0.1:18930'],
+        {
+          MCP_TEAM_STORE: 'memory',
+          GOOGLE_DRIVE_OAUTH_CREDENTIALS: keysPath,
+          XDG_CONFIG_HOME: '/nonexistent',
+        },
+      );
+      assert.equal(result.exitCode, 1);
+      const combined = result.stdout + result.stderr;
+      assert.ok(!combined.includes(secret), `error output must not leak the secret: ${combined}`);
+      assert.match(result.stderr, /credentials file|invalid JSON|Failed to start/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('--team without an issuer URL exits with error', async () => {

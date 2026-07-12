@@ -1,6 +1,6 @@
 import { OAuth2Client } from 'google-auth-library';
 import * as fs from 'fs/promises';
-import { getKeysFilePaths, generateCredentialsErrorMessage, OAuthCredentials } from './utils.js';
+import { describeErrorForLog, getKeysFilePaths, generateCredentialsErrorMessage, OAuthCredentials } from './utils.js';
 
 function parseCredentialsFile(keys: Record<string, unknown>): OAuthCredentials {
   if (keys.installed) {
@@ -32,7 +32,9 @@ async function loadCredentialsFromFile(): Promise<OAuthCredentials> {
       // Re-throw parse/validation errors so the user gets actionable feedback
       if (err instanceof SyntaxError ||
           (err instanceof Error && err.message.includes('Invalid credentials'))) {
-        throw new Error(`Invalid credentials file at ${keysPath}: ${(err as Error).message}`);
+        // describeErrorForLog collapses a JSON.parse SyntaxError to a constant
+        // rather than echoing file fragments (which may include the client_secret).
+        throw new Error(`Invalid credentials file at ${keysPath}: ${describeErrorForLog(err)}`);
       }
       // File not found — try next path
     }
@@ -115,7 +117,10 @@ export async function loadWebCredentials(
       keys = JSON.parse(await fs.readFile(keysPath, 'utf-8'));
     } catch (err) {
       if (err instanceof SyntaxError) {
-        throw new Error(`Invalid credentials file at ${keysPath}: ${err.message}`);
+        // Do not interpolate the raw SyntaxError message: in Node it echoes a
+        // snippet of the unparseable file, which for gcp-oauth.keys.json is the
+        // client_secret. describeErrorForLog returns a constant for SyntaxError.
+        throw new Error(`Invalid credentials file at ${keysPath}: ${describeErrorForLog(err)}`);
       }
       continue; // not found — try the next path
     }

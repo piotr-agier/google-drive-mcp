@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { sheets_v4 } from 'googleapis';
 import type { ToolDefinition, ToolResult, ToolContext } from '../types.js';
 import { errorResponse } from '../types.js';
-import { parseA1Range, convertA1ToGridRange, escapeDriveQuery, type GridRange } from '../utils.js';
+import { parseA1Range, convertA1ToGridRange, escapeDriveQuery, ALL_DRIVES_LIST_PARAMS, type GridRange } from '../utils.js';
 
 // ---------------------------------------------------------------------------
 // Zod Schemas
@@ -1533,8 +1533,7 @@ export async function handleTool(
         pageSize: a.maxResults || 20,
         orderBy: a.orderBy === 'name' ? 'name' : a.orderBy,
         fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName,emailAddress))',
-        supportsAllDrives: true,
-        includeItemsFromAllDrives: true
+        ...ALL_DRIVES_LIST_PARAMS
       });
 
       const files = response.data.files || [];

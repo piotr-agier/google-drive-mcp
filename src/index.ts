@@ -37,6 +37,8 @@ import { join, dirname } from 'path';
 import {
   getExtensionFromFilename,
   escapeDriveQuery,
+  ALL_DRIVES_LIST_PARAMS,
+  PARENT_SCOPED_LIST_PARAMS,
 } from './utils.js';
 import type { AccountOps, AddAccountResult, ToolContext, ToolResult } from './types.js';
 import { errorResponse } from './types.js';
@@ -349,8 +351,10 @@ async function resolvePath(pathStr: string, drive: drive_v3.Drive): Promise<stri
       q: `'${currentFolderId}' in parents and name = '${escapedPart}' and mimeType = '${FOLDER_MIME_TYPE}' and trashed = false`,
       fields: 'files(id)',
       spaces: 'drive',
-      includeItemsFromAllDrives: true,
-      supportsAllDrives: true
+      // Parent-scoped probe with a create-on-empty fallback: PARENT_SCOPED_LIST_PARAMS
+      // surfaces Shared Drive items without corpora=allDrives, so an
+      // incompleteSearch partial result can't make us create a duplicate.
+      ...PARENT_SCOPED_LIST_PARAMS
     });
 
     if (!response.data.files?.length) {
@@ -404,8 +408,10 @@ async function checkFileExists(name: string, parentFolderId: string = 'root', dr
       q: query,
       fields: 'files(id, name, mimeType)',
       pageSize: 1,
-      includeItemsFromAllDrives: true,
-      supportsAllDrives: true
+      // Dedup guard: PARENT_SCOPED_LIST_PARAMS (no corpora=allDrives) so an
+      // incompleteSearch partial result can't miss an existing file and let a
+      // duplicate be created.
+      ...PARENT_SCOPED_LIST_PARAMS
     });
 
     if (res.data.files && res.data.files.length > 0) {
@@ -817,19 +823,11 @@ function registerResourceHandlers(s: Server): void {
     const account = await getDefaultAccount();
     const drive = await getDriveFor(account);
     const pageSize = 1000;
-    const params: {
-      pageSize: number,
-      fields: string,
-      pageToken?: string,
-      q: string,
-      includeItemsFromAllDrives: boolean,
-      supportsAllDrives: boolean
-    } = {
+    const params: drive_v3.Params$Resource$Files$List = {
       pageSize,
       fields: "nextPageToken, files(id, name, mimeType)",
       q: `trashed = false`,
-      includeItemsFromAllDrives: true,
-      supportsAllDrives: true
+      ...ALL_DRIVES_LIST_PARAMS
     };
 
     if (request.params?.cursor) {
@@ -838,6 +836,9 @@ function registerResourceHandlers(s: Server): void {
 
     const res = await drive.files.list(params);
     log('Listed files', { count: res.data.files?.length });
+    if (res.data.incompleteSearch) {
+      log('ListResources: incomplete search — some shared-drive items may be missing');
+    }
     const files = res.data.files || [];
 
     return {

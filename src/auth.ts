@@ -7,14 +7,16 @@ import { initializeOAuth2Client } from './auth/client.js';
 import {
   createExternalOAuth2Client,
   createServiceAccountAuth,
-  isExternalTokenMode,
-  isServiceAccountMode,
+  describeBypassedTokens,
+  getActiveAuthMode,
   validateExternalTokenConfig,
 } from './auth/externalAuth.js';
+import { getSecureTokenPath } from './auth/utils.js';
 import { resolveOAuthScopes } from './auth/scopes.js';
 import { AuthServer } from './auth/server.js';
 import { SessionStore } from './auth/sessionStore.js';
 import { AccountRecord, AuthMode } from './auth/types.js';
+import { existsSync } from 'fs';
 
 export { initializeOAuth2Client } from './auth/client.js';
 export { AuthServer } from './auth/server.js';
@@ -46,6 +48,25 @@ export interface AuthSystem {
 }
 
 /**
+ * When an env var forces service-account/external-token mode, the user's
+ * authenticated `tokens.json` is silently ignored. If such a file exists, say
+ * so loudly on stderr — this is the trap behind issue #137, where a broad
+ * `auth/drive` token appears valid yet every Drive call comes back empty
+ * because the process is actually acting as an empty service account.
+ */
+function warnIfLocalTokensBypassed(): void {
+  const mode = getActiveAuthMode();
+  if (mode === 'oauth') return;
+  try {
+    const tokenPath = getSecureTokenPath();
+    const msg = describeBypassedTokens(mode, tokenPath, existsSync(tokenPath));
+    if (msg) console.error(`⚠  ${msg}`);
+  } catch {
+    // A diagnostic warning must never break authentication.
+  }
+}
+
+/**
  * Build the multi-account auth system.
  *
  * - Detects mode from env (service account > external token > local OAuth).
@@ -59,7 +80,10 @@ export async function buildAuthSystem(
 ): Promise<AuthSystem> {
   console.error('Initializing authentication...');
 
-  if (isServiceAccountMode()) {
+  const mode = getActiveAuthMode();
+
+  if (mode === 'service_account') {
+    warnIfLocalTokensBypassed();
     const client = await createServiceAccountAuth();
     const store = new AccountStore({ mode: 'service-account' });
     await store.reload();
@@ -67,7 +91,8 @@ export async function buildAuthSystem(
     return assembleSystem('service-account', store);
   }
 
-  if (isExternalTokenMode()) {
+  if (mode === 'external_token') {
+    warnIfLocalTokensBypassed();
     validateExternalTokenConfig();
     const client = createExternalOAuth2Client();
     const store = new AccountStore({ mode: 'external-token' });
@@ -174,10 +199,11 @@ function buildSyntheticRecord(alias: 'service-account' | 'external-token'): Acco
 export async function authenticate(): Promise<OAuth2Client> {
   // Preserve legacy fast paths used by tests: synthetic-mode callers expect
   // the mode-specific client directly without touching AccountStore.
-  if (isServiceAccountMode()) {
+  const mode = getActiveAuthMode();
+  if (mode === 'service_account') {
     return (await createServiceAccountAuth()) as OAuth2Client;
   }
-  if (isExternalTokenMode()) {
+  if (mode === 'external_token') {
     validateExternalTokenConfig();
     return createExternalOAuth2Client();
   }

@@ -3,6 +3,37 @@
 // -----------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// Drive list params
+// ---------------------------------------------------------------------------
+
+/**
+ * The two flags that surface Shared Drive items for a *parent-scoped* query
+ * (`'<id>' in parents`). Spread into any listing that is already narrowed to a
+ * folder: these flags alone reveal Shared Drive children, and crucially they do
+ * NOT set `corpora: 'allDrives'` — the only corpus that can return an
+ * `incompleteSearch` partial result. A parent-scoped listing must never be
+ * partial, or it silently omits items (issue #137).
+ */
+export const PARENT_SCOPED_LIST_PARAMS = {
+  includeItemsFromAllDrives: true,
+  supportsAllDrives: true,
+} as const;
+
+/**
+ * The `files.list` params that surface Shared Drive items across *all* drives
+ * the user can reach. Spread into broad (non-parent-scoped) listings so every
+ * such endpoint stays consistent and a new one can't silently omit a flag and
+ * re-hide Shared Drive results (issue #137). Adds `corpora: 'allDrives'` to the
+ * parent-scoped flags; use {@link PARENT_SCOPED_LIST_PARAMS} instead whenever a
+ * query is already scoped to a folder, since `allDrives` is the only corpus
+ * that can return `incompleteSearch` partial results.
+ */
+export const ALL_DRIVES_LIST_PARAMS = {
+  corpora: 'allDrives',
+  ...PARENT_SCOPED_LIST_PARAMS,
+} as const;
+
+// ---------------------------------------------------------------------------
 // Calendar helpers
 // ---------------------------------------------------------------------------
 

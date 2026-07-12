@@ -568,7 +568,7 @@ Team mode is mutually exclusive with service-account and external-token modes, n
   - `confirm`: Must be `true` to execute restore
 
 #### Auth Diagnostics (v1.7.0)
-- **authGetStatus** - Show token/scopes/auth health diagnostics (machine + human readable)
+- **authGetStatus** - Show token/scopes/auth health diagnostics (machine + human readable). Reports the **active auth mode** (`oauth`/`service_account`/`external_token`) and the **effective Google identity** the live Drive client is actually acting as (via Drive `about.get`), and warns when an environment variable is causing your `tokens.json` to be ignored
 - **authListScopes** - Show configured/requested scopes, granted scopes, missing scopes, and presets
 - **authTestFileAccess** - Test Drive access (optionally against a specific `fileId`)
 
@@ -1375,6 +1375,21 @@ npx @piotr-agier/google-drive-mcp auth
 3. Clear local tokens: `rm ~/.config/google-drive-mcp/tokens.json`
 4. Re-authenticate to grant all required scopes
 5. Verify the consent screen shows ALL scopes including full Drive access
+
+#### `search` returns 0 results and Shared Drives are invisible, despite a valid token
+**Symptom:** `search` returns `Found 0 files:` (even for My Drive), `listSharedDrives` shows none, and `authTestFileAccess` reports "File not found" — yet `authGetStatus` shows a valid token with full Drive scope, and the same account works via the Drive REST API directly.
+
+**Most common cause:** an environment variable is silently overriding your interactive OAuth `tokens.json`. Service-account mode (`GOOGLE_APPLICATION_CREDENTIALS`) and external-token mode (`GOOGLE_DRIVE_MCP_ACCESS_TOKEN`) take **priority** over `tokens.json` whenever they are present in the server's environment. If the process inherits one of these (common when `gcloud`, CI runners, or other Google tooling set `GOOGLE_APPLICATION_CREDENTIALS` globally), every call runs as that other identity — often an empty service account with no files and no Shared Drive membership — which returns empty results with no error.
+
+**Diagnose:**
+```bash
+# Run authGetStatus — it reports the ACTIVE auth mode and the EFFECTIVE identity.
+# If authMode is "service_account"/"external_token" (not "oauth"), or the reported
+# identity email is not your account, that env var is the culprit.
+```
+Check your environment for `GOOGLE_APPLICATION_CREDENTIALS` and `GOOGLE_DRIVE_MCP_ACCESS_TOKEN` (Windows: `echo %GOOGLE_APPLICATION_CREDENTIALS%` / `$env:GOOGLE_APPLICATION_CREDENTIALS`). The server also logs a warning on startup when a present `tokens.json` is being bypassed.
+
+**Solution:** unset the overriding variable for the MCP server's environment (or, if you intend to use a service account, grant its email address access to the files/Shared Drives you need — and set `GOOGLE_DRIVE_MCP_SUBJECT` for domain-wide delegation if you need to act as a real Workspace user).
 
 #### "API not enabled" errors
 ```

@@ -28,6 +28,17 @@ describe('Docs listing tools', () => {
       assert.ok(res.content[0].text.includes('My Document'));
     });
 
+    it('passes corpora=allDrives so shared-drive docs are listed', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({ data: { files: [] } }));
+      await callTool(ctx.client, 'listGoogleDocs', {});
+      const listCalls = ctx.mocks.drive.tracker.getCalls('files.list');
+      const args = listCalls[listCalls.length - 1].args[0];
+      assert.equal(args.corpora, 'allDrives');
+      assert.equal(args.supportsAllDrives, true);
+      assert.equal(args.includeItemsFromAllDrives, true);
+      ctx.mocks.drive.service.files.list._resetImpl();
+    });
+
     it('no results', async () => {
       ctx.mocks.drive.service.files.list._setImpl(async () => ({ data: { files: [] } }));
       const res = await callTool(ctx.client, 'listGoogleDocs', {});
@@ -50,6 +61,16 @@ describe('Docs listing tools', () => {
       const res = await callTool(ctx.client, 'getDocumentInfo', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('My Document'));
+    });
+
+    it('passes supportsAllDrives so shared-drive documents resolve', async () => {
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({
+        data: { id: 'doc-1', name: 'My Document', mimeType: 'application/vnd.google-apps.document' },
+      }));
+      await callTool(ctx.client, 'getDocumentInfo', { documentId: 'doc-1' });
+      const getCalls = ctx.mocks.drive.tracker.getCalls('files.get');
+      assert.equal(getCalls[getCalls.length - 1].args[0].supportsAllDrives, true);
+      ctx.mocks.drive.service.files.get._resetImpl();
     });
 
     it('validation error', async () => {

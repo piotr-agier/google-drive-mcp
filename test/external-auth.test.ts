@@ -7,8 +7,10 @@ import {
   validateExternalTokenConfig,
   createExternalOAuth2Client,
   buildServiceAccountAuthOptions,
+  describeBypassedTokens,
 } from '../src/auth/externalAuth.js';
 import { SCOPE_ALIASES } from '../src/auth/scopes.js';
+import { setEnv } from './helpers/env.js';
 
 // ---------------------------------------------------------------------------
 // Helpers — save & restore env vars around each test
@@ -23,23 +25,18 @@ const EXTERNAL_VARS = [
   'GOOGLE_DRIVE_MCP_SCOPES',
 ] as const;
 
-function clearExternalEnv() {
-  for (const v of EXTERNAL_VARS) delete process.env[v];
-}
-
+// Wraps a test body: force-clears every EXTERNAL_VAR (so ambient config can't
+// leak in), applies `vars`, and restores everything afterward — built on the
+// shared withEnv primitive so the save/restore logic lives in one place.
 function withEnv(vars: Record<string, string>, fn: () => void | Promise<void>) {
   return async () => {
-    const saved: Record<string, string | undefined> = {};
-    for (const v of EXTERNAL_VARS) saved[v] = process.env[v];
-    clearExternalEnv();
-    for (const [k, v] of Object.entries(vars)) process.env[k] = v;
+    const cleared: Record<string, string | undefined> = {};
+    for (const v of EXTERNAL_VARS) cleared[v] = undefined;
+    const env = setEnv({ ...cleared, ...vars });
     try {
       await fn();
     } finally {
-      clearExternalEnv();
-      for (const [k, v] of Object.entries(saved)) {
-        if (v !== undefined) process.env[k] = v;
-      }
+      env.restore();
     }
   };
 }
@@ -240,5 +237,40 @@ test('authenticate uses external token when no service account', withEnv(
     const { authenticate } = await import('../src/auth.js');
     const client = await authenticate();
     assert.equal(client.credentials.access_token, 'ya29.test');
+  },
+));
+
+// ---------------------------------------------------------------------------
+// describeBypassedTokens — issue #137 remediation advice
+// ---------------------------------------------------------------------------
+
+test('describeBypassedTokens returns null when no local token file exists', withEnv(
+  { GOOGLE_APPLICATION_CREDENTIALS: '/x/sa.json' },
+  () => {
+    assert.equal(describeBypassedTokens('service_account', '/home/u/tokens.json', false), null);
+  },
+));
+
+test('describeBypassedTokens names only the one set override var', withEnv(
+  { GOOGLE_APPLICATION_CREDENTIALS: '/x/sa.json' },
+  () => {
+    const msg = describeBypassedTokens('service_account', '/home/u/tokens.json', true);
+    assert.ok(msg);
+    assert.ok(msg!.includes('Unset GOOGLE_APPLICATION_CREDENTIALS to use your authenticated Google account'));
+    assert.ok(!msg!.includes('GOOGLE_DRIVE_MCP_ACCESS_TOKEN'), 'does not mention an unset override var');
+  },
+));
+
+test('describeBypassedTokens tells the user to unset BOTH override vars when both are set (finding #6)', withEnv(
+  { GOOGLE_APPLICATION_CREDENTIALS: '/x/sa.json', GOOGLE_DRIVE_MCP_ACCESS_TOKEN: 'ya29.test' },
+  () => {
+    // Unsetting only the winning var just hands control to the other override,
+    // so tokens.json stays bypassed — the remedy must name both.
+    const msg = describeBypassedTokens('service_account', '/home/u/tokens.json', true);
+    assert.ok(msg);
+    assert.ok(
+      msg!.includes('Unset GOOGLE_APPLICATION_CREDENTIALS and GOOGLE_DRIVE_MCP_ACCESS_TOKEN'),
+      'names both override vars in the remedy',
+    );
   },
 ));

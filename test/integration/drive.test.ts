@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { PDFDocument } from 'pdf-lib';
 import { setupTestServer, callTool, type TestContext } from '../helpers/setup-server.js';
+import { setEnv } from '../helpers/env.js';
 
 describe('Drive tools', () => {
   let ctx: TestContext;
@@ -308,6 +309,20 @@ describe('Drive tools', () => {
       const res = await callTool(ctx.client, 'listFolder', {});
       assert.equal(res.isError, false);
     });
+
+    it('lists shared-drive folder children via the two flags, without corpora=allDrives', async () => {
+      // Parent-scoped ('<id>' in parents): the two flags surface Shared Drive
+      // children, and corpora=allDrives is deliberately omitted so the listing
+      // can never come back as an incompleteSearch partial result (#137).
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({ data: { files: [] } }));
+      await callTool(ctx.client, 'listFolder', { folderId: 'shared-folder-id' });
+      const listCalls = ctx.mocks.drive.tracker.getCalls('files.list');
+      const args = listCalls[listCalls.length - 1].args[0];
+      assert.equal(args.corpora, undefined);
+      assert.equal(args.includeItemsFromAllDrives, true);
+      assert.equal(args.supportsAllDrives, true);
+      ctx.mocks.drive.service.files.list._resetImpl();
+    });
   });
 
   // --- listSharedDrives ---
@@ -607,6 +622,86 @@ describe('Drive tools', () => {
       const res = await callTool(ctx.client, 'authGetStatus', {});
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text.includes('Auth status'));
+    });
+
+    it('authGetStatus reports the effective identity and oauth mode', async () => {
+      const saved = setEnv({ GOOGLE_APPLICATION_CREDENTIALS: undefined, GOOGLE_DRIVE_MCP_ACCESS_TOKEN: undefined });
+      ctx.mocks.drive.service.about.get._setImpl(async () => ({
+        data: { user: { displayName: 'Ada L', emailAddress: 'ada@example.com' }, storageQuota: { limit: '100', usage: '1' } },
+      }));
+      try {
+        const res = await callTool(ctx.client, 'authGetStatus', {});
+        assert.equal(res.isError, false);
+        const text = res.content[0].text;
+        assert.ok(text.includes('ada@example.com'), 'effective identity email is surfaced');
+        assert.ok(/"authMode":\s*"oauth"/.test(text), 'active auth mode is oauth');
+      } finally {
+        ctx.mocks.drive.service.about.get._resetImpl();
+        saved.restore();
+      }
+    });
+
+    it('authGetStatus warns that tokens.json is IGNORED under GOOGLE_APPLICATION_CREDENTIALS', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'gdmcp-tok-'));
+      const tokenFile = join(dir, 'tokens.json');
+      await writeFile(tokenFile, '{}');
+      const saved = setEnv({
+        GOOGLE_APPLICATION_CREDENTIALS: '/tmp/fake-service-account.json',
+        GOOGLE_DRIVE_MCP_TOKEN_PATH: tokenFile,
+      });
+      try {
+        const res = await callTool(ctx.client, 'authGetStatus', {});
+        const text = res.content[0].text;
+        assert.ok(/"authMode":\s*"service_account"/.test(text), 'active auth mode is service_account');
+        assert.ok(text.includes('IGNORED'), 'warns that the local token file is ignored');
+        assert.ok(text.includes('GOOGLE_APPLICATION_CREDENTIALS'), 'names the overriding env var');
+      } finally {
+        saved.restore();
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('authGetStatus reports needs_reauth when an oauth setup has no local token', async () => {
+      // oauth mode with no token file is the actionable re-auth case; it must
+      // outrank identity_error even though the live about.get fails for lack of
+      // credentials (making about.get throw is exactly what the old ladder
+      // mislabeled as identity_error). A non-existent token path makes
+      // tokenFileExists false.
+      const saved = setEnv({
+        GOOGLE_APPLICATION_CREDENTIALS: undefined,
+        GOOGLE_DRIVE_MCP_ACCESS_TOKEN: undefined,
+        GOOGLE_DRIVE_MCP_TOKEN_PATH: '/tmp/gdmcp-nonexistent-token-path/tokens.json',
+      });
+      ctx.mocks.drive.service.about.get._setImpl(async () => { throw new Error('No refresh token is set.'); });
+      try {
+        const res = await callTool(ctx.client, 'authGetStatus', {});
+        const text = res.content[0].text;
+        assert.ok(/"authMode":\s*"oauth"/.test(text), 'active auth mode is oauth');
+        assert.ok(/Auth status \(needs_reauth\)/.test(text), 'status is needs_reauth, not identity_error');
+      } finally {
+        ctx.mocks.drive.service.about.get._resetImpl();
+        saved.restore();
+      }
+    });
+
+    it('authGetStatus surfaces an identity-resolution failure as identity_error', async () => {
+      // Use service_account mode so the oauth-only needs_reauth branch is
+      // skipped and a failing about.get genuinely surfaces as identity_error.
+      const saved = setEnv({
+        GOOGLE_APPLICATION_CREDENTIALS: '/tmp/fake-service-account.json',
+        GOOGLE_DRIVE_MCP_ACCESS_TOKEN: undefined,
+        GOOGLE_DRIVE_MCP_TOKEN_PATH: '/tmp/gdmcp-nonexistent-token-path/tokens.json',
+      });
+      ctx.mocks.drive.service.about.get._setImpl(async () => { throw new Error('Insufficient Permission'); });
+      try {
+        const res = await callTool(ctx.client, 'authGetStatus', {});
+        const text = res.content[0].text;
+        assert.ok(/Auth status \(identity_error\)/.test(text), 'status is identity_error');
+        assert.ok(text.includes('Insufficient Permission'), 'includes the underlying error message');
+      } finally {
+        ctx.mocks.drive.service.about.get._resetImpl();
+        saved.restore();
+      }
     });
 
     it('authListScopes returns scopes payload', async () => {

@@ -16,6 +16,7 @@
 
 import type { Request, RequestHandler, Response } from 'express';
 import { splitScopes } from '../scopes.js';
+import { describeErrorForLog } from '../utils.js';
 import type { TeamConfig } from './config.js';
 import type { GoogleIdp } from './googleIdp.js';
 import { mintAuthorizationCode, sha256Hex } from './tokens.js';
@@ -81,7 +82,7 @@ export function makeGoogleCallbackHandler(deps: GoogleCallbackDeps): RequestHand
     try {
       ({ tokens, identity } = await deps.idp.exchangeCode(code));
     } catch (err) {
-      log(`Google code exchange failed: ${(err as Error).message}`);
+      log(`Google code exchange failed: ${describeErrorForLog(err)}`);
       redirectToClient(res, pending.redirectUri, {
         error: 'server_error',
         error_description: 'Could not complete the Google sign-in.',
@@ -94,12 +95,23 @@ export function makeGoogleCallbackHandler(deps: GoogleCallbackDeps): RequestHand
     // not on the email suffix, which the user controls. Consumer accounts have
     // no hd — absence fails closed. A rejected sign-in must not leave a live
     // grant behind.
+    const existing = await deps.store.getUser(identity.sub);
     if (deps.config.allowedDomains.length > 0) {
       const hd = identity.hd?.toLowerCase();
       if (!hd || !deps.config.allowedDomains.includes(hd)) {
         log(`Rejected sign-in from outside the allowed domains: ${identity.email}`);
-        if (tokens.refresh_token || tokens.access_token) {
-          await deps.idp.revokeGrant(tokens.refresh_token ?? tokens.access_token!);
+        // Revoke the freshly-issued grant only for a brand-new sub. For an
+        // already-stored member, revoking at Google removes their whole
+        // user+client grant — destroying the working refresh token we already
+        // hold — over what may be a transient `hd` omission. Drop the fresh
+        // token instead and leave the stored grant intact (removed-domain
+        // members are deprovisioned by an explicit admin action, not here).
+        if (!existing && (tokens.refresh_token || tokens.access_token)) {
+          try {
+            await deps.idp.revokeGrant(tokens.refresh_token ?? tokens.access_token!);
+          } catch (err) {
+            log(`Failed to revoke rejected sign-in grant: ${describeErrorForLog(err)}`);
+          }
         }
         redirectToClient(res, pending.redirectUri, {
           error: 'access_denied',
@@ -110,7 +122,6 @@ export function makeGoogleCallbackHandler(deps: GoogleCallbackDeps): RequestHand
       }
     }
 
-    const existing = await deps.store.getUser(identity.sub);
     const refreshToken = tokens.refresh_token ?? existing?.googleRefreshToken;
     if (!refreshToken) {
       // prompt=consent + access_type=offline should always yield one; without

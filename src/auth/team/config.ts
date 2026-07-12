@@ -86,6 +86,16 @@ export function loadTeamConfig(opts: {
   if (issuerUrl.search || issuerUrl.hash) {
     throw new Error('The issuer URL must not contain a query string or fragment.');
   }
+  if (issuerUrl.pathname !== '/') {
+    // Team mode mounts its OAuth endpoints (and the Google callback) at the host
+    // root; `new URL('/oauth/google/callback', issuer)` would silently drop a
+    // base path, so the derived redirect URI would not match what a reverse
+    // proxy forwards. Fail fast rather than mint an unusable callback URL.
+    throw new Error(
+      `The issuer URL must not contain a path (got "${issuerUrl.pathname}"). Team mode serves ` +
+        'its OAuth endpoints at the host root; use a dedicated host/subdomain instead.',
+    );
+  }
   // Mirror the SDK's checkIssuerUrl so this fails at boot, not first request.
   if (issuerUrl.protocol !== 'https:' && !isLoopbackHost(issuerUrl.hostname)) {
     throw new Error(
@@ -135,12 +145,18 @@ export function loadTeamConfig(opts: {
   // non-localhost binds — derive one from the issuer, extendable via env.
   // Passing allowedHosts replaces the SDK's loopback defaults, so a loopback
   // issuer re-adds all loopback spellings (localhost vs 127.0.0.1).
+  // Lowercase every entry: the SDK's Host-header check is case-sensitive and
+  // compares against `new URL('http://' + host).hostname`, which is always
+  // lowercase — so a mixed-case env entry would never match and would 403 every
+  // request through that hostname.
   const allowedHosts = [
-    ...new Set([
-      issuerUrl.hostname,
-      ...(isLoopbackHost(issuerUrl.hostname) ? ['localhost', '127.0.0.1', '[::1]'] : []),
-      ...splitCsv(env.MCP_HTTP_ALLOWED_HOSTS),
-    ]),
+    ...new Set(
+      [
+        issuerUrl.hostname,
+        ...(isLoopbackHost(issuerUrl.hostname) ? ['localhost', '127.0.0.1', '[::1]'] : []),
+        ...splitCsv(env.MCP_HTTP_ALLOWED_HOSTS),
+      ].map((h) => h.toLowerCase()),
+    ),
   ];
 
   const advertisedScopes = resolveOAuthScopes();

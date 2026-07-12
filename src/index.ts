@@ -44,6 +44,7 @@ import { loadRuntimeConfig, parseBoolEnv, type RuntimeConfig } from './utils/cli
 import { GOOGLE_CALLBACK_PATH, loadTeamConfig } from './auth/team/config.js';
 import { createTeamRuntime, type TeamRuntime } from './auth/team/runtime.js';
 import { coversScopes } from './auth/accountResolver.js';
+import { describeErrorForLog } from './auth/utils.js';
 
 import * as driveTools from './tools/drive.js';
 import * as docsTools from './tools/docs.js';
@@ -553,6 +554,16 @@ async function buildToolContext(
 // -----------------------------------------------------------------------------
 
 /**
+ * Admin tools that report the server's LOCAL single-user auth state (they read
+ * getSecureTokenPath()/tokens.json). In team mode identity comes from the
+ * bearer and there is no local token file, so their output is misleading (and
+ * discloses a server-local path) — hide them from tools/list and reject them if
+ * called. authTestFileAccess is intentionally NOT hidden: it performs a real
+ * per-user Drive probe that works correctly in team mode.
+ */
+const TEAM_HIDDEN_TOOLS: ReadonlySet<string> = new Set(['authGetStatus', 'authListScopes']);
+
+/**
  * Team-mode tool dispatch: identity comes exclusively from the bearer token's
  * `sub` (propagated by the transport as extra.authInfo), never from tool
  * arguments or any shared default — the AccountResolver path stays untouched
@@ -562,7 +573,9 @@ async function buildToolContext(
 async function handleTeamToolCall(
   toolName: string,
   rawArgs: Record<string, unknown>,
-  extra: { sessionId?: string; authInfo?: { extra?: Record<string, unknown> } } | undefined,
+  extra:
+    | { sessionId?: string; authInfo?: { extra?: Record<string, unknown>; scopes?: string[] } }
+    | undefined,
 ): Promise<ToolResult> {
   const runtime = teamRuntime!;
   const sub = extra?.authInfo?.extra?.sub;
@@ -585,6 +598,13 @@ async function handleTeamToolCall(
           'signed-in user.',
       );
     }
+    if (TEAM_HIDDEN_TOOLS.has(toolName)) {
+      return errorResponse(
+        `${toolName} is not available in team mode — it reports the server's local ` +
+          'single-user auth state, which does not apply to a team member signed in through ' +
+          'the connector OAuth flow.',
+      );
+    }
 
     if (!ADMIN_TOOLS.has(toolName)) {
       const meta = TOOL_META[toolName] ?? FALLBACK_META;
@@ -599,6 +619,19 @@ async function handleTeamToolCall(
           `Your Google authorization lacks the required scope for this operation: ` +
             `${meta.acceptableScopes.join(', ')}. Reconnect this connector and approve all ` +
             'requested permissions.',
+        );
+      }
+      // Also enforce the bearer token's OWN scopes. A client may narrow its
+      // grant at /authorize or /token (RFC 6749 §6); that narrowing is recorded
+      // on the access token and must bind here, or the advertised scope model is
+      // a no-op — a read-scoped (or leaked, deliberately-narrowed) token could
+      // still reach every tool the user's Google grant covers.
+      const tokenScopes = extra?.authInfo?.scopes ?? [];
+      if (!coversScopes(tokenScopes.join(' '), meta.acceptableScopes)) {
+        return errorResponse(
+          `This connection's access token is not authorized for this operation ` +
+            `(requires one of: ${meta.acceptableScopes.join(', ')}). Reconnect the connector ` +
+            'and request the needed scopes.',
         );
       }
     }
@@ -700,8 +733,14 @@ function createMcpServer(config: RuntimeConfig = runtimeConfig): Server {
     const definitions = domainModules.flatMap((m) => m.toolDefinitions);
     if (teamRuntime) {
       // Team mode: identity comes from the bearer, so the `account` parameter
-      // is never injected and local account management is not offered.
-      return { tools: definitions.filter((d) => d.name !== 'manage_accounts') };
+      // is never injected and local account management is not offered. Local
+      // single-user auth tools are hidden too (they report the server's
+      // tokens.json state, which is meaningless for an OAuth-signed-in member).
+      return {
+        tools: definitions.filter(
+          (d) => d.name !== 'manage_accounts' && !TEAM_HIDDEN_TOOLS.has(d.name),
+        ),
+      };
     }
     return { tools: definitions.map(withAccountParam) };
   });
@@ -1116,7 +1155,11 @@ function parseCliArgs(): CliArgs {
   }
 
   const resolvedTeam = team ?? parseBoolEnv(process.env.MCP_TEAM_MODE, false);
-  if (resolvedTeam && resolvedTransport !== 'http') {
+  // Only enforce the transport requirement when actually launching a server.
+  // Otherwise MCP_TEAM_MODE in the environment would abort `version`, `help`,
+  // and `auth` (which default to the stdio transport) before they can run.
+  const startsServer = command === undefined || command === 'start';
+  if (resolvedTeam && startsServer && resolvedTransport !== 'http') {
     console.error('Team mode requires the HTTP transport. Start with --transport http.');
     process.exit(1);
   }
@@ -1180,7 +1223,7 @@ async function startStdioTransport(): Promise<void> {
       process.exit(0);
     });
   } catch (error) {
-    console.error('Failed to start server:', error);
+    console.error(`Failed to start server: ${describeErrorForLog(error)}`);
     process.exit(1);
   }
 }
@@ -1460,13 +1503,19 @@ async function startHttpTransport(args: CliArgs): Promise<void> {
         sessions.delete(sid);
       }
       httpServer.close();
+      // Drain queued team-store writes (a just-completed sign-in or a token
+      // rotation from the OAuth2Client 'tokens' listener) before exiting, so a
+      // success already returned to the client is not lost on restart.
+      await teamRuntime?.flush();
       process.exit(0);
     };
 
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
   } catch (error) {
-    console.error('Failed to start HTTP server:', error);
+    // Sanitize: a credential-load failure (loadWebCredentials) can carry file
+    // fragments; describeErrorForLog strips them.
+    console.error(`Failed to start HTTP server: ${describeErrorForLog(error)}`);
     process.exit(1);
   }
 }

@@ -43,6 +43,7 @@ import {
   PENDING_AUTH_TTL_MS,
   REFRESH_GRACE_MS,
   REFRESH_TOKEN_TTL_MS,
+  TOMBSTONE_TTL_MS,
   TeamStore,
   TeamStoreCapacityError,
 } from './types.js';
@@ -146,16 +147,23 @@ export class TeamOAuthProvider implements OAuthServerProvider {
     if (code.clientId !== client.client_id) {
       throw new InvalidGrantError('Invalid or expired authorization code.');
     }
-    if (redirectUri !== code.redirectUri) {
+    // redirect_uri and resource are optional in the token request (OAuth 2.1
+    // drops redirect_uri; RFC 8707 treats resource as per-request). Enforce
+    // equality only when the client actually sends the parameter — the code is
+    // already bound to its client and PKCE, and the token is always minted with
+    // the stored values. Rejecting a legal omission would dead-end a
+    // spec-compliant client (the single-use code is already consumed).
+    if (redirectUri !== undefined && redirectUri !== code.redirectUri) {
       throw new InvalidGrantError('redirect_uri does not match the authorization request.');
     }
-    if ((resource?.href ?? undefined) !== code.resource) {
+    if (resource !== undefined && resource.href !== code.resource) {
       throw new InvalidTargetError('resource does not match the authorization request.');
     }
     return this.mintTokenPair({
       clientId: client.client_id,
       sub: code.sub,
-      scopes: code.scopes,
+      accessScopes: code.scopes,
+      refreshScopes: code.scopes,
       resource: code.resource,
       familyId: newFamilyId(),
     });
@@ -181,10 +189,15 @@ export class TeamOAuthProvider implements OAuthServerProvider {
         throw new InvalidGrantError('Invalid or expired refresh token.');
       }
     }
-    if ((resource?.href ?? undefined) !== record.resource) {
+    // Enforce resource equality only when the client sends it (RFC 8707,
+    // per-request); otherwise inherit the grant's bound resource.
+    if (resource !== undefined && resource.href !== record.resource) {
       throw new InvalidTargetError('resource does not match the token grant.');
     }
-    // Scope narrowing only (RFC 6749 §6).
+    // Scope narrowing only (RFC 6749 §6): a request may shrink the scope of the
+    // ISSUED access token but never the underlying grant. The narrowing applies
+    // to the access token only — the rotated refresh token keeps the full grant
+    // so a later request can still request the original scopes.
     let effectiveScopes = record.scopes;
     if (scopes && scopes.length > 0) {
       const granted = new Set(record.scopes);
@@ -198,16 +211,19 @@ export class TeamOAuthProvider implements OAuthServerProvider {
     const pair = await this.mintTokenPair({
       clientId: record.clientId,
       sub: record.sub,
-      scopes: effectiveScopes,
+      accessScopes: effectiveScopes,
+      refreshScopes: record.scopes,
       resource: record.resource,
       familyId: record.familyId,
     });
     if (record.supersededByHash === undefined) {
       // Rotate: the old token stays exchangeable for a short grace window
       // (tolerates a client that lost the rotation response), then becomes a
-      // reuse-detection tombstone.
+      // reuse-detection tombstone. Bound its retention to TOMBSTONE_TTL_MS so
+      // hourly rotations don't accumulate tombstones for the full grant TTL.
       await this.deps.store.updateRefreshToken({
         ...record,
+        expiresAt: Math.min(record.expiresAt, now + TOMBSTONE_TTL_MS),
         supersededByHash: sha256Hex(pair.refresh_token!),
         graceUntil: now + REFRESH_GRACE_MS,
       });
@@ -281,7 +297,11 @@ export class TeamOAuthProvider implements OAuthServerProvider {
   private async mintTokenPair(grant: {
     clientId: string;
     sub: string;
-    scopes: string[];
+    /** Scope of the issued access token (may be a narrowed subset). */
+    accessScopes: string[];
+    /** Scope stored on the refresh token — the full grant, so future refreshes
+     * can still request the original scopes even after a one-time narrowing. */
+    refreshScopes: string[];
     resource?: string;
     familyId: string;
   }): Promise<OAuthTokens> {
@@ -292,7 +312,7 @@ export class TeamOAuthProvider implements OAuthServerProvider {
       tokenHash: sha256Hex(accessToken),
       clientId: grant.clientId,
       sub: grant.sub,
-      scopes: grant.scopes,
+      scopes: grant.accessScopes,
       expiresAt: now + this.deps.config.tokenTtlMs,
       familyId: grant.familyId,
       resource: grant.resource,
@@ -301,7 +321,7 @@ export class TeamOAuthProvider implements OAuthServerProvider {
       tokenHash: sha256Hex(refreshToken),
       clientId: grant.clientId,
       sub: grant.sub,
-      scopes: grant.scopes,
+      scopes: grant.refreshScopes,
       familyId: grant.familyId,
       createdAt: now,
       expiresAt: now + REFRESH_TOKEN_TTL_MS,
@@ -311,7 +331,7 @@ export class TeamOAuthProvider implements OAuthServerProvider {
       access_token: accessToken,
       token_type: 'bearer',
       expires_in: Math.floor(this.deps.config.tokenTtlMs / 1000),
-      scope: grant.scopes.join(' '),
+      scope: grant.accessScopes.join(' '),
       refresh_token: refreshToken,
     };
   }

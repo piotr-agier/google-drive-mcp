@@ -25,9 +25,17 @@ import {
   TeamUserRecord,
 } from './types.js';
 
+/** Message thrown when parsed JSON does not match the store shape; also the
+ * signal isCorruptionError uses to classify the failure. */
+const BAD_SHAPE_MESSAGE = 'unrecognized team-store file shape';
+
 interface TeamStoreFileV1 {
   version: 1;
   clients: Record<string, OAuthClientInformationFull>;
+  /** Per-client last-used timestamps (ms epoch) backing LRU eviction. Optional
+   * for backward compatibility: pre-existing files without it load fine and the
+   * next write adds it. */
+  clientMeta?: Record<string, number>;
   users: Record<string, TeamUserRecord>;
   accessTokens: Record<string, AccessTokenRecord>;
   refreshTokens: Record<string, RefreshTokenRecord>;
@@ -36,6 +44,16 @@ interface TeamStoreFileV1 {
 function isENOENT(err: unknown): boolean {
   return (
     typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'ENOENT'
+  );
+}
+
+/** True only for genuine CONTENT corruption (unparseable JSON or wrong shape),
+ * which is safe to quarantine. IO/permission failures (EACCES, EIO, …) carry an
+ * errno `code` and are deliberately NOT corruption — the file may be intact. */
+function isCorruptionError(err: unknown): boolean {
+  return (
+    err instanceof SyntaxError ||
+    (err instanceof Error && err.message === BAD_SHAPE_MESSAGE)
   );
 }
 
@@ -70,29 +88,46 @@ export class FileTeamStore extends InMemoryTeamStore {
       const content = await fs.readFile(this.filePath, 'utf-8');
       const parsed = JSON.parse(content) as unknown;
       if (!looksLikeV1(parsed)) {
-        throw new Error('unrecognized team-store file shape');
+        throw new Error(BAD_SHAPE_MESSAGE);
       }
       this.loadSections(parsed);
     } catch (err) {
-      if (!isENOENT(err)) {
-        // A corrupt store must not brick the server. Move the bad file aside
-        // (non-destructive) and start empty — affected team members simply
-        // re-authorize.
+      if (isENOENT(err)) {
+        // No file yet — normal first boot; fall through and create it.
+      } else if (isCorruptionError(err)) {
+        // The file's CONTENT is unusable (bad JSON / wrong shape). Move it aside
+        // (non-destructive) and start empty — affected team members re-authorize.
         const backup = `${this.filePath}.corrupt-${Date.now()}`;
         const moved = await fs
           .rename(this.filePath, backup)
           .then(() => true)
           .catch(() => false);
         console.error(
-          `TeamStore: ${this.filePath} was unreadable (${describeErrorForLog(err)}). ` +
+          `TeamStore: ${this.filePath} was corrupt (${describeErrorForLog(err)}). ` +
             (moved ? `Moved it to ${backup}. ` : '') +
             'Starting fresh — team members will need to re-authorize.',
+        );
+      } else {
+        // IO/permission error (EACCES, EIO, EMFILE, …): the file is likely
+        // intact, just momentarily unreadable. Quarantining it here would
+        // destroy every member's Google grant over a transient glitch, so fail
+        // loudly and leave the file untouched.
+        throw new Error(
+          `Team store at ${this.filePath} could not be read (${describeErrorForLog(err)}). ` +
+            'Refusing to start rather than risk discarding stored credentials — ' +
+            'fix the file permissions/mount and restart.',
         );
       }
     }
     // Establish the file (0600) and prove the path is writable — a broken
     // store path must fail at startup, not on the first user's sign-in.
     await this.atomicWrite();
+  }
+
+  override async flush(): Promise<void> {
+    // Drain the queue tail so writes enqueued before shutdown reach disk. The
+    // queue swallows rejections, so this never throws.
+    await this.writeQueue;
   }
 
   protected override mutateDurable<T>(mutate: () => T): Promise<T> {
@@ -117,6 +152,18 @@ export class FileTeamStore extends InMemoryTeamStore {
 
   private loadSections(data: TeamStoreFileV1): void {
     this.clients = new Map(Object.entries(data.clients));
+    // Rebuild the LRU map for exactly the clients on disk. A client missing a
+    // meta entry (older file, or hand-edited) is seeded to "now" so it is not
+    // immediately treated as the eviction victim on first load.
+    const meta = data.clientMeta ?? {};
+    const now = Date.now();
+    this.clientLastUsed = new Map(
+      Object.keys(data.clients).map((id) => [
+        id,
+        typeof meta[id] === 'number' ? meta[id] : now,
+      ]),
+    );
+    this.seedClientClock();
     this.users = new Map(Object.entries(data.users));
     this.accessTokens = new Map(Object.entries(data.accessTokens));
     this.refreshTokens = new Map(Object.entries(data.refreshTokens));
@@ -126,6 +173,7 @@ export class FileTeamStore extends InMemoryTeamStore {
     return {
       version: 1,
       clients: Object.fromEntries(this.clients),
+      clientMeta: Object.fromEntries(this.clientLastUsed),
       users: Object.fromEntries(this.users),
       accessTokens: Object.fromEntries(this.accessTokens),
       refreshTokens: Object.fromEntries(this.refreshTokens),

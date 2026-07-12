@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { InvalidGrantError, InvalidScopeError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import { InvalidGrantError, InvalidScopeError, InvalidTargetError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { Response } from 'express';
 
@@ -86,7 +86,12 @@ function makeHarness(configOverrides: Partial<TeamConfig> = {}): Harness {
 /** Drive authorize() and return the state we sent to Google. */
 async function authorize(
   h: Harness,
-  opts: { client?: OAuthClientInformationFull; scopes?: string[]; state?: string } = {},
+  opts: {
+    client?: OAuthClientInformationFull;
+    scopes?: string[];
+    state?: string;
+    resource?: string;
+  } = {},
 ): Promise<string> {
   let redirectedTo: string | undefined;
   const res = { redirect: (url: string) => void (redirectedTo = url) } as unknown as Response;
@@ -97,6 +102,7 @@ async function authorize(
       scopes: opts.scopes,
       codeChallenge: 'challenge-1',
       redirectUri: (opts.client ?? CLIENT_A).redirect_uris[0],
+      resource: opts.resource ? new URL(opts.resource) : undefined,
     },
     res,
   );
@@ -212,6 +218,47 @@ test('exchangeAuthorizationCode re-validates redirect_uri against the authorizat
   );
 });
 
+test('exchangeAuthorizationCode accepts an omitted redirect_uri (OAuth 2.1 clients drop it)', async () => {
+  const h = makeHarness();
+  const { raw } = await mintCode(h, await authorize(h));
+  // redirect_uri undefined at the token step must NOT be rejected — the code is
+  // already bound to its client and PKCE. Previously this threw invalid_grant.
+  const tokens = await h.provider.exchangeAuthorizationCode(CLIENT_A, raw, undefined, undefined);
+  assert.ok(tokens.access_token.startsWith('mcp_at_'));
+});
+
+test('exchangeAuthorizationCode inherits the bound resource when the token request omits it', async () => {
+  const RESOURCE = 'https://mcp.example/mcp';
+  const h = makeHarness();
+  const { raw } = await mintCode(h, await authorize(h, { resource: RESOURCE }));
+  // resource present at /authorize, omitted at /token: inherit it (don't reject).
+  const tokens = await h.provider.exchangeAuthorizationCode(
+    CLIENT_A,
+    raw,
+    undefined,
+    CLIENT_A.redirect_uris[0],
+    undefined,
+  );
+  const info = await h.provider.verifyAccessToken(tokens.access_token);
+  assert.equal(info.resource?.href, RESOURCE, 'token bound to the authorized resource');
+});
+
+test('exchangeAuthorizationCode rejects a resource that differs from the authorization request', async () => {
+  const h = makeHarness();
+  const { raw } = await mintCode(h, await authorize(h, { resource: 'https://mcp.example/mcp' }));
+  await assert.rejects(
+    () =>
+      h.provider.exchangeAuthorizationCode(
+        CLIENT_A,
+        raw,
+        undefined,
+        CLIENT_A.redirect_uris[0],
+        new URL('https://other.example/mcp'),
+      ),
+    InvalidTargetError,
+  );
+});
+
 test('verifyAccessToken returns AuthInfo with seconds-based expiry and the user identity', async () => {
   const h = makeHarness();
   const { raw, sub } = await mintCode(h, await authorize(h));
@@ -324,6 +371,41 @@ test('exchangeRefreshToken allows scope narrowing but rejects expansion, and che
       ]),
     InvalidScopeError,
   );
+});
+
+test('refresh scope narrowing binds the access token only; the rotated grant keeps its full scope', async () => {
+  const h = makeHarness();
+  const { tokens } = await mintPair(h); // grant = [DRIVE, DOCS]
+
+  // One-time narrowing to DRIVE for the issued access token.
+  const narrowed = await h.provider.exchangeRefreshToken(CLIENT_A, tokens.refresh_token!, [
+    DRIVE_SCOPE,
+  ]);
+  assert.equal(narrowed.scope, DRIVE_SCOPE, 'issued access token is narrowed');
+
+  // The rotated refresh token must still carry the FULL grant, so a later
+  // refresh can request DOCS again. Before the fix the narrowing was persisted
+  // and this threw invalid_scope, permanently shrinking the grant.
+  const rewidened = await h.provider.exchangeRefreshToken(CLIENT_A, narrowed.refresh_token!, [
+    DRIVE_SCOPE,
+    DOCS_SCOPE,
+  ]);
+  assert.equal(rewidened.scope, `${DRIVE_SCOPE} ${DOCS_SCOPE}`, 'full grant preserved on rotation');
+});
+
+test('rotation bounds the superseded tombstone lifetime to the reuse-detection horizon', async () => {
+  const h = makeHarness();
+  const { tokens } = await mintPair(h);
+  const before = await h.store.getRefreshToken(sha256Hex(tokens.refresh_token!));
+  const originalExpiry = before!.expiresAt;
+
+  await h.provider.exchangeRefreshToken(CLIENT_A, tokens.refresh_token!);
+  const tombstone = await h.store.getRefreshToken(sha256Hex(tokens.refresh_token!));
+  assert.ok(tombstone!.supersededByHash, 'old token is now a tombstone');
+  // expiresAt is pulled in from the ~30-day grant TTL to the ~24h horizon so
+  // tombstones cannot accumulate for the full grant lifetime.
+  assert.ok(tombstone!.expiresAt < originalExpiry, 'tombstone TTL shortened');
+  assert.ok(tombstone!.expiresAt <= Date.now() + 24 * 60 * 60 * 1000 + 5_000);
 });
 
 test('revokeToken kills an access token directly and a refresh token by family', async () => {

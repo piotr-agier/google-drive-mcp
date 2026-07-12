@@ -33,6 +33,13 @@ export const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
  * (tolerates the client losing the rotation response). Reuse after the grace
  * window is treated as theft and revokes the whole token family. */
 export const REFRESH_GRACE_MS = 60 * 1000;
+/** How long a superseded refresh token is retained past rotation purely as a
+ * reuse-detection tombstone. Long enough to catch a stolen token replayed after
+ * the grace window, short enough to bound tombstone accumulation — an hourly
+ * rotating client would otherwise pile up ~720 tombstones over the 30-day grant
+ * TTL. Reuse within this horizon still revokes the family; reuse afterwards is
+ * indistinguishable from an expired token (a 401 that re-runs the OAuth flow). */
+export const TOMBSTONE_TTL_MS = 24 * 60 * 60 * 1000;
 /** PKCE-challenge lookups allowed per authorization code before it is burned
  * (bounds brute-forcing a stolen code's verifier at the /token endpoint). */
 export const MAX_CHALLENGE_LOOKUPS = 3;
@@ -44,6 +51,10 @@ export interface TeamStoreCaps {
   maxPendingAuthorizations: number;
   /** Active (non-superseded) token pairs per user; oldest evicted on overflow. */
   maxTokensPerSub: number;
+  /** Superseded refresh-token tombstones per user; oldest evicted on overflow.
+   * A hard backstop under TOMBSTONE_TTL_MS so a burst of rotations can't grow
+   * the store between sweeps. */
+  maxTombstonesPerSub: number;
 }
 
 export const DEFAULT_TEAM_STORE_CAPS: TeamStoreCaps = {
@@ -51,6 +62,7 @@ export const DEFAULT_TEAM_STORE_CAPS: TeamStoreCaps = {
   maxUsers: 200,
   maxPendingAuthorizations: 1000,
   maxTokensPerSub: 20,
+  maxTombstonesPerSub: 20,
 };
 
 /** Thrown when an insert would exceed a hard cap. Callers translate this into
@@ -156,15 +168,23 @@ export interface RefreshTokenRecord {
  * - `peekAuthorizationCode` is non-consuming (the SDK reads the PKCE challenge
  *   BEFORE the exchange) but counts lookups and burns the code past
  *   MAX_CHALLENGE_LOOKUPS.
- * - Insert methods throw TeamStoreCapacityError at the caps; saveAccessToken /
- *   saveRefreshToken instead evict the caller's oldest token when their
- *   per-sub cap is reached.
+ * - upsertUser throws TeamStoreCapacityError at maxUsers; saveClient,
+ *   saveAccessToken, and saveRefreshToken instead evict the least-recently-used
+ *   / oldest entry when their cap is reached, so an unauthenticated flood can
+ *   never permanently lock out legitimate registrations or logins.
  */
 export interface TeamStore {
   /** Load/validate backing storage. Must be called once before use. */
   init(): Promise<void>;
 
+  /** Drain any pending durable writes so nothing queued is lost on shutdown.
+   * In-memory stores resolve immediately. */
+  flush(): Promise<void>;
+
   getClient(clientId: string): Promise<OAuthClientInformationFull | undefined>;
+  /** Persist a registered client. At the cap, evicts the least-recently-used
+   * client (by last registration/token-issuance) rather than rejecting, so a
+   * burst of unauthenticated DCR registrations cannot permanently exhaust it. */
   saveClient(client: OAuthClientInformationFull): Promise<void>;
 
   savePendingAuthorization(pending: PendingAuthorization): Promise<void>;
@@ -176,6 +196,15 @@ export interface TeamStore {
 
   getUser(sub: string): Promise<TeamUserRecord | undefined>;
   upsertUser(user: TeamUserRecord): Promise<void>;
+  /** Atomic read-modify-write of a single user, serialized against concurrent
+   * writers. `mutator` receives the freshest stored record and returns the
+   * replacement; a no-op when the user is absent. Prefer this over
+   * getUser+upsertUser for partial updates — it avoids a stale snapshot
+   * clobbering a concurrent write (e.g. a re-auth landing mid token-refresh). */
+  updateUser(
+    sub: string,
+    mutator: (current: TeamUserRecord) => TeamUserRecord,
+  ): Promise<void>;
 
   saveAccessToken(token: AccessTokenRecord): Promise<void>;
   getAccessToken(tokenHash: string): Promise<AccessTokenRecord | undefined>;

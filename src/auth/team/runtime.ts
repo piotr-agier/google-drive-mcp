@@ -6,6 +6,7 @@
 
 import type { RequestHandler } from 'express';
 import { loadWebCredentials } from '../client.js';
+import { describeErrorForLog } from '../utils.js';
 import { makeGoogleCallbackHandler } from './callback.js';
 import { TeamClientFactory } from './clientFactory.js';
 import type { TeamConfig } from './config.js';
@@ -26,6 +27,8 @@ export interface TeamRuntime {
   callbackHandler: RequestHandler;
   /** Stops the background sweep timer (tests, shutdown). */
   stop(): void;
+  /** Drain queued durable store writes so nothing is lost on shutdown. */
+  flush(): Promise<void>;
 }
 
 export interface TeamRuntimeOverrides {
@@ -73,7 +76,7 @@ export async function createTeamRuntime(
 
   const sweeper = setInterval(() => {
     store.sweepExpired().catch((err) => {
-      console.error(`[team-auth] Store sweep failed: ${(err as Error).message}`);
+      console.error(`[team-auth] Store sweep failed: ${describeErrorForLog(err)}`);
     });
   }, SWEEP_INTERVAL_MS);
   sweeper.unref();
@@ -86,5 +89,6 @@ export async function createTeamRuntime(
     clientFactory,
     callbackHandler,
     stop: () => clearInterval(sweeper),
+    flush: () => store.flush(),
   };
 }

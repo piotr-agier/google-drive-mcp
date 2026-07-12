@@ -276,6 +276,29 @@ describe('Team mode — OAuth 2.1 authorization server flow', () => {
     assert.equal(res.status, 400);
   });
 
+  it('accepts a token exchange that omits redirect_uri (OAuth 2.1 client)', async () => {
+    const { challenge, verifier } = pkcePair();
+    const googleState = await startAuthorize(flow, challenge);
+    const code = (await completeCallback(flow, googleState)).searchParams.get('code')!;
+
+    // OAuth 2.1 clients drop redirect_uri from the token request (PKCE binds the
+    // code). The SDK passes it through as undefined; the provider must not
+    // reject a legal omission — previously this dead-ended sign-in.
+    const res = await fetch(`${flow.baseUrl}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: flow.clientId,
+        code,
+        code_verifier: verifier,
+      }).toString(),
+    });
+    assert.equal(res.status, 200);
+    const tokens = await res.json();
+    assert.ok(tokens.access_token.startsWith('mcp_at_'));
+  });
+
   it('sends offline + forced-consent parameters to Google', async () => {
     // The consent URL is produced by GoogleIdpClient in production; here the
     // fake only carries state — assert the pending side instead: the flow
@@ -393,5 +416,34 @@ describe('Team mode — hosted-domain allowlist', () => {
     const res = await exchangeCode(flow, code!, verifier);
     assert.equal(res.status, 200);
     assert.equal((await store.getUser('sub-ok'))?.email, 'bob@corp.example');
+  });
+
+  it('preserves an existing member\'s stored grant when a re-auth is rejected by the allowlist', async () => {
+    // 1) An allowed-domain member signs in and is persisted.
+    idp.identity = { sub: 'sub-member', email: 'member@corp.example', hd: 'corp.example' };
+    {
+      const { challenge, verifier } = pkcePair();
+      const googleState = await startAuthorize(flow, challenge);
+      const code = (await completeCallback(flow, googleState)).searchParams.get('code')!;
+      assert.equal((await exchangeCode(flow, code, verifier)).status, 200);
+    }
+    const before = await store.getUser('sub-member');
+    assert.ok(before?.googleRefreshToken);
+    const revokedBefore = idp.revoked.length;
+
+    // 2) A later re-auth arrives WITHOUT the hd claim (a transient Google
+    //    omission). The sign-in is rejected, but because a record already
+    //    exists, the member's working grant must NOT be revoked at Google
+    //    (which would destroy the shared refresh token) nor flagged for reauth.
+    idp.identity = { sub: 'sub-member', email: 'member@corp.example' } as FakeIdp['identity'];
+    const { challenge } = pkcePair();
+    const googleState = await startAuthorize(flow, challenge, 'reauth-state');
+    const back = await completeCallback(flow, googleState);
+    assert.equal(back.searchParams.get('error'), 'access_denied');
+
+    const after = await store.getUser('sub-member');
+    assert.equal(after?.googleRefreshToken, before?.googleRefreshToken, 'stored grant intact');
+    assert.notEqual(after?.needsReauth, true, 'existing member not flagged for reauth');
+    assert.equal(idp.revoked.length, revokedBefore, 'existing member grant not revoked at Google');
   });
 });

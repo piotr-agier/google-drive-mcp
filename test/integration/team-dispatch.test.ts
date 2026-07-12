@@ -17,6 +17,7 @@ import { createTeamRuntime, type TeamRuntime } from '../../src/auth/team/runtime
 // ---------------------------------------------------------------------------
 
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive';
+const DOCS_SCOPE = 'https://www.googleapis.com/auth/documents';
 
 const MCP_HEADERS = {
   'Content-Type': 'application/json',
@@ -33,8 +34,8 @@ function makeConfig(): TeamConfig {
     store: 'memory',
     storePath: '/unused',
     allowedHosts: ['127.0.0.1', 'localhost', '[::1]'],
-    googleScopes: [DRIVE_SCOPE, 'openid', 'https://www.googleapis.com/auth/userinfo.email'],
-    advertisedScopes: [DRIVE_SCOPE],
+    googleScopes: [DRIVE_SCOPE, DOCS_SCOPE, 'openid', 'https://www.googleapis.com/auth/userinfo.email'],
+    advertisedScopes: [DRIVE_SCOPE, DOCS_SCOPE],
     ...{},
   };
 }
@@ -151,8 +152,9 @@ describe('Team mode — bearer-guarded per-user dispatch', () => {
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
   });
 
-  /** Run the whole OAuth dance for a fake user; returns their MCP bearer. */
-  async function signIn(user: FakeUser): Promise<string> {
+  /** Run the whole OAuth dance for a fake user; returns their MCP bearer.
+   * Pass requestedScope to narrow the issued token below the user's grant. */
+  async function signIn(user: FakeUser, requestedScope?: string): Promise<string> {
     idp.current = user;
     const { verifier, challenge } = pkcePair();
     const authUrl = new URL(`${baseUrl}/authorize`);
@@ -162,6 +164,7 @@ describe('Team mode — bearer-guarded per-user dispatch', () => {
     authUrl.searchParams.set('code_challenge', challenge);
     authUrl.searchParams.set('code_challenge_method', 'S256');
     authUrl.searchParams.set('state', 'st');
+    if (requestedScope) authUrl.searchParams.set('scope', requestedScope);
     const authRes = await fetch(authUrl, { redirect: 'manual' });
     const googleState = new URL(authRes.headers.get('location')!).searchParams.get('state')!;
 
@@ -343,6 +346,39 @@ describe('Team mode — bearer-guarded per-user dispatch', () => {
     assert.equal(body.result.isError, true);
     assert.match(body.result.content[0].text, /lacks the required scope/);
     assert.match(body.result.content[0].text, /Reconnect this connector/);
+  });
+
+  it('enforces the bearer token\'s own scopes, not just the Google grant', async () => {
+    // The user's Google grant covers BOTH drive and docs, but the client
+    // requests a token narrowed to docs only. A drive tool must be refused on
+    // the TOKEN scope even though the underlying grant would allow it —
+    // otherwise the advertised scope model is a no-op at the resource server.
+    const bearer = await signIn(
+      { sub: 'sub-narrow', email: 'narrow@corp.example', scope: `${DRIVE_SCOPE} ${DOCS_SCOPE}` },
+      DOCS_SCOPE,
+    );
+    const sid = await initSession(bearer);
+    const body = await parseResponse(await mcpPost(bearer, sid, toolsCall('search', { query: 'x' })));
+    assert.equal(body.result.isError, true);
+    assert.match(body.result.content[0].text, /access token is not authorized/);
+  });
+
+  it('hides local single-user auth tools in team mode and rejects them if called', async () => {
+    const bearer = await signIn({ sub: 'sub-alice', email: 'alice@corp.example', scope: DRIVE_SCOPE });
+    const sid = await initSession(bearer);
+
+    const listRes = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: { ...MCP_HEADERS, Authorization: `Bearer ${bearer}`, 'mcp-session-id': sid },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', id: 2 }),
+    });
+    const tools = (await parseResponse(listRes)).result.tools;
+    assert.equal(tools.find((t: any) => t.name === 'authGetStatus'), undefined, 'authGetStatus hidden');
+    assert.equal(tools.find((t: any) => t.name === 'authListScopes'), undefined, 'authListScopes hidden');
+
+    const called = await parseResponse(await mcpPost(bearer, sid, toolsCall('authGetStatus', {}, 4)));
+    assert.equal(called.result.isError, true);
+    assert.match(called.result.content[0].text, /not available in team mode/);
   });
 
   it('never touches the local account system', async () => {

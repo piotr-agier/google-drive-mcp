@@ -1,14 +1,31 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { fileURLToPath } from 'url';
 
-// Helper to get the project root directory reliably
+// Walk up from `startDir` to the nearest ancestor containing a package.json and
+// return it. This is robust to the build layout — bundled output is
+// `dist/index.js`, an unbundled build would be `dist/auth/utils.js`, and an
+// installed package lives at `node_modules/<pkg>/dist/index.js`; all resolve to
+// the package root. A previous hard-coded "up two levels" assumed the unbundled
+// `dist/auth/utils.js` path, so with the bundled `dist/index.js` it resolved to
+// the package's PARENT directory instead and the project-root fallback for
+// `gcp-oauth.keys.json` never matched. Exported for testing.
+export function findPackageRoot(startDir: string): string {
+  let dir = startDir;
+  const fsRoot = path.parse(dir).root;
+  while (true) {
+    if (fs.existsSync(path.join(dir, 'package.json'))) return dir;
+    if (dir === fsRoot) break;
+    dir = path.dirname(dir);
+  }
+  // Fallback to the legacy behavior if no package.json is found on the path.
+  return path.resolve(startDir, '..', '..');
+}
+
+// Helper to get the project root directory reliably.
 function getProjectRoot(): string {
-  const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  // In build output (e.g., dist/auth/utils.js), __dirname is .../dist/auth
-  // Go up TWO levels to get the project root
-  const projectRoot = path.join(__dirname, "..", "..");
-  return path.resolve(projectRoot);
+  return findPackageRoot(path.dirname(fileURLToPath(import.meta.url)));
 }
 
 // Returns the config directory for google-drive-mcp, following XDG Base Directory spec.

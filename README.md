@@ -470,7 +470,7 @@ google-drive-mcp start --transport http --host 0.0.0.0 --port 3100 \
 | `MCP_TEAM_TOKEN_TTL` | — | `3600` | Access-token lifetime in seconds (60–86400) |
 | `MCP_TEAM_STORE` | — | `file` | `file` or `memory`. The file store survives restarts; the memory store forces re-consent on every restart |
 | `MCP_TEAM_STORE_PATH` | — | `<config dir>/team-store.json` | Location of the persistent store |
-| `MCP_TRUST_PROXY` | — | unset | Trusted reverse-proxy hop count (`1` behind Cloud Run/nginx). Without it, all users behind the proxy share one rate-limit bucket |
+| `MCP_TRUST_PROXY` | — | unset | **Recommended whenever the server is behind a reverse proxy** (Cloud Run/nginx/tunnel): trusted hop count (`1` for a single proxy). Without it, per-user rate limiting collapses to one shared bucket and the proxy's `X-Forwarded-For` header makes the rate limiter log an `ERR_ERL_UNEXPECTED_X_FORWARDED_FOR` error |
 | `MCP_HTTP_ALLOWED_HOSTS` | — | issuer hostname | Extra allowed `Host` header values |
 
 Team mode is mutually exclusive with service-account and external-token modes, never reads or writes `tokens.json`, and disables `manage_accounts`, the per-tool `account` parameter, and the `gdrive:///` resources capability — identity always comes from the bearer token. Google scopes follow `GOOGLE_DRIVE_MCP_SCOPES` as usual; each user's tool access is additionally gated by the scopes they actually granted at their own consent screen.
@@ -478,7 +478,7 @@ Team mode is mutually exclusive with service-account and external-token modes, n
 ### Security notes
 
 - **`team-store.json` is the deployment's most sensitive file.** It holds every member's Google refresh token (necessarily in cleartext — they must be replayed to Google) plus registered clients; MCP tokens are stored only as SHA-256 hashes. It is written with mode `0600` — protect the volume accordingly.
-- **TLS is required.** Run behind a reverse proxy that terminates https for the issuer URL; the issuer must be https (enforced at startup, localhost excepted for development).
+- **TLS is required.** Run behind a reverse proxy that terminates https for the issuer URL; the issuer must be https (enforced at startup, localhost excepted for development). When you do, set `MCP_TRUST_PROXY` to the number of proxy hops (`1` for a single proxy) so per-user rate limiting and client-IP handling stay correct — the server logs a startup warning if it is left unset with a non-localhost issuer.
 - **Every authorization shows a Google consent screen** (`prompt=consent`). This is deliberate: with one Google client serving dynamically registered MCP clients, silent re-consent would let a malicious registered client mint tokens for anyone who clicks a link.
 - **Single process assumption.** In-flight sign-ins and authorization codes live in memory, and the file store serializes writes per process — run exactly one instance (e.g. Cloud Run `--max-instances=1`). On platforms with ephemeral filesystems, mount a volume for `MCP_TEAM_STORE_PATH` or members re-consent after every redeploy.
 - **Revocation**: a user can disconnect the connector client-side, revoke the app at [Google Account Permissions](https://myaccount.google.com/permissions) (the server detects the dead grant, drops that user's tokens, and forces a fresh sign-in), or an operator can delete the user's entry from `team-store.json`.

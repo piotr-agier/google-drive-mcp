@@ -1487,6 +1487,23 @@ async function startHttpTransport(args: CliArgs): Promise<void> {
             ? `  Allowed domains: ${teamConfig.allowedDomains.join(', ')}\n`
             : '  Allowed domains: (any Google account)\n'),
       );
+      // Team mode is designed to sit behind an https-terminating reverse proxy.
+      // Without `trust proxy`, express-rate-limit rejects the proxy's
+      // X-Forwarded-For header (ERR_ERL_UNEXPECTED_X_FORWARDED_FOR) and per-user
+      // rate limiting degrades to one shared bucket. Warn when it's likely wrong.
+      if (teamConfig.trustProxy === undefined) {
+        const host = teamConfig.issuerUrl.hostname;
+        const isLocalhost = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+        if (!isLocalhost) {
+          console.error(
+            'Warning: MCP_TRUST_PROXY is unset. Team mode is meant to run behind an https-terminating ' +
+              'reverse proxy; set MCP_TRUST_PROXY to the trusted hop count (1 for a single proxy such as ' +
+              "Cloud Run/nginx or a tunnel) so per-user rate limiting keys on the real client IP. Otherwise " +
+              "the proxy's X-Forwarded-For header makes express-rate-limit error " +
+              '(ERR_ERL_UNEXPECTED_X_FORWARDED_FOR) and all users share one rate-limit bucket.',
+          );
+        }
+      }
     }
 
     const { app, sessions } = createHttpApp(httpHost, teamRuntime ? { teamAuth: teamRuntime } : undefined);

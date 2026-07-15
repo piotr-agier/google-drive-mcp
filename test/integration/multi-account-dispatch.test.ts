@@ -85,7 +85,7 @@ describe('Multi-account dispatch routing', () => {
   it('manage_accounts list reports all three synthetic accounts', async () => {
     const result = await callTool(ctx.client, 'manage_accounts', { action: 'list' });
     assert.notEqual(result.isError, true);
-    const payload = JSON.parse(result.content[0].text);
+    const payload = JSON.parse(result.content[0].text!);
     const aliases = (payload.accounts as Array<{ alias: string }>).map((a) => a.alias).sort();
     assert.deepEqual(aliases, ['alpha', 'beta', 'test']);
   });
@@ -110,7 +110,7 @@ describe('Multi-account dispatch routing', () => {
       account: 'nonexistent',
     });
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /Unknown account/);
+    assert.match(result.content[0].text!, /Unknown account/);
     // No drive service should have been instantiated for this rejected call.
     const markers = authCalls.map((c) => c.marker).filter((m) => m !== undefined);
     assert.ok(
@@ -127,7 +127,7 @@ describe('Multi-account dispatch routing', () => {
       account: ['alpha', 'beta'] as unknown as string,
     });
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /single account alias|one call per account/);
+    assert.match(result.content[0].text!, /single account alias|one call per account/);
     // Threw before dispatch — no drive service built for either account.
     const markers = authCalls.map((c) => c.marker).filter((m) => m !== undefined);
     assert.ok(
@@ -142,6 +142,6 @@ describe('Multi-account dispatch routing', () => {
       account: 42 as unknown as string,
     });
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /single account alias|one call per account/);
+    assert.match(result.content[0].text!, /single account alias|one call per account/);
   });
 });

@@ -25,7 +25,7 @@ describe('Docs listing tools', () => {
       }));
       const res = await callTool(ctx.client, 'listGoogleDocs', {});
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('My Document'));
+      assert.ok(res.content[0].text!.includes('My Document'));
     });
 
     it('passes corpora=allDrives so shared-drive docs are listed', async () => {
@@ -43,7 +43,7 @@ describe('Docs listing tools', () => {
       ctx.mocks.drive.service.files.list._setImpl(async () => ({ data: { files: [] } }));
       const res = await callTool(ctx.client, 'listGoogleDocs', {});
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('No Google Docs'));
+      assert.ok(res.content[0].text!.includes('No Google Docs'));
     });
   });
 
@@ -60,7 +60,7 @@ describe('Docs listing tools', () => {
       }));
       const res = await callTool(ctx.client, 'getDocumentInfo', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('My Document'));
+      assert.ok(res.content[0].text!.includes('My Document'));
     });
 
     it('passes supportsAllDrives so shared-drive documents resolve', async () => {

@@ -42,8 +42,8 @@ describe('createDocFromHTML', () => {
     });
 
     assert.equal(res.isError, false);
-    assert.ok(res.content[0].text.includes('Created Google Doc from HTML'));
-    assert.ok(res.content[0].text.includes('html-doc-1'));
+    assert.ok(res.content[0].text!.includes('Created Google Doc from HTML'));
+    assert.ok(res.content[0].text!.includes('html-doc-1'));
 
     // Verify files.create was called with text/html media mimeType
     const createCalls = ctx.mocks.drive.tracker.getCalls('files.create');
@@ -65,8 +65,8 @@ describe('createDocFromHTML', () => {
     });
 
     assert.equal(res.isError, true);
-    assert.ok(res.content[0].text.includes('already exists'));
-    assert.ok(res.content[0].text.includes('existing-doc-99'));
+    assert.ok(res.content[0].text!.includes('already exists'));
+    assert.ok(res.content[0].text!.includes('existing-doc-99'));
   });
 
   it('validation error for missing html', async () => {
@@ -105,7 +105,7 @@ describe('createDocFromHTML', () => {
 
     // Collision in a different folder did not block creation.
     assert.equal(res.isError, false);
-    assert.ok(res.content[0].text.includes('html-doc-2'));
+    assert.ok(res.content[0].text!.includes('html-doc-2'));
 
     // parentFolderId resolved (plain ID passthrough) and flowed into files.create.
     const createArg = ctx.mocks.drive.tracker.getCalls('files.create').at(-1)!.args[0];

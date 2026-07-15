@@ -24,7 +24,7 @@ describe('Drive tools', () => {
         data: { files: [{ id: 'f1', name: 'Report.pdf', mimeType: 'application/pdf' }] },
       }));
       const res = await callTool(ctx.client, 'search', { query: 'report' });
-      assert.ok(res.content[0].text.includes('Report.pdf'));
+      assert.ok(res.content[0].text!.includes('Report.pdf'));
       assert.equal(res.isError, false);
     });
 
@@ -51,7 +51,7 @@ describe('Drive tools', () => {
       ctx.mocks.drive.service.files.list._setImpl(async () => { throw new Error('API quota exceeded'); });
       const res = await callTool(ctx.client, 'search', { query: 'test' });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('API quota exceeded'));
+      assert.ok(res.content[0].text!.includes('API quota exceeded'));
       ctx.mocks.drive.service.files.list._resetImpl();
     });
 
@@ -96,8 +96,8 @@ describe('Drive tools', () => {
         query: "mimeType = 'application/pdf'",
         rawQuery: true,
       });
-      assert.ok(res.content[0].text.includes('created: 2025-06-01T00:00:00Z'));
-      assert.ok(res.content[0].text.includes('modified: 2025-06-15T00:00:00Z'));
+      assert.ok(res.content[0].text!.includes('created: 2025-06-01T00:00:00Z'));
+      assert.ok(res.content[0].text!.includes('modified: 2025-06-15T00:00:00Z'));
       ctx.mocks.drive.service.files.list._resetImpl();
     });
 
@@ -129,7 +129,7 @@ describe('Drive tools', () => {
         return { data: { name: 'Unknown' } };
       });
       const res = await callTool(ctx.client, 'search', { query: 'doc' });
-      assert.ok(res.content[0].text.includes('path: RootFolder/SubFolder'));
+      assert.ok(res.content[0].text!.includes('path: RootFolder/SubFolder'));
       ctx.mocks.drive.service.files.list._resetImpl();
       ctx.mocks.drive.service.files.get._resetImpl();
     });
@@ -164,7 +164,7 @@ describe('Drive tools', () => {
         throw new Error('Not found');
       });
       const res = await callTool(ctx.client, 'search', { query: 'doc' });
-      assert.ok(res.content[0].text.includes('path: bad-folder'));
+      assert.ok(res.content[0].text!.includes('path: bad-folder'));
       ctx.mocks.drive.service.files.list._resetImpl();
       ctx.mocks.drive.service.files.get._resetImpl();
     });
@@ -179,7 +179,7 @@ describe('Drive tools', () => {
         data: { id: 'new-file', name: 'notes.txt' },
       }));
       const res = await callTool(ctx.client, 'createTextFile', { name: 'notes.txt', content: 'hello' });
-      assert.ok(res.content[0].text.includes('notes.txt'));
+      assert.ok(res.content[0].text!.includes('notes.txt'));
       assert.equal(res.isError, false);
     });
 
@@ -216,7 +216,7 @@ describe('Drive tools', () => {
       }));
       const res = await callTool(ctx.client, 'updateTextFile', { fileId: 'file-1', content: 'x' });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('not a text file'));
+      assert.ok(res.content[0].text!.includes('not a text file'));
     });
 
     it('validation error on missing required fields', async () => {
@@ -244,7 +244,7 @@ describe('Drive tools', () => {
       stubTextFile('Hello World');
       const res = await callTool(ctx.client, 'readTextFile', { fileId: 'file-1' });
       assert.equal(res.isError, false);
-      const text = res.content[0].text;
+      const text = res.content[0].text!;
       assert.ok(text.includes('Length: 11 characters'));
       assert.ok(text.includes('Truncated: no'));
       assert.ok(text.endsWith('Hello World'));
@@ -255,7 +255,7 @@ describe('Drive tools', () => {
       const res = await callTool(ctx.client, 'readTextFile', { fileId: 'file-1' });
       assert.equal(res.isError, false);
       // 3 emoji = 3 code points (would be 6 if counting UTF-16 units).
-      assert.ok(res.content[0].text.includes('Length: 3 characters'));
+      assert.ok(res.content[0].text!.includes('Length: 3 characters'));
     });
 
     it('truncates on a code-point boundary without garbling emoji', async () => {
@@ -263,7 +263,7 @@ describe('Drive tools', () => {
       stubTextFile('ab😀cd');
       const res = await callTool(ctx.client, 'readTextFile', { fileId: 'file-1', maxLength: 3 });
       assert.equal(res.isError, false);
-      const text = res.content[0].text;
+      const text = res.content[0].text!;
       assert.ok(text.includes('Length: 5 characters'));
       assert.ok(text.includes('Truncated: yes'));
       assert.ok(text.endsWith('ab😀'));
@@ -274,7 +274,7 @@ describe('Drive tools', () => {
       stubTextFile('irrelevant', 'application/vnd.google-apps.document', 'My Doc');
       const res = await callTool(ctx.client, 'readTextFile', { fileId: 'file-1' });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('readGoogleDoc'));
+      assert.ok(res.content[0].text!.includes('readGoogleDoc'));
     });
 
     it('validation error on missing fileId', async () => {
@@ -290,7 +290,7 @@ describe('Drive tools', () => {
         data: { id: 'folder-1', name: 'New Folder' },
       }));
       const res = await callTool(ctx.client, 'createFolder', { name: 'New Folder' });
-      assert.ok(res.content[0].text.includes('New Folder'));
+      assert.ok(res.content[0].text!.includes('New Folder'));
       assert.equal(res.isError, false);
     });
 
@@ -333,8 +333,8 @@ describe('Drive tools', () => {
       }));
       const res = await callTool(ctx.client, 'listSharedDrives', {});
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Engineering Shared Drive'));
-      assert.ok(res.content[0].text.includes('d1'));
+      assert.ok(res.content[0].text!.includes('Engineering Shared Drive'));
+      assert.ok(res.content[0].text!.includes('d1'));
     });
 
     it('empty result', async () => {
@@ -343,7 +343,7 @@ describe('Drive tools', () => {
       }));
       const res = await callTool(ctx.client, 'listSharedDrives', {});
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('No shared drives found'));
+      assert.ok(res.content[0].text!.includes('No shared drives found'));
     });
 
     it('pagination token forwarded', async () => {
@@ -352,7 +352,7 @@ describe('Drive tools', () => {
       }));
       const res = await callTool(ctx.client, 'listSharedDrives', { pageSize: 1 });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('tok2'));
+      assert.ok(res.content[0].text!.includes('tok2'));
     });
   });
 
@@ -361,7 +361,7 @@ describe('Drive tools', () => {
     it('happy path', async () => {
       const res = await callTool(ctx.client, 'deleteItem', { itemId: 'item-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('moved to trash'));
+      assert.ok(res.content[0].text!.includes('moved to trash'));
     });
 
     it('validation error', async () => {
@@ -382,7 +382,7 @@ describe('Drive tools', () => {
       }));
       const res = await callTool(ctx.client, 'renameItem', { itemId: 'item-1', newName: 'Renamed' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Renamed'));
+      assert.ok(res.content[0].text!.includes('Renamed'));
     });
 
     it('validation error', async () => {
@@ -417,8 +417,8 @@ describe('Drive tools', () => {
 
       const res = await callTool(ctx.client, 'listPermissions', { fileId: 'file-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('[inherited from folder-123]'));
-      assert.ok(res.content[0].text.includes('[direct]'));
+      assert.ok(res.content[0].text!.includes('[inherited from folder-123]'));
+      assert.ok(res.content[0].text!.includes('[direct]'));
 
       const listCalls = ctx.mocks.drive.tracker.getCalls('permissions.list');
       assert.ok(listCalls.length >= 1);
@@ -469,7 +469,7 @@ describe('Drive tools', () => {
         fileId: 'file-1', type: 'user', role: 'reader',
       });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.toLowerCase().includes('emailaddress'));
+      assert.ok(res.content[0].text!.toLowerCase().includes('emailaddress'));
       assert.equal(ctx.mocks.drive.tracker.getCalls('permissions.create').length, 0);
     });
 
@@ -478,7 +478,7 @@ describe('Drive tools', () => {
         fileId: 'file-1', type: 'domain', role: 'reader',
       });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.toLowerCase().includes('domain'));
+      assert.ok(res.content[0].text!.toLowerCase().includes('domain'));
       assert.equal(ctx.mocks.drive.tracker.getCalls('permissions.create').length, 0);
     });
 
@@ -535,7 +535,7 @@ describe('Drive tools', () => {
       });
 
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Updated existing permission'));
+      assert.ok(res.content[0].text!.includes('Updated existing permission'));
 
       const createCalls = ctx.mocks.drive.tracker.getCalls('permissions.create');
       const updateCalls = ctx.mocks.drive.tracker.getCalls('permissions.update');
@@ -577,7 +577,7 @@ describe('Drive tools', () => {
       });
 
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('No changes needed'));
+      assert.ok(res.content[0].text!.includes('No changes needed'));
     });
 
     it('addPermission forwards emailMessage to permissions.create', async () => {
@@ -621,7 +621,7 @@ describe('Drive tools', () => {
     it('authGetStatus returns status payload', async () => {
       const res = await callTool(ctx.client, 'authGetStatus', {});
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Auth status'));
+      assert.ok(res.content[0].text!.includes('Auth status'));
     });
 
     it('authGetStatus reports the effective identity and oauth mode', async () => {
@@ -632,7 +632,7 @@ describe('Drive tools', () => {
       try {
         const res = await callTool(ctx.client, 'authGetStatus', {});
         assert.equal(res.isError, false);
-        const text = res.content[0].text;
+        const text = res.content[0].text!;
         assert.ok(text.includes('ada@example.com'), 'effective identity email is surfaced');
         assert.ok(/"authMode":\s*"oauth"/.test(text), 'active auth mode is oauth');
       } finally {
@@ -651,7 +651,7 @@ describe('Drive tools', () => {
       });
       try {
         const res = await callTool(ctx.client, 'authGetStatus', {});
-        const text = res.content[0].text;
+        const text = res.content[0].text!;
         assert.ok(/"authMode":\s*"service_account"/.test(text), 'active auth mode is service_account');
         assert.ok(text.includes('IGNORED'), 'warns that the local token file is ignored');
         assert.ok(text.includes('GOOGLE_APPLICATION_CREDENTIALS'), 'names the overriding env var');
@@ -675,7 +675,7 @@ describe('Drive tools', () => {
       ctx.mocks.drive.service.about.get._setImpl(async () => { throw new Error('No refresh token is set.'); });
       try {
         const res = await callTool(ctx.client, 'authGetStatus', {});
-        const text = res.content[0].text;
+        const text = res.content[0].text!;
         assert.ok(/"authMode":\s*"oauth"/.test(text), 'active auth mode is oauth');
         assert.ok(/Auth status \(needs_reauth\)/.test(text), 'status is needs_reauth, not identity_error');
       } finally {
@@ -695,7 +695,7 @@ describe('Drive tools', () => {
       ctx.mocks.drive.service.about.get._setImpl(async () => { throw new Error('Insufficient Permission'); });
       try {
         const res = await callTool(ctx.client, 'authGetStatus', {});
-        const text = res.content[0].text;
+        const text = res.content[0].text!;
         assert.ok(/Auth status \(identity_error\)/.test(text), 'status is identity_error');
         assert.ok(text.includes('Insufficient Permission'), 'includes the underlying error message');
       } finally {
@@ -707,13 +707,13 @@ describe('Drive tools', () => {
     it('authListScopes returns scopes payload', async () => {
       const res = await callTool(ctx.client, 'authListScopes', {});
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('requestedScopes'));
+      assert.ok(res.content[0].text!.includes('requestedScopes'));
     });
 
     it('authTestFileAccess works without fileId', async () => {
       const res = await callTool(ctx.client, 'authTestFileAccess', {});
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Auth access check OK'));
+      assert.ok(res.content[0].text!.includes('Auth access check OK'));
     });
 
     it('authTestFileAccess with specific fileId', async () => {
@@ -722,7 +722,7 @@ describe('Drive tools', () => {
       }));
       const res = await callTool(ctx.client, 'authTestFileAccess', { fileId: 'file-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('"mode":"file"') || res.content[0].text.includes('"mode": "file"'));
+      assert.ok(res.content[0].text!.includes('"mode":"file"') || res.content[0].text!.includes('"mode": "file"'));
     });
 
   });
@@ -732,13 +732,13 @@ describe('Drive tools', () => {
     it('getRevisions happy path', async () => {
       const res = await callTool(ctx.client, 'getRevisions', { fileId: 'file-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Revisions for file file-1'));
+      assert.ok(res.content[0].text!.includes('Revisions for file file-1'));
     });
 
     it('restoreRevision requires confirmation', async () => {
       const res = await callTool(ctx.client, 'restoreRevision', { fileId: 'file-1', revisionId: '1' });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('confirm=true'));
+      assert.ok(res.content[0].text!.includes('confirm=true'));
     });
 
     it('restoreRevision happy path (workspace file) includes formatting warning', async () => {
@@ -756,8 +756,8 @@ describe('Drive tools', () => {
 
       const res = await callTool(ctx.client, 'restoreRevision', { fileId: 'file-1', revisionId: '1', confirm: true });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Restored file file-1'));
-      assert.ok(res.content[0].text.includes('restored via export/import'), 'Should include workspace formatting warning');
+      assert.ok(res.content[0].text!.includes('Restored file file-1'));
+      assert.ok(res.content[0].text!.includes('restored via export/import'), 'Should include workspace formatting warning');
 
       // Should use revisions.get for exportLinks, not files.export
       const revGetCalls = ctx.mocks.drive.tracker.getCalls('revisions.get');
@@ -771,8 +771,8 @@ describe('Drive tools', () => {
 
       const res = await callTool(ctx.client, 'restoreRevision', { fileId: 'file-1', revisionId: '2', confirm: true });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Restored file file-1'));
-      assert.ok(!res.content[0].text.includes('export/import'), 'Should NOT include workspace warning for binary files');
+      assert.ok(res.content[0].text!.includes('Restored file file-1'));
+      assert.ok(!res.content[0].text!.includes('export/import'), 'Should NOT include workspace warning for binary files');
 
       const revGetCalls = ctx.mocks.drive.tracker.getCalls('revisions.get');
       assert.ok(revGetCalls.length >= 1, 'Should use revisions.get for binary download');
@@ -809,8 +809,8 @@ describe('Drive tools', () => {
       }));
       const res = await callTool(ctx.client, 'createShortcut', { targetFileId: 'target-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Shortcut created successfully'));
-      assert.ok(res.content[0].text.includes('Report.pdf'));
+      assert.ok(res.content[0].text!.includes('Shortcut created successfully'));
+      assert.ok(res.content[0].text!.includes('Report.pdf'));
 
       const createCalls = ctx.mocks.drive.tracker.getCalls('files.create');
       assert.ok(createCalls.length >= 1);
@@ -828,7 +828,7 @@ describe('Drive tools', () => {
         data: { id: 'shortcut-1', name: 'My Link', webViewLink: 'https://drive.google.com/shortcut-1' },
       }));
       const res = await callTool(ctx.client, 'createShortcut', { targetFileId: 'target-1', shortcutName: 'My Link' });
-      assert.ok(res.content[0].text.includes('My Link'));
+      assert.ok(res.content[0].text!.includes('My Link'));
 
       const createCalls = ctx.mocks.drive.tracker.getCalls('files.create');
       const createArgs = createCalls[createCalls.length - 1].args[0];
@@ -849,8 +849,8 @@ describe('Drive tools', () => {
       }));
       const res = await callTool(ctx.client, 'lockFile', { fileId: 'file-1', reason: 'Final version' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('File locked successfully'));
-      assert.ok(res.content[0].text.includes('Final version'));
+      assert.ok(res.content[0].text!.includes('File locked successfully'));
+      assert.ok(res.content[0].text!.includes('Final version'));
 
       const updateCalls = ctx.mocks.drive.tracker.getCalls('files.update');
       assert.ok(updateCalls.length >= 1);
@@ -864,7 +864,7 @@ describe('Drive tools', () => {
         data: { id: 'file-1', name: 'Report.docx', contentRestrictions: [{ readOnly: true, reason: 'Locked' }] },
       }));
       const res = await callTool(ctx.client, 'lockFile', { fileId: 'file-1' });
-      assert.ok(res.content[0].text.includes('already locked'));
+      assert.ok(res.content[0].text!.includes('already locked'));
     });
 
     it('uses default reason when none provided', async () => {
@@ -872,7 +872,7 @@ describe('Drive tools', () => {
         data: { id: 'file-1', name: 'Report.docx', contentRestrictions: [] },
       }));
       const res = await callTool(ctx.client, 'lockFile', { fileId: 'file-1' });
-      assert.ok(res.content[0].text.includes('Locked via MCP'));
+      assert.ok(res.content[0].text!.includes('Locked via MCP'));
     });
 
     it('validation error on missing fileId', async () => {
@@ -889,7 +889,7 @@ describe('Drive tools', () => {
       }));
       const res = await callTool(ctx.client, 'unlockFile', { fileId: 'file-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('File unlocked successfully'));
+      assert.ok(res.content[0].text!.includes('File unlocked successfully'));
 
       const updateCalls = ctx.mocks.drive.tracker.getCalls('files.update');
       assert.ok(updateCalls.length >= 1);
@@ -902,7 +902,7 @@ describe('Drive tools', () => {
         data: { id: 'file-1', name: 'Report.docx', contentRestrictions: [] },
       }));
       const res = await callTool(ctx.client, 'unlockFile', { fileId: 'file-1' });
-      assert.ok(res.content[0].text.includes('not locked'));
+      assert.ok(res.content[0].text!.includes('not locked'));
     });
 
     it('validation error on missing fileId', async () => {
@@ -924,7 +924,7 @@ describe('Drive tools', () => {
       ctx.mocks.drive.service.files.copy._setImpl(async () => ({ data: { id: 'd1', name: 'X (Doc)' } }));
       const res = await callTool(ctx.client, 'bulkConvertFolderPdfs', { folderId: 'folder-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Success=1'));
+      assert.ok(res.content[0].text!.includes('Success=1'));
     });
 
     it('uploadPdfWithSplit performs real split uploads', async () => {
@@ -952,9 +952,9 @@ describe('Drive tools', () => {
         });
 
         assert.equal(res.isError, false);
-        assert.ok(res.content[0].text.includes('Uploaded split PDF into 2 part(s)'));
-        assert.ok(res.content[0].text.includes('invoice-part-1.pdf'));
-        assert.ok(res.content[0].text.includes('invoice-part-2.pdf'));
+        assert.ok(res.content[0].text!.includes('Uploaded split PDF into 2 part(s)'));
+        assert.ok(res.content[0].text!.includes('invoice-part-1.pdf'));
+        assert.ok(res.content[0].text!.includes('invoice-part-2.pdf'));
 
         const createCalls = ctx.mocks.drive.tracker.getCalls('files.create');
         assert.equal(createCalls.length, 2);

@@ -30,7 +30,7 @@ describe('Slides tools', () => {
         slides: [{ title: 'Slide 1', content: 'Content 1' }],
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('My Presentation'));
+      assert.ok(res.content[0].text!.includes('My Presentation'));
     });
 
     it('validation error', async () => {
@@ -47,7 +47,7 @@ describe('Slides tools', () => {
         slides: [{ title: 'Updated Title', content: 'Updated Content' }],
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Updated'));
+      assert.ok(res.content[0].text!.includes('Updated'));
     });
 
     it('validation error', async () => {
@@ -61,7 +61,7 @@ describe('Slides tools', () => {
     it('happy path', async () => {
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Document content'));
+      assert.ok(res.content[0].text!.includes('Document content'));
     });
 
     it('validation error', async () => {
@@ -75,7 +75,7 @@ describe('Slides tools', () => {
     it('happy path', async () => {
       const res = await callTool(ctx.client, 'getGoogleSlidesContent', { presentationId: 'pres-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Presentation content'));
+      assert.ok(res.content[0].text!.includes('Presentation content'));
     });
 
     it('validation error', async () => {
@@ -91,7 +91,7 @@ describe('Slides tools', () => {
         presentationId: 'pres-1', objectId: 'title-1', bold: true,
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('formatting'));
+      assert.ok(res.content[0].text!.includes('formatting'));
     });
 
     it('error when no formatting specified', async () => {
@@ -99,7 +99,7 @@ describe('Slides tools', () => {
         presentationId: 'pres-1', objectId: 'title-1',
       });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('No formatting'));
+      assert.ok(res.content[0].text!.includes('No formatting'));
     });
 
     it('validation error', async () => {
@@ -115,7 +115,7 @@ describe('Slides tools', () => {
         presentationId: 'pres-1', objectId: 'title-1', alignment: 'CENTER',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('paragraph formatting'));
+      assert.ok(res.content[0].text!.includes('paragraph formatting'));
     });
 
     it('error when no formatting specified', async () => {
@@ -139,7 +139,7 @@ describe('Slides tools', () => {
         backgroundColor: { red: 1, green: 0, blue: 0 },
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('styling'));
+      assert.ok(res.content[0].text!.includes('styling'));
     });
 
     it('error when no styling specified', async () => {
@@ -164,7 +164,7 @@ describe('Slides tools', () => {
         backgroundColor: { red: 0, green: 0, blue: 1 },
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('background'));
+      assert.ok(res.content[0].text!.includes('background'));
     });
 
     it('validation error', async () => {
@@ -181,7 +181,7 @@ describe('Slides tools', () => {
         text: 'Hello', x: 100, y: 100, width: 300, height: 50,
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('text box'));
+      assert.ok(res.content[0].text!.includes('text box'));
     });
 
     it('validation error', async () => {
@@ -198,7 +198,7 @@ describe('Slides tools', () => {
         shapeType: 'RECTANGLE', x: 100, y: 100, width: 200, height: 200,
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('RECTANGLE'));
+      assert.ok(res.content[0].text!.includes('RECTANGLE'));
     });
 
     it('validation error', async () => {
@@ -226,7 +226,7 @@ describe('Slides tools', () => {
         presentationId: 'pres-1', slideObjectId: 'slide-1',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Duplicated'));
+      assert.ok(res.content[0].text!.includes('Duplicated'));
     });
 
     it('reorderSlides happy path', async () => {
@@ -241,7 +241,7 @@ describe('Slides tools', () => {
         presentationId: 'pres-1', containsText: 'Old', replaceText: 'New',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Replaced'));
+      assert.ok(res.content[0].text!.includes('Replaced'));
     });
   });
 
@@ -252,7 +252,7 @@ describe('Slides tools', () => {
         presentationId: 'pres-1', slideObjectId: 'slide-1', mimeType: 'PNG', size: 'LARGE',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('thumbnail URL'));
+      assert.ok(res.content[0].text!.includes('thumbnail URL'));
     });
 
     it('validation error', async () => {
@@ -268,7 +268,7 @@ describe('Slides tools', () => {
         presentationId: 'pres-1', slideIndex: 0,
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Speaker notes text'));
+      assert.ok(res.content[0].text!.includes('Speaker notes text'));
     });
 
     it('validation error', async () => {
@@ -284,7 +284,7 @@ describe('Slides tools', () => {
         presentationId: 'pres-1', slideIndex: 0, notes: 'New notes',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('updated speaker notes'));
+      assert.ok(res.content[0].text!.includes('updated speaker notes'));
     });
 
     it('update slides with existing notes', async () => {

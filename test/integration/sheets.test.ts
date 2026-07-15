@@ -34,7 +34,7 @@ describe('Sheets tools', () => {
         name: 'My Sheet', data: [['A', 'B'], ['1', '2']],
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('My Sheet'));
+      assert.ok(res.content[0].text!.includes('My Sheet'));
     });
 
     it('validation error', async () => {
@@ -50,7 +50,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', range: 'Sheet1!A1:B2', data: [['a', 'b']],
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Updated'));
+      assert.ok(res.content[0].text!.includes('Updated'));
     });
 
     it('validation error', async () => {
@@ -69,7 +69,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', range: 'Sheet1!A1:B2',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Alice'));
+      assert.ok(res.content[0].text!.includes('Alice'));
     });
 
     it('validation error', async () => {
@@ -87,7 +87,7 @@ describe('Sheets tools', () => {
         horizontalAlignment: 'CENTER',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Formatted'));
+      assert.ok(res.content[0].text!.includes('Formatted'));
     });
 
     it('validation error', async () => {
@@ -104,7 +104,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', range: 'Sheet1!A1:B2', bold: true,
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('text formatting'));
+      assert.ok(res.content[0].text!.includes('text formatting'));
     });
 
     it('validation error', async () => {
@@ -121,7 +121,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', range: 'Sheet1!A1:B2', pattern: '#,##0.00',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('number formatting'));
+      assert.ok(res.content[0].text!.includes('number formatting'));
     });
 
     it('validation error', async () => {
@@ -138,7 +138,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', range: 'Sheet1!A1:B2', style: 'SOLID',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('borders'));
+      assert.ok(res.content[0].text!.includes('borders'));
     });
 
     it('validation error', async () => {
@@ -155,7 +155,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', range: 'Sheet1!A1:C3', mergeType: 'MERGE_ALL',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Merged'));
+      assert.ok(res.content[0].text!.includes('Merged'));
     });
 
     it('validation error', async () => {
@@ -175,7 +175,7 @@ describe('Sheets tools', () => {
         format: { backgroundColor: { red: 1, green: 0, blue: 0 } },
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('conditional formatting'));
+      assert.ok(res.content[0].text!.includes('conditional formatting'));
     });
 
     it('validation error', async () => {
@@ -190,7 +190,7 @@ describe('Sheets tools', () => {
       setupSheetsMock();
       const res = await callTool(ctx.client, 'getSpreadsheetInfo', { spreadsheetId: 'sheet-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Test Sheet'));
+      assert.ok(res.content[0].text!.includes('Test Sheet'));
     });
 
     it('validation error', async () => {
@@ -206,7 +206,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', range: 'A1', values: [['x', 'y']],
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('appended'));
+      assert.ok(res.content[0].text!.includes('appended'));
     });
 
     it('validation error', async () => {
@@ -222,7 +222,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', sheetTitle: 'Sheet2',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Sheet2'));
+      assert.ok(res.content[0].text!.includes('Sheet2'));
     });
 
     it('validation error', async () => {
@@ -241,7 +241,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', title: 'AliasSheet',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('AliasSheet'));
+      assert.ok(res.content[0].text!.includes('AliasSheet'));
     });
 
     it('validation error', async () => {
@@ -256,19 +256,19 @@ describe('Sheets tools', () => {
       setupSheetsMock();
       const res = await callTool(ctx.client, 'listSheets', { spreadsheetId: 'sheet-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Sheet1'));
+      assert.ok(res.content[0].text!.includes('Sheet1'));
     });
 
     it('renameSheet happy path', async () => {
       const res = await callTool(ctx.client, 'renameSheet', { spreadsheetId: 'sheet-1', sheetId: 0, newTitle: 'Renamed' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Renamed'));
+      assert.ok(res.content[0].text!.includes('Renamed'));
     });
 
     it('deleteSheet happy path', async () => {
       const res = await callTool(ctx.client, 'deleteSheet', { spreadsheetId: 'sheet-1', sheetId: 0 });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Deleted sheet'));
+      assert.ok(res.content[0].text!.includes('Deleted sheet'));
     });
 
     it('deleteSheet validation error', async () => {
@@ -285,7 +285,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', range: 'Sheet1!A1:A10', conditionType: 'ONE_OF_LIST', values: ['A', 'B'],
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Added data validation'));
+      assert.ok(res.content[0].text!.includes('Added data validation'));
     });
 
     it('addDataValidation ONE_OF_RANGE happy path prepends "="', async () => {
@@ -294,7 +294,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', range: 'Sheet1!A1:A10', conditionType: 'ONE_OF_RANGE', values: ['Reference!A2:A50'],
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Added data validation (ONE_OF_RANGE)'));
+      assert.ok(res.content[0].text!.includes('Added data validation (ONE_OF_RANGE)'));
       const calls = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate');
       const rule = calls[0].args[0].requestBody.requests[0].setDataValidation.rule;
       assert.equal(rule.condition.type, 'ONE_OF_RANGE');
@@ -332,7 +332,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', range: 'Sheet1!A1:B10', description: 'Lock critical',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Protected range'));
+      assert.ok(res.content[0].text!.includes('Protected range'));
     });
 
     it('addNamedRange happy path', async () => {
@@ -341,7 +341,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', name: 'InputRange', range: 'Sheet1!A1:B10',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Added named range'));
+      assert.ok(res.content[0].text!.includes('Added named range'));
     });
   });
 
@@ -352,7 +352,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', sheetId: 0, startColumn: 0, endColumn: 3, pixelSize: 120,
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Set column width'));
+      assert.ok(res.content[0].text!.includes('Set column width'));
       const req = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate')[0].args[0].requestBody.requests[0];
       assert.deepEqual(req.updateDimensionProperties.range, { sheetId: 0, dimension: 'COLUMNS', startIndex: 0, endIndex: 3 });
       assert.deepEqual(req.updateDimensionProperties.properties, { pixelSize: 120 });
@@ -371,7 +371,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', sheetId: 0, startColumn: 5, endColumn: 2, pixelSize: 120,
       });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('startColumn must be less than endColumn'));
+      assert.ok(res.content[0].text!.includes('startColumn must be less than endColumn'));
       assert.equal(ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate').length, 0);
     });
 
@@ -385,7 +385,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', sheetId: 0, startRow: 0, endRow: 5, pixelSize: 30,
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Set row height'));
+      assert.ok(res.content[0].text!.includes('Set row height'));
       const req = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate')[0].args[0].requestBody.requests[0];
       assert.deepEqual(req.updateDimensionProperties.range, { sheetId: 0, dimension: 'ROWS', startIndex: 0, endIndex: 5 });
       assert.deepEqual(req.updateDimensionProperties.properties, { pixelSize: 30 });
@@ -404,7 +404,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', sheetId: 0, startRow: 5, endRow: 2, pixelSize: 30,
       });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('startRow must be less than endRow'));
+      assert.ok(res.content[0].text!.includes('startRow must be less than endRow'));
       assert.equal(ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate').length, 0);
     });
 
@@ -418,7 +418,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', sheetId: 0, startColumn: 0, endColumn: 3,
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Auto-resized columns'));
+      assert.ok(res.content[0].text!.includes('Auto-resized columns'));
       const req = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate')[0].args[0].requestBody.requests[0];
       assert.deepEqual(req.autoResizeDimensions.dimensions, { sheetId: 0, dimension: 'COLUMNS', startIndex: 0, endIndex: 3 });
     });
@@ -433,7 +433,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', sheetId: 0, startRow: 0, endRow: 5,
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Auto-resized rows'));
+      assert.ok(res.content[0].text!.includes('Auto-resized rows'));
       const req = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate')[0].args[0].requestBody.requests[0];
       assert.deepEqual(req.autoResizeDimensions.dimensions, { sheetId: 0, dimension: 'ROWS', startIndex: 0, endIndex: 5 });
     });
@@ -448,7 +448,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', sheetId: 0, dimension: 'COLUMNS', startIndex: 2, endIndex: 4,
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Hid columns'));
+      assert.ok(res.content[0].text!.includes('Hid columns'));
       const req = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate')[0].args[0].requestBody.requests[0];
       assert.deepEqual(req.updateDimensionProperties.range, { sheetId: 0, dimension: 'COLUMNS', startIndex: 2, endIndex: 4 });
       assert.deepEqual(req.updateDimensionProperties.properties, { hiddenByUser: true });
@@ -460,7 +460,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', sheetId: 0, dimension: 'ROWS', startIndex: 2, endIndex: 4,
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Showed rows'));
+      assert.ok(res.content[0].text!.includes('Showed rows'));
       const req = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate')[0].args[0].requestBody.requests[0];
       assert.deepEqual(req.updateDimensionProperties.range, { sheetId: 0, dimension: 'ROWS', startIndex: 2, endIndex: 4 });
       assert.deepEqual(req.updateDimensionProperties.properties, { hiddenByUser: false });
@@ -484,7 +484,7 @@ describe('Sheets tools', () => {
         spreadsheetId: 'sheet-1', sheetId: 0, dimension: 'COLUMNS', startIndex: 4, endIndex: 2,
       });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('startIndex must be less than endIndex'));
+      assert.ok(res.content[0].text!.includes('startIndex must be less than endIndex'));
       assert.equal(ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate').length, 0);
     });
   });
@@ -497,7 +497,7 @@ describe('Sheets tools', () => {
       }));
       const res = await callTool(ctx.client, 'listGoogleSheets', {});
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Budget'));
+      assert.ok(res.content[0].text!.includes('Budget'));
     });
   });
 
@@ -509,7 +509,7 @@ describe('Sheets tools', () => {
       }));
       const res = await callTool(ctx.client, 'copyFile', { fileId: 'file-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('copied'));
+      assert.ok(res.content[0].text!.includes('copied'));
     });
 
     it('validation error', async () => {

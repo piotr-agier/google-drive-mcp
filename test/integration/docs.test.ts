@@ -135,7 +135,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'createGoogleDoc', { name: 'My Doc', content: 'Hello' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('My Doc'));
+      assert.ok(res.content[0].text!.includes('My Doc'));
     });
 
     it('validation error', async () => {
@@ -155,7 +155,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'updateGoogleDoc', { documentId: 'doc-1', content: 'New content' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Updated Google Doc'));
+      assert.ok(res.content[0].text!.includes('Updated Google Doc'));
 
       // Non-tabId path: still two separate batchUpdate calls (existing behavior).
       const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
@@ -174,7 +174,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'updateGoogleDoc', { documentId: 'doc-1', content: 'New tab content', tabId: 'tab-2' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('tab: tab-2'));
+      assert.ok(res.content[0].text!.includes('tab: tab-2'));
 
       // Verify documents.get was called with includeTabsContent.
       const getCalls = ctx.mocks.docs.tracker.getCalls('documents.get');
@@ -251,8 +251,8 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'updateGoogleDoc', { documentId: 'doc-1', content: 'x', tabId: 'missing' });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('Tab with ID "missing" not found'));
-      assert.ok(res.content[0].text.includes('listDocumentTabs'));
+      assert.ok(res.content[0].text!.includes('Tab with ID "missing" not found'));
+      assert.ok(res.content[0].text!.includes('listDocumentTabs'));
 
       const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
       assert.equal(calls.length, 0);
@@ -275,13 +275,13 @@ describe('Docs tools', () => {
     it('happy path', async () => {
       const res = await callTool(ctx.client, 'insertText', { documentId: 'doc-1', text: 'inserted', index: 1 });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('inserted'));
+      assert.ok(res.content[0].text!.includes('inserted'));
     });
 
     it('with tabId forwards tabId to Location', async () => {
       const res = await callTool(ctx.client, 'insertText', { documentId: 'doc-1', text: 'hello', index: 1, tabId: 'tab-7' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('tab-7'));
+      assert.ok(res.content[0].text!.includes('tab-7'));
 
       const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
       const lastCall = calls[calls.length - 1];
@@ -295,7 +295,7 @@ describe('Docs tools', () => {
     it('rejects index 0 on a Google Doc (1-based)', async () => {
       const res = await callTool(ctx.client, 'insertText', { documentId: 'doc-1', text: 'x', index: 0 });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('1-based'));
+      assert.ok(res.content[0].text!.includes('1-based'));
     });
 
     it('validation error', async () => {
@@ -315,13 +315,13 @@ describe('Docs tools', () => {
     it('happy path', async () => {
       const res = await callTool(ctx.client, 'deleteRange', { documentId: 'doc-1', startIndex: 1, endIndex: 5 });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('deleted'));
+      assert.ok(res.content[0].text!.includes('deleted'));
     });
 
     it('with tabId forwards tabId to Range', async () => {
       const res = await callTool(ctx.client, 'deleteRange', { documentId: 'doc-1', startIndex: 1, endIndex: 5, tabId: 'tab-7' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('tab-7'));
+      assert.ok(res.content[0].text!.includes('tab-7'));
 
       const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
       const lastCall = calls[calls.length - 1];
@@ -335,13 +335,13 @@ describe('Docs tools', () => {
     it('validation: endIndex must be > startIndex', async () => {
       const res = await callTool(ctx.client, 'deleteRange', { documentId: 'doc-1', startIndex: 5, endIndex: 2 });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.toLowerCase().includes('end index'));
+      assert.ok(res.content[0].text!.toLowerCase().includes('end index'));
     });
 
     it('rejects startIndex 0 on a Google Doc (1-based)', async () => {
       const res = await callTool(ctx.client, 'deleteRange', { documentId: 'doc-1', startIndex: 0, endIndex: 3 });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('1-based'));
+      assert.ok(res.content[0].text!.includes('1-based'));
     });
 
     it('validation error', async () => {
@@ -398,14 +398,14 @@ describe('Docs tools', () => {
       stubTextFile('abc');
       const res = await callTool(ctx.client, 'insertText', { documentId: 'file-1', text: 'X', index: 99 });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('beyond end of file'));
+      assert.ok(res.content[0].text!.includes('beyond end of file'));
     });
 
     it('insertText rejects tabId on a text file', async () => {
       stubTextFile('abc');
       const res = await callTool(ctx.client, 'insertText', { documentId: 'file-1', text: 'X', index: 0, tabId: 'tab-1' });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('tabId is not supported'));
+      assert.ok(res.content[0].text!.includes('tabId is not supported'));
     });
 
     it('deleteRange removes a code-point range', async () => {
@@ -457,7 +457,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Hello World'));
+      assert.ok(res.content[0].text!.includes('Hello World'));
     });
 
     it('reads multi-tab document', async () => {
@@ -482,10 +482,10 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('=== Tab: Tab1 ==='));
-      assert.ok(res.content[0].text.includes('=== Tab: Tab2 ==='));
-      assert.ok(res.content[0].text.includes('First tab'));
-      assert.ok(res.content[0].text.includes('Second tab'));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1 ==='));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab2 ==='));
+      assert.ok(res.content[0].text!.includes('First tab'));
+      assert.ok(res.content[0].text!.includes('Second tab'));
     });
 
     it('reads specific tab by tabId', async () => {
@@ -510,8 +510,8 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', tabId: 'tab-2' });
       assert.equal(res.isError, false);
-      assert.ok(!res.content[0].text.includes('First tab'));
-      assert.ok(res.content[0].text.includes('Second tab'));
+      assert.ok(!res.content[0].text!.includes('First tab'));
+      assert.ok(res.content[0].text!.includes('Second tab'));
     });
 
     it('reads specific nested tab by tabId', async () => {
@@ -520,10 +520,10 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', tabId: 'tab-1-2' });
       assert.equal(res.isError, false);
-      assert.ok(!res.content[0].text.includes('First tab'));
-      assert.ok(!res.content[0].text.includes('First child'));
-      assert.ok(res.content[0].text.includes('Second child'));
-      assert.ok(!res.content[0].text.includes('Second tab'));
+      assert.ok(!res.content[0].text!.includes('First tab'));
+      assert.ok(!res.content[0].text!.includes('First child'));
+      assert.ok(res.content[0].text!.includes('Second child'));
+      assert.ok(!res.content[0].text!.includes('Second tab'));
     });
     
     it('reads specific nested tab by tabId when the document has only one tab with child tabs', async () => {
@@ -532,10 +532,10 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', tabId: 'tab-1-2' });
       assert.equal(res.isError, false);
-      assert.ok(!res.content[0].text.includes('First tab'));
-      assert.ok(!res.content[0].text.includes('First child'));
-      assert.ok(res.content[0].text.includes('Second child'));
-      assert.ok(!res.content[0].text.includes('Second tab'));
+      assert.ok(!res.content[0].text!.includes('First tab'));
+      assert.ok(!res.content[0].text!.includes('First child'));
+      assert.ok(res.content[0].text!.includes('Second child'));
+      assert.ok(!res.content[0].text!.includes('Second tab'));
     });
 
     it('reads deeply nested grandchild tab by tabId', async () => {
@@ -544,9 +544,9 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', tabId: 'tab-1-2-1' });
       assert.equal(res.isError, false);
-      assert.ok(!res.content[0].text.includes('First tab'));
-      assert.ok(!res.content[0].text.includes('First child'));
-      assert.ok(res.content[0].text.includes('First grandchild'));
+      assert.ok(!res.content[0].text!.includes('First tab'));
+      assert.ok(!res.content[0].text!.includes('First child'));
+      assert.ok(res.content[0].text!.includes('First grandchild'));
     });
 
     it('reads all tabs including nested when no tabId specified', async () => {
@@ -556,16 +556,16 @@ describe('Docs tools', () => {
       const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
       // Should include all tabs with proper hierarchy
-      assert.ok(res.content[0].text.includes('=== Tab: Tab1 ==='));
-      assert.ok(res.content[0].text.includes('First tab'));
-      assert.ok(res.content[0].text.includes('=== Tab: Tab1.1 ==='));
-      assert.ok(res.content[0].text.includes('First child'));
-      assert.ok(res.content[0].text.includes('=== Tab: Tab1.2 ==='));
-      assert.ok(res.content[0].text.includes('Second child'));
-      assert.ok(res.content[0].text.includes('=== Tab: Tab1.2.1 ==='));
-      assert.ok(res.content[0].text.includes('First grandchild'));
-      assert.ok(res.content[0].text.includes('=== Tab: Tab2 ==='));
-      assert.ok(res.content[0].text.includes('Second tab'));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1 ==='));
+      assert.ok(res.content[0].text!.includes('First tab'));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.1 ==='));
+      assert.ok(res.content[0].text!.includes('First child'));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.2 ==='));
+      assert.ok(res.content[0].text!.includes('Second child'));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.2.1 ==='));
+      assert.ok(res.content[0].text!.includes('First grandchild'));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab2 ==='));
+      assert.ok(res.content[0].text!.includes('Second tab'));
     });
     
     it('reads all tabs including nested when no tabId specified and the document has only one tab with child tabs ', async () => {
@@ -576,14 +576,14 @@ describe('Docs tools', () => {
       assert.equal(res.isError, false);
 
       // Should include all tabs with proper hierarchy
-      assert.ok(res.content[0].text.includes('=== Tab: Tab1 ==='));
-      assert.ok(res.content[0].text.includes('First tab'));
-      assert.ok(res.content[0].text.includes('=== Tab: Tab1.1 ==='));
-      assert.ok(res.content[0].text.includes('First child'));
-      assert.ok(res.content[0].text.includes('=== Tab: Tab1.2 ==='));
-      assert.ok(res.content[0].text.includes('Second child'));
-      assert.ok(res.content[0].text.includes('=== Tab: Tab1.2.1 ==='));
-      assert.ok(res.content[0].text.includes('First grandchild'));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1 ==='));
+      assert.ok(res.content[0].text!.includes('First tab'));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.1 ==='));
+      assert.ok(res.content[0].text!.includes('First child'));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.2 ==='));
+      assert.ok(res.content[0].text!.includes('Second child'));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.2.1 ==='));
+      assert.ok(res.content[0].text!.includes('First grandchild'));
     });
 
     it('returns error for unknown tabId', async () => {
@@ -602,7 +602,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', tabId: 'nonexistent' });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('not found'));
+      assert.ok(res.content[0].text!.includes('not found'));
     });
 
     it('validation error', async () => {
@@ -638,7 +638,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', format: 'markdown' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text!.includes('![Architecture diagram](https://lh3.googleusercontent.com/xyz "objectId=obj-1")'), res.content[0].text);
+      assert.ok(res.content[0].text!.includes('![Architecture diagram](https://lh3.googleusercontent.com/xyz "objectId=obj-1")'), res.content[0].text!);
     });
 
     it('renders inline images as a single-line placeholder (format=text)', async () => {
@@ -692,7 +692,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', format: 'markdown' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text!.includes('[image]'), res.content[0].text);
+      assert.ok(res.content[0].text!.includes('[image]'), res.content[0].text!);
     });
 
     it('resolves a multi-tab image against the correct tab inlineObjects map', async () => {
@@ -734,7 +734,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text!.includes('contentUri=https://lh3.googleusercontent.com/tab2'), res.content[0].text);
+      assert.ok(res.content[0].text!.includes('contentUri=https://lh3.googleusercontent.com/tab2'), res.content[0].text!);
     });
 
     it('readGoogleDocPaginated carries inline images (proves format threading)', async () => {
@@ -768,6 +768,73 @@ describe('Docs tools', () => {
       const envelope = JSON.parse(res.content[0].text!);
       assert.ok(envelope.content.includes('![Diagram](https://lh3.googleusercontent.com/xyz "objectId=obj-1")'), envelope.content);
     });
+
+    it('prefers the durable sourceUri over the ephemeral contentUri in markdown', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Doc with sourced image',
+          body: {
+            content: [{
+              paragraph: {
+                elements: [
+                  { inlineObjectElement: { inlineObjectId: 'obj-1' } },
+                  { textRun: { content: '\n' } },
+                ],
+              },
+            }],
+          },
+          inlineObjects: {
+            'obj-1': {
+              inlineObjectProperties: {
+                embeddedObject: {
+                  description: 'Diagram',
+                  imageProperties: {
+                    contentUri: 'https://lh3.googleusercontent.com/ephemeral',
+                    sourceUri: 'https://example.com/durable.png',
+                  },
+                },
+              },
+            },
+          },
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', format: 'markdown' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      assert.ok(text.includes('![Diagram](https://example.com/durable.png "objectId=obj-1")'), text);
+      assert.ok(!text.includes('lh3.googleusercontent.com'), 'ephemeral contentUri must not be used when a sourceUri exists');
+    });
+
+    it('percent-encodes spaces and parentheses in the markdown image URL', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Doc with spaced uri',
+          body: {
+            content: [{
+              paragraph: {
+                elements: [
+                  { inlineObjectElement: { inlineObjectId: 'obj-1' } },
+                  { textRun: { content: '\n' } },
+                ],
+              },
+            }],
+          },
+          inlineObjects: {
+            'obj-1': {
+              inlineObjectProperties: {
+                embeddedObject: {
+                  imageProperties: { sourceUri: 'https://example.com/a b(1).png' },
+                },
+              },
+            },
+          },
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', format: 'markdown' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      assert.ok(text.includes('![](https://example.com/a%20b%281%29.png "objectId=obj-1")'), text);
+    });
   });
 
   // --- listDocumentTabs ---
@@ -793,7 +860,7 @@ describe('Docs tools', () => {
         documentId: 'doc-1', startIndex: 1, endIndex: 5, bold: true,
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('applied text style'));
+      assert.ok(res.content[0].text!.includes('applied text style'));
     });
 
     it('validation error', async () => {
@@ -809,7 +876,7 @@ describe('Docs tools', () => {
         documentId: 'doc-1', startIndex: 1, endIndex: 5, alignment: 'CENTER',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('applied paragraph style'));
+      assert.ok(res.content[0].text!.includes('applied paragraph style'));
     });
 
     it('validation error', async () => {
@@ -842,7 +909,7 @@ describe('Docs tools', () => {
         documentId: 'doc-1', findText: 'Hello', replaceText: 'Hi',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Replaced'));
+      assert.ok(res.content[0].text!.includes('Replaced'));
     });
 
     it('dryRun counts matches without replacing', async () => {
@@ -856,7 +923,7 @@ describe('Docs tools', () => {
         documentId: 'doc-1', findText: 'Hello', replaceText: 'Hi', dryRun: true,
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('found 2 occurrence'));
+      assert.ok(res.content[0].text!.includes('found 2 occurrence'));
     });
 
     it('with tabId scopes replacement via tabsCriteria', async () => {
@@ -864,7 +931,7 @@ describe('Docs tools', () => {
         documentId: 'doc-1', findText: 'Hello', replaceText: 'Hi', tabId: 'tab-2',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('tab-2'));
+      assert.ok(res.content[0].text!.includes('tab-2'));
 
       const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
       const lastCall = calls[calls.length - 1];
@@ -900,7 +967,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'listComments', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Nice!'));
+      assert.ok(res.content[0].text!.includes('Nice!'));
     });
 
     it('validation error', async () => {
@@ -928,7 +995,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'listComments', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('next-page'));
+      assert.ok(res.content[0].text!.includes('next-page'));
     });
 
     it('passes includeDeleted', async () => {
@@ -968,7 +1035,7 @@ describe('Docs tools', () => {
         documentId: 'doc-1', startIndex: 1, endIndex: 5, commentText: 'Great!',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Comment added'));
+      assert.ok(res.content[0].text!.includes('Comment added'));
     });
 
     it('validation: endIndex must be > startIndex', async () => {
@@ -991,7 +1058,7 @@ describe('Docs tools', () => {
         documentId: 'doc-1', commentId: 'c1', replyText: 'Thanks!',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Reply added'));
+      assert.ok(res.content[0].text!.includes('Reply added'));
     });
 
     it('validation error', async () => {
@@ -1009,10 +1076,10 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('=== Tab: Tab1 ==='));
-      assert.ok(res.content[0].text.includes('=== Tab: Tab2 ==='));
-      assert.ok(res.content[0].text.includes('First tab'));
-      assert.ok(res.content[0].text.includes('Second tab'));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1 ==='));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab2 ==='));
+      assert.ok(res.content[0].text!.includes('First tab'));
+      assert.ok(res.content[0].text!.includes('Second tab'));
     });
 
     it('reads multi-tab document with nested tabs', async () => {
@@ -1022,16 +1089,16 @@ describe('Docs tools', () => {
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
       // Should include all tabs with proper hierarchy
-      assert.ok(res.content[0].text.includes('=== Tab: Tab1 ==='));
-      assert.ok(res.content[0].text.includes('First tab'));
-      assert.ok(res.content[0].text.includes('=== Tab: Tab1.1 ==='));
-      assert.ok(res.content[0].text.includes('First child'));
-      assert.ok(res.content[0].text.includes('=== Tab: Tab1.2 ==='));
-      assert.ok(res.content[0].text.includes('Second child'));
-      assert.ok(res.content[0].text.includes('=== Tab: Tab1.2.1 ==='));
-      assert.ok(res.content[0].text.includes('First grandchild'));
-      assert.ok(res.content[0].text.includes('=== Tab: Tab2 ==='));
-      assert.ok(res.content[0].text.includes('Second tab'));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1 ==='));
+      assert.ok(res.content[0].text!.includes('First tab'));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.1 ==='));
+      assert.ok(res.content[0].text!.includes('First child'));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.2 ==='));
+      assert.ok(res.content[0].text!.includes('Second child'));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.2.1 ==='));
+      assert.ok(res.content[0].text!.includes('First grandchild'));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab2 ==='));
+      assert.ok(res.content[0].text!.includes('Second tab'));
     });
 
     it('reads multi-tab document with nested tabs when the document has only one parent tab with child tabs', async () => {
@@ -1041,14 +1108,14 @@ describe('Docs tools', () => {
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
       // Should include all tabs with proper hierarchy
-      assert.ok(res.content[0].text.includes('=== Tab: Tab1 ==='));
-      assert.ok(res.content[0].text.includes('First tab'));
-      assert.ok(res.content[0].text.includes('=== Tab: Tab1.1 ==='));
-      assert.ok(res.content[0].text.includes('First child'));
-      assert.ok(res.content[0].text.includes('=== Tab: Tab1.2 ==='));
-      assert.ok(res.content[0].text.includes('Second child'));
-      assert.ok(res.content[0].text.includes('=== Tab: Tab1.2.1 ==='));
-      assert.ok(res.content[0].text.includes('First grandchild'));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1 ==='));
+      assert.ok(res.content[0].text!.includes('First tab'));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.1 ==='));
+      assert.ok(res.content[0].text!.includes('First child'));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.2 ==='));
+      assert.ok(res.content[0].text!.includes('Second child'));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.2.1 ==='));
+      assert.ok(res.content[0].text!.includes('First grandchild'));
     });
 
     it('falls back to body for single-tab doc', async () => {
@@ -1056,8 +1123,8 @@ describe('Docs tools', () => {
       ctx.mocks.docs.service.documents.get._resetImpl();
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Hello World'));
-      assert.ok(!res.content[0].text.includes('=== Tab:'));
+      assert.ok(res.content[0].text!.includes('Hello World'));
+      assert.ok(!res.content[0].text!.includes('=== Tab:'));
     });
 
     it('includes formatting when includeFormatting is true', async () => {
@@ -1095,7 +1162,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1', includeFormatting: true });
       assert.equal(res.isError, false);
-      const text = res.content[0].text;
+      const text = res.content[0].text!;
       assert.ok(text.includes('font="Roboto"'), 'should include font name');
       assert.ok(text.includes('size=18pt'), 'should include font size');
       assert.ok(text.includes('style=bold'), 'should include bold style');
@@ -1138,7 +1205,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      const text = res.content[0].text;
+      const text = res.content[0].text!;
       assert.ok(!text.includes('font='), 'should not include font metadata');
       assert.ok(!text.includes('--- Fonts summary ---'), 'should not include fonts summary');
       assert.ok(text.includes('Normal text'), 'should still include text content');
@@ -1193,7 +1260,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1', includeFormatting: true });
       assert.equal(res.isError, false);
-      const text = res.content[0].text;
+      const text = res.content[0].text!;
       assert.ok(text.includes('=== Tab: Tab1 ==='), 'should have tab headers');
       assert.ok(text.includes('=== Tab: Tab2 ==='), 'should have tab headers');
       assert.ok(text.includes('style=italic'), 'should show italic in Tab1');
@@ -1221,8 +1288,8 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Content here'));
-      assert.ok(!res.content[0].text.includes('=== Tab:'));
+      assert.ok(res.content[0].text!.includes('Content here'));
+      assert.ok(!res.content[0].text!.includes('=== Tab:'));
     });
 
     it('extracts person chips', async () => {
@@ -1250,7 +1317,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('@Alice (alice@example.com)'));
+      assert.ok(res.content[0].text!.includes('@Alice (alice@example.com)'));
     });
 
     it('extracts rich links as markdown', async () => {
@@ -1278,7 +1345,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('[Design Doc](https://docs.google.com/doc/123)'));
+      assert.ok(res.content[0].text!.includes('[Design Doc](https://docs.google.com/doc/123)'));
     });
 
     it('extracts inline images with description, uri, and size on one line', async () => {
@@ -1408,6 +1475,130 @@ describe('Docs tools', () => {
       assert.ok(text.includes('alt="Chart \\[v2\\] \\"final\\""'), `alt not escaped: ${text}`);
     });
 
+    it('labels an inline image with its true 1-index span, not the placeholder length', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Doc with indexed image',
+          tabs: [{
+            tabProperties: { title: 'Main' },
+            documentTab: {
+              body: {
+                content: [{
+                  paragraph: {
+                    elements: [
+                      { textRun: { content: 'See ' }, startIndex: 1, endIndex: 5 },
+                      { inlineObjectElement: { inlineObjectId: 'obj-1' }, startIndex: 5, endIndex: 6 },
+                      { textRun: { content: ' here\n' }, startIndex: 6, endIndex: 12 },
+                    ],
+                  },
+                }],
+              },
+              inlineObjects: {
+                'obj-1': {
+                  inlineObjectProperties: {
+                    embeddedObject: {
+                      imageProperties: { contentUri: 'https://lh3.googleusercontent.com/' + 'x'.repeat(120) },
+                    },
+                  },
+                },
+              },
+            },
+          }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      const imageLine = text.split('\n').find(l => l.includes('objectId=obj-1'));
+      assert.ok(imageLine, 'image token should be present');
+      // The displayed edit range must be the image's real 1-index span [5-6],
+      // never [5 .. 5+placeholderLength] (which would over-delete following text).
+      assert.ok(imageLine!.startsWith('[5-6] '), `expected [5-6] span, got: ${imageLine}`);
+    });
+
+    it('keeps a multi-line alt-text description on a single placeholder line', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Doc with multi-line alt',
+          tabs: [{
+            tabProperties: { title: 'Main' },
+            documentTab: {
+              body: {
+                content: [{
+                  paragraph: {
+                    elements: [
+                      { inlineObjectElement: { inlineObjectId: 'obj-1' }, startIndex: 1, endIndex: 2 },
+                      { textRun: { content: '\n' }, startIndex: 2, endIndex: 3 },
+                    ],
+                  },
+                }],
+              },
+              inlineObjects: {
+                'obj-1': {
+                  inlineObjectProperties: {
+                    embeddedObject: {
+                      description: 'Line one\nLine two',
+                      imageProperties: { contentUri: 'https://lh3.googleusercontent.com/xyz' },
+                    },
+                  },
+                },
+              },
+            },
+          }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      const imageLine = text.split('\n').find(l => l.includes('objectId=obj-1'));
+      assert.ok(imageLine, 'image token should be present on one line');
+      // The newline in the alt text must be collapsed to a space, not leak into output.
+      assert.ok(imageLine!.includes('alt="Line one Line two"'), `alt not single-lined: ${imageLine}`);
+    });
+
+    it('escapes square brackets in image URIs so the placeholder is not truncated', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Doc with bracketed uri',
+          tabs: [{
+            tabProperties: { title: 'Main' },
+            documentTab: {
+              body: {
+                content: [{
+                  paragraph: {
+                    elements: [
+                      { inlineObjectElement: { inlineObjectId: 'obj-1' }, startIndex: 1, endIndex: 2 },
+                      { textRun: { content: '\n' }, startIndex: 2, endIndex: 3 },
+                    ],
+                  },
+                }],
+              },
+              inlineObjects: {
+                'obj-1': {
+                  inlineObjectProperties: {
+                    embeddedObject: {
+                      imageProperties: { sourceUri: 'https://example.com/a]b.png' },
+                    },
+                  },
+                },
+              },
+            },
+          }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      const imageLine = text.split('\n').find(l => l.includes('objectId=obj-1'));
+      assert.ok(imageLine, 'image token should be present');
+      // The `]` in the URI must be escaped so it does not close the [image: ...] delimiter early.
+      assert.ok(imageLine!.includes('sourceUri=https://example.com/a\\]b.png'), `uri not escaped: ${imageLine}`);
+      assert.ok(imageLine!.trimEnd().endsWith(']'), 'placeholder should still be closed by a trailing ]');
+    });
+
     it('renders inline images inside table cells without embedded pipes', async () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({
         data: {
@@ -1485,7 +1676,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('[^1]'));
+      assert.ok(res.content[0].text!.includes('[^1]'));
     });
 
     it('extracts horizontal rules', async () => {
@@ -1509,7 +1700,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('---'));
+      assert.ok(res.content[0].text!.includes('---'));
     });
 
     it('escapes brackets in rich link titles', async () => {
@@ -1536,7 +1727,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      const text = res.content[0].text;
+      const text = res.content[0].text!;
       assert.ok(text.includes('Budget \\[Draft\\]'), 'brackets in title should be escaped');
       assert.ok(text.includes('(https://docs.google.com/doc/456)'), 'URL should be preserved');
     });
@@ -1567,7 +1758,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('[image]'), 'should show placeholder even without inlineObjects map');
+      assert.ok(res.content[0].text!.includes('[image]'), 'should show placeholder even without inlineObjects map');
     });
 
     it('extracts tables as markdown', async () => {
@@ -1606,11 +1797,11 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('| Owner | Role |'));
-      assert.ok(res.content[0].text.includes('| --- | --- |'));
-      assert.ok(res.content[0].text.includes('| Eero | CEO |'));
-      assert.ok(res.content[0].text.includes('Before table'));
-      assert.ok(res.content[0].text.includes('After table'));
+      assert.ok(res.content[0].text!.includes('| Owner | Role |'));
+      assert.ok(res.content[0].text!.includes('| --- | --- |'));
+      assert.ok(res.content[0].text!.includes('| Eero | CEO |'));
+      assert.ok(res.content[0].text!.includes('Before table'));
+      assert.ok(res.content[0].text!.includes('After table'));
     });
 
     it('extracts table of contents content', async () => {
@@ -1640,9 +1831,9 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('1. Introduction'));
-      assert.ok(res.content[0].text.includes('2. Overview'));
-      assert.ok(res.content[0].text.includes('Body text here'));
+      assert.ok(res.content[0].text!.includes('1. Introduction'));
+      assert.ok(res.content[0].text!.includes('2. Overview'));
+      assert.ok(res.content[0].text!.includes('Body text here'));
     });
 
     it('extracts multi-row table with empty cells', async () => {
@@ -1677,8 +1868,8 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('| Field | Value |'));
-      assert.ok(res.content[0].text.includes('| Status |  |'));
+      assert.ok(res.content[0].text!.includes('| Field | Value |'));
+      assert.ok(res.content[0].text!.includes('| Status |  |'));
     });
 
     it('escapes pipe characters in cell text', async () => {
@@ -1711,7 +1902,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      const text = res.content[0].text;
+      const text = res.content[0].text!;
       assert.ok(text.includes('Option A \\| Option B'), 'pipe in cell text should be escaped');
       assert.ok(!text.includes('| Option A | Option B |'), 'unescaped pipe should not produce extra columns');
     });
@@ -1749,7 +1940,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      const text = res.content[0].text;
+      const text = res.content[0].text!;
       assert.ok(text.includes('Hello World'), 'multi-paragraph cell should join with space');
       assert.ok(!text.includes('HelloWorld'), 'paragraphs should not be concatenated without separator');
     });
@@ -1870,6 +2061,39 @@ describe('Docs tools', () => {
       assert.ok(res.content[0].text!.includes('no fetchable image content'));
     });
 
+    it('surfaces the external sourceUri instead of a misleading no-image error', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Doc with source-only image',
+          body: { content: [] },
+          inlineObjects: {
+            'obj-1': {
+              inlineObjectProperties: {
+                embeddedObject: { imageProperties: { sourceUri: 'https://example.com/a.png' } },
+              },
+            },
+          },
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocImage', { documentId: 'doc-1', inlineObjectId: 'obj-1' });
+      assert.equal(res.isError, true);
+      const text = res.content[0].text!;
+      assert.ok(text.includes('https://example.com/a.png'), text);
+      assert.ok(!text.includes('embedded chart or drawing'), 'should not use the no-image message when a sourceUri exists');
+    });
+
+    it('reports a non-contradictory decimal size when the image exceeds the 40 MB cap', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: imageDocData }));
+      const oversized = new Uint8Array(42257613).buffer; // ~40.3 MB, just over the 40 MB cap
+      ctx.setAuthRequest(async () => ({ data: oversized, headers: { 'content-type': 'image/png' } }));
+      const res = await callTool(ctx.client, 'getGoogleDocImage', { documentId: 'doc-1', inlineObjectId: 'obj-1' });
+      assert.equal(res.isError, true);
+      const text = res.content[0].text!;
+      assert.ok(text.includes('40.3 MB'), `expected decimal size, got: ${text}`);
+      assert.ok(text.includes('limit 40 MB'), text);
+      assert.ok(!text.includes('(40 MB,'), 'must not round to a self-contradictory "40 MB, limit 40 MB"');
+    });
+
     it('validation error when inlineObjectId is missing', async () => {
       const res = await callTool(ctx.client, 'getGoogleDocImage', { documentId: 'doc-1' });
       assert.equal(res.isError, true);
@@ -1887,7 +2111,7 @@ describe('Docs tools', () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: longDoc('X'.repeat(120)) }));
       const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', offset: 0, limit: 50 });
       assert.equal(res.isError, false);
-      const r = JSON.parse(res.content[0].text);
+      const r = JSON.parse(res.content[0].text!);
       assert.equal(r.content.length, 50);
       assert.equal(r.outputLength, 120);
       assert.equal(r.documentLength, 120);
@@ -1898,7 +2122,7 @@ describe('Docs tools', () => {
     it('last page reports hasMore false and nextOffset at end', async () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: longDoc('Y'.repeat(40)) }));
       const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', offset: 0, limit: 50000 });
-      const r = JSON.parse(res.content[0].text);
+      const r = JSON.parse(res.content[0].text!);
       assert.equal(r.content.length, 40);
       assert.equal(r.hasMore, false);
       assert.equal(r.nextOffset, 40);
@@ -1907,7 +2131,7 @@ describe('Docs tools', () => {
     it('offset beyond document returns empty content', async () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: longDoc('Z'.repeat(30)) }));
       const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', offset: 9999, limit: 50 });
-      const r = JSON.parse(res.content[0].text);
+      const r = JSON.parse(res.content[0].text!);
       assert.equal(r.content, '');
       assert.equal(r.hasMore, false);
       assert.equal(r.nextOffset, 30);
@@ -1916,7 +2140,7 @@ describe('Docs tools', () => {
     it('markdown format includes the title in the first page', async () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: longDoc('Body text\n') }));
       const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', format: 'markdown', offset: 0, limit: 50000 });
-      const r = JSON.parse(res.content[0].text);
+      const r = JSON.parse(res.content[0].text!);
       assert.ok(r.content.startsWith('# Big Doc'), 'first page should start with the markdown title');
       assert.ok(r.outputLength > r.documentLength, 'outputLength includes the title prefix, documentLength does not');
     });
@@ -1924,7 +2148,7 @@ describe('Docs tools', () => {
     it('reads a specific tab by tabId', async () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: mockDocs.multiTab() }));
       const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', tabId: 'tab-2', offset: 0, limit: 50000 });
-      const r = JSON.parse(res.content[0].text);
+      const r = JSON.parse(res.content[0].text!);
       assert.ok(r.content.includes('Second tab'));
       assert.ok(!r.content.includes('First tab'));
     });
@@ -1933,7 +2157,7 @@ describe('Docs tools', () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: mockDocs.multiTab() }));
       const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', tabId: 'nope' });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('not found'));
+      assert.ok(res.content[0].text!.includes('not found'));
     });
 
     it('rejects the removed json format', async () => {
@@ -1966,7 +2190,7 @@ describe('Docs tools', () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: indexedDoc() }));
       const res = await callTool(ctx.client, 'getGoogleDocContentPaginated', { documentId: 'doc-1', offset: 0, limit: 50000 });
       assert.equal(res.isError, false);
-      const r = JSON.parse(res.content[0].text);
+      const r = JSON.parse(res.content[0].text!);
       assert.ok(r.content.includes('[1-6] Alpha'));
       assert.ok(r.content.includes('[7-12] Bravo'));
       assert.equal(r.hasMore, false);
@@ -1977,7 +2201,7 @@ describe('Docs tools', () => {
     it('snaps the page end to a line boundary so index prefixes are never split', async () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: indexedDoc() }));
       const page1 = await callTool(ctx.client, 'getGoogleDocContentPaginated', { documentId: 'doc-1', offset: 0, limit: 50 });
-      const r1 = JSON.parse(page1.content[0].text);
+      const r1 = JSON.parse(page1.content[0].text!);
       assert.ok(r1.content.endsWith('\n'), 'snapped page must end on a newline');
       assert.ok(r1.content.includes('[1-6] Alpha'), 'the Alpha line must be whole');
       assert.ok(!r1.content.includes('[7-12'), 'the Bravo prefix must not be partially included');
@@ -1985,18 +2209,18 @@ describe('Docs tools', () => {
 
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: indexedDoc() }));
       const page2 = await callTool(ctx.client, 'getGoogleDocContentPaginated', { documentId: 'doc-1', offset: r1.nextOffset, limit: 50 });
-      const r2 = JSON.parse(page2.content[0].text);
+      const r2 = JSON.parse(page2.content[0].text!);
       assert.ok(r2.content.startsWith('[7-12] Bravo'), 'next page must start at a clean index prefix');
     });
 
     it('makes forward progress when a single line exceeds the limit', async () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: oneLongLine() }));
       const page1 = await callTool(ctx.client, 'getGoogleDocContentPaginated', { documentId: 'doc-1', offset: 0, limit: 50 });
-      const r1 = JSON.parse(page1.content[0].text);
+      const r1 = JSON.parse(page1.content[0].text!);
 
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: oneLongLine() }));
       const page2 = await callTool(ctx.client, 'getGoogleDocContentPaginated', { documentId: 'doc-1', offset: r1.nextOffset, limit: 50 });
-      const r2 = JSON.parse(page2.content[0].text);
+      const r2 = JSON.parse(page2.content[0].text!);
       assert.ok(r2.nextOffset > r1.nextOffset, 'pagination must advance even with no newline in the window');
       assert.ok(r2.content.length > 0, 'page must not be empty');
       assert.equal(r2.hasMore, true);
@@ -2005,7 +2229,7 @@ describe('Docs tools', () => {
     it('offset beyond document returns empty content', async () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: indexedDoc() }));
       const res = await callTool(ctx.client, 'getGoogleDocContentPaginated', { documentId: 'doc-1', offset: 999999, limit: 50 });
-      const r = JSON.parse(res.content[0].text);
+      const r = JSON.parse(res.content[0].text!);
       assert.equal(r.content, '');
       assert.equal(r.hasMore, false);
       assert.equal(r.nextOffset, r.outputLength);
@@ -2021,7 +2245,7 @@ describe('Docs tools', () => {
     it('happy path', async () => {
       const res = await callTool(ctx.client, 'deleteComment', { documentId: 'doc-1', commentId: 'c1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('deleted'));
+      assert.ok(res.content[0].text!.includes('deleted'));
     });
 
     it('validation error', async () => {
@@ -2055,7 +2279,7 @@ describe('Docs tools', () => {
     it('insertSmartChip happy path', async () => {
       const res = await callTool(ctx.client, 'insertSmartChip', { documentId: 'doc-1', index: 1, chipType: 'person', personEmail: 'user@example.com' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('user@example.com'));
+      assert.ok(res.content[0].text!.includes('user@example.com'));
 
       // Verify the batchUpdate request uses insertPerson (not insertInlineObject)
       const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
@@ -2091,8 +2315,8 @@ describe('Docs tools', () => {
     it('creates footnote at index without content', async () => {
       const res = await callTool(ctx.client, 'createFootnote', { documentId: 'doc-1', index: 5 });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('fn-123'));
-      assert.ok(res.content[0].text.includes('at index 5'));
+      assert.ok(res.content[0].text!.includes('fn-123'));
+      assert.ok(res.content[0].text!.includes('at index 5'));
 
       const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
       assert.equal(calls.length, 1);
@@ -2104,7 +2328,7 @@ describe('Docs tools', () => {
     it('creates footnote with content (two batchUpdate calls)', async () => {
       const res = await callTool(ctx.client, 'createFootnote', { documentId: 'doc-1', index: 3, content: 'See reference.' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Content inserted'));
+      assert.ok(res.content[0].text!.includes('Content inserted'));
 
       const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
       assert.equal(calls.length, 2);
@@ -2119,7 +2343,7 @@ describe('Docs tools', () => {
     it('creates footnote with endOfSegment', async () => {
       const res = await callTool(ctx.client, 'createFootnote', { documentId: 'doc-1', endOfSegment: true });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('end of document'));
+      assert.ok(res.content[0].text!.includes('end of document'));
 
       const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
       const req = calls[0].args[0].requestBody.requests[0];
@@ -2135,7 +2359,7 @@ describe('Docs tools', () => {
     it('threads tabId into the footnote-reference location (#114)', async () => {
       const res = await callTool(ctx.client, 'createFootnote', { documentId: 'doc-1', index: 5, tabId: 'tab-2' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('in tab tab-2'));
+      assert.ok(res.content[0].text!.includes('in tab tab-2'));
 
       const req = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate')[0].args[0].requestBody.requests[0];
       assert.equal(req.createFootnote.location.index, 5);
@@ -2164,7 +2388,7 @@ describe('Docs tools', () => {
     it('omits tabId from locations when none is given (#114)', async () => {
       const res = await callTool(ctx.client, 'createFootnote', { documentId: 'doc-1', index: 5 });
       assert.equal(res.isError, false);
-      assert.ok(!res.content[0].text.includes('in tab'));
+      assert.ok(!res.content[0].text!.includes('in tab'));
 
       const req = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate')[0].args[0].requestBody.requests[0];
       assert.equal(req.createFootnote.location.tabId, undefined);
@@ -2185,9 +2409,9 @@ describe('Docs tools', () => {
       });
 
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('fn-orphan'));
-      assert.ok(res.content[0].text.includes('failed to insert content'));
-      assert.ok(res.content[0].text.includes('Simulated Docs API failure'));
+      assert.ok(res.content[0].text!.includes('fn-orphan'));
+      assert.ok(res.content[0].text!.includes('failed to insert content'));
+      assert.ok(res.content[0].text!.includes('Simulated Docs API failure'));
 
       const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
       assert.equal(calls.length, 2);
@@ -2216,14 +2440,14 @@ describe('Docs tools', () => {
       it('omits tabId from the location by default', async () => {
         const res = await callTool(ctx.client, 'insertTable', { documentId: 'doc-1', rows: 2, columns: 2, index: 1 });
         assert.equal(res.isError, false);
-        assert.ok(!res.content[0].text.includes('in tab'));
+        assert.ok(!res.content[0].text!.includes('in tab'));
         assert.equal(lastRequests()[0].insertTable.location.tabId, undefined);
       });
 
       it('threads tabId into the location', async () => {
         const res = await callTool(ctx.client, 'insertTable', { documentId: 'doc-1', rows: 2, columns: 2, index: 1, tabId: 'tab-2' });
         assert.equal(res.isError, false);
-        assert.ok(res.content[0].text.includes('in tab tab-2'));
+        assert.ok(res.content[0].text!.includes('in tab tab-2'));
         const req = lastRequests()[0].insertTable;
         assert.equal(req.location.tabId, 'tab-2');
         assert.equal(req.location.index, 1);
@@ -2240,7 +2464,7 @@ describe('Docs tools', () => {
       it('threads tabId into the location', async () => {
         const res = await callTool(ctx.client, 'insertSmartChip', { documentId: 'doc-1', index: 1, chipType: 'person', personEmail: 'a@b.com', tabId: 'tab-2' });
         assert.equal(res.isError, false);
-        assert.ok(res.content[0].text.includes('in tab tab-2'));
+        assert.ok(res.content[0].text!.includes('in tab tab-2'));
         assert.equal(lastRequests()[0].insertPerson.location.tabId, 'tab-2');
       });
     });
@@ -2264,7 +2488,7 @@ describe('Docs tools', () => {
         ctx.mocks.docs.service.documents.get._resetImpl(); // genuine default mock
         const res = await callTool(ctx.client, 'applyTextStyle', { documentId: 'doc-1', textToFind: 'Hello', bold: true });
         assert.equal(res.isError, false);
-        assert.ok(!res.content[0].text.includes('in tab'));
+        assert.ok(!res.content[0].text!.includes('in tab'));
         assertNoTabGets();
         assert.equal(lastRequests()[0].updateTextStyle.range.tabId, undefined);
       });
@@ -2272,7 +2496,7 @@ describe('Docs tools', () => {
       it('threads tabId into the range (explicit-index mode)', async () => {
         const res = await callTool(ctx.client, 'applyTextStyle', { documentId: 'doc-1', startIndex: 1, endIndex: 5, bold: true, tabId: 'tab-2' });
         assert.equal(res.isError, false);
-        assert.ok(res.content[0].text.includes('in tab tab-2'));
+        assert.ok(res.content[0].text!.includes('in tab tab-2'));
         assert.equal(lastRequests()[0].updateTextStyle.range.tabId, 'tab-2');
       });
 
@@ -2299,8 +2523,8 @@ describe('Docs tools', () => {
         const before = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate').length;
         const res = await callTool(ctx.client, 'applyTextStyle', { documentId: 'doc-1', textToFind: 'x', bold: true, tabId: 'missing' });
         assert.equal(res.isError, true);
-        assert.ok(res.content[0].text.includes('Tab with ID "missing" not found'));
-        assert.ok(res.content[0].text.includes('listDocumentTabs'));
+        assert.ok(res.content[0].text!.includes('Tab with ID "missing" not found'));
+        assert.ok(res.content[0].text!.includes('listDocumentTabs'));
         assert.equal(ctx.mocks.docs.tracker.getCalls('documents.batchUpdate').length, before);
         ctx.mocks.docs.service.documents.get._resetImpl();
       });
@@ -2311,7 +2535,7 @@ describe('Docs tools', () => {
         ctx.mocks.docs.service.documents.get._resetImpl(); // genuine default mock
         const res = await callTool(ctx.client, 'applyParagraphStyle', { documentId: 'doc-1', textToFind: 'Hello', alignment: 'CENTER' });
         assert.equal(res.isError, false);
-        assert.ok(!res.content[0].text.includes('in tab'));
+        assert.ok(!res.content[0].text!.includes('in tab'));
         assertNoTabGets();
         assert.equal(lastRequests()[0].updateParagraphStyle.range.tabId, undefined);
       });
@@ -2324,7 +2548,7 @@ describe('Docs tools', () => {
         }));
         const res = await callTool(ctx.client, 'applyParagraphStyle', { documentId: 'doc-1', indexWithinParagraph: 2, alignment: 'CENTER', tabId: 'tab-2' });
         assert.equal(res.isError, false);
-        assert.ok(res.content[0].text.includes('in tab tab-2'));
+        assert.ok(res.content[0].text!.includes('in tab tab-2'));
         assert.equal(lastRequests()[0].updateParagraphStyle.range.tabId, 'tab-2');
         ctx.mocks.docs.service.documents.get._resetImpl();
       });
@@ -2339,7 +2563,7 @@ describe('Docs tools', () => {
         }));
         const res = await callTool(ctx.client, 'applyParagraphStyle', { documentId: 'doc-1', textToFind: 'Find me', alignment: 'CENTER', tabId: 'tab-2' });
         assert.equal(res.isError, false);
-        assert.ok(res.content[0].text.includes('in tab tab-2'));
+        assert.ok(res.content[0].text!.includes('in tab tab-2'));
 
         // The whole point of the optimization: range + enclosing-paragraph
         // resolution share one includeTabsContent fetch, not two.
@@ -2361,8 +2585,8 @@ describe('Docs tools', () => {
         const before = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate').length;
         const res = await callTool(ctx.client, 'applyParagraphStyle', { documentId: 'doc-1', textToFind: 'x', alignment: 'CENTER', tabId: 'missing' });
         assert.equal(res.isError, true);
-        assert.ok(res.content[0].text.includes('Tab with ID "missing" not found'));
-        assert.ok(res.content[0].text.includes('listDocumentTabs'));
+        assert.ok(res.content[0].text!.includes('Tab with ID "missing" not found'));
+        assert.ok(res.content[0].text!.includes('listDocumentTabs'));
         assert.equal(ctx.mocks.docs.tracker.getCalls('documents.batchUpdate').length, before);
         ctx.mocks.docs.service.documents.get._resetImpl();
       });
@@ -2373,7 +2597,7 @@ describe('Docs tools', () => {
         ctx.mocks.docs.service.documents.get._resetImpl(); // genuine default mock
         const res = await callTool(ctx.client, 'createParagraphBullets', { documentId: 'doc-1', textToFind: 'Hello', bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE' });
         assert.equal(res.isError, false);
-        assert.ok(!res.content[0].text.includes('in tab'));
+        assert.ok(!res.content[0].text!.includes('in tab'));
         assertNoTabGets();
         assert.equal(lastRequests()[0].createParagraphBullets.range.tabId, undefined);
       });
@@ -2381,7 +2605,7 @@ describe('Docs tools', () => {
       it('threads tabId into the range (explicit-index mode)', async () => {
         const res = await callTool(ctx.client, 'createParagraphBullets', { documentId: 'doc-1', startIndex: 1, endIndex: 5, bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE', tabId: 'tab-2' });
         assert.equal(res.isError, false);
-        assert.ok(res.content[0].text.includes('in tab tab-2'));
+        assert.ok(res.content[0].text!.includes('in tab tab-2'));
         assert.equal(lastRequests()[0].createParagraphBullets.range.tabId, 'tab-2');
       });
 
@@ -2397,7 +2621,7 @@ describe('Docs tools', () => {
         ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: { body: { content: tableContent() } } }));
         const res = await callTool(ctx.client, 'editTableCell', { documentId: 'doc-1', tableStartIndex: 5, rowIndex: 0, columnIndex: 0, textContent: 'Hi' });
         assert.equal(res.isError, false);
-        assert.ok(!res.content[0].text.includes('in tab'));
+        assert.ok(!res.content[0].text!.includes('in tab'));
         const reqs = lastRequests();
         for (const r of reqs) {
           const inner = r.deleteContentRange ?? r.insertText;
@@ -2412,7 +2636,7 @@ describe('Docs tools', () => {
         }));
         const res = await callTool(ctx.client, 'editTableCell', { documentId: 'doc-1', tableStartIndex: 5, rowIndex: 0, columnIndex: 0, textContent: 'Hi', bold: true, alignment: 'CENTER', tabId: 'tab-2' });
         assert.equal(res.isError, false);
-        assert.ok(res.content[0].text.includes('in tab tab-2'));
+        assert.ok(res.content[0].text!.includes('in tab tab-2'));
 
         const getCalls = ctx.mocks.docs.tracker.getCalls('documents.get');
         assert.equal(getCalls[getCalls.length - 1]?.args?.[0]?.includeTabsContent, true);
@@ -2433,7 +2657,7 @@ describe('Docs tools', () => {
         const before = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate').length;
         const res = await callTool(ctx.client, 'editTableCell', { documentId: 'doc-1', tableStartIndex: 5, rowIndex: 0, columnIndex: 0, textContent: 'Hi', tabId: 'missing' });
         assert.equal(res.isError, true);
-        assert.ok(res.content[0].text.includes('Tab with ID "missing" not found'));
+        assert.ok(res.content[0].text!.includes('Tab with ID "missing" not found'));
         assert.equal(ctx.mocks.docs.tracker.getCalls('documents.batchUpdate').length, before);
         ctx.mocks.docs.service.documents.get._resetImpl();
       });

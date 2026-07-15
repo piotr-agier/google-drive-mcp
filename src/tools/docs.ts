@@ -12,6 +12,11 @@ import { withRetry } from '../utils/retry.js';
 // Helper functions
 // ---------------------------------------------------------------------------
 
+// Upper bound on an inline image returned by getGoogleDocImage. Enforced up
+// front via the request's maxContentLength (so an oversized body is aborted
+// mid-download) and re-checked against the buffer as a backstop.
+const MAX_IMAGE_BYTES = 40 * 1024 * 1024;
+
 // Pure helper – no context needed
 function hexToRgbColor(hex: string): { red: number; green: number; blue: number } | null {
   if (!hex) return null;
@@ -73,6 +78,14 @@ function escapeBrackets(s: string): string {
   return s.replace(/[\[\]]/g, '\\$&');
 }
 
+// Percent-encode the characters that would break a Markdown link destination
+// `![alt](uri "title")` — spaces and parentheses (plus any stray control chars).
+function escapeMarkdownUri(uri: string): string {
+  return uri.replace(/[\s()]/g, (c) =>
+    c === '(' ? '%28' : c === ')' ? '%29' : encodeURIComponent(c)
+  );
+}
+
 // Normalized view of an inline image, resolved from the document's inlineObjects
 // map. Returns null when the map is absent or has no entry for the id (callers
 // fall back to a bare `[image]` placeholder).
@@ -95,7 +108,9 @@ function getInlineImageMeta(inlineObjectId: string, inlineObjects?: any): Inline
   if (img?.contentUri) meta.contentUri = img.contentUri;
   if (img?.sourceUri) meta.sourceUri = img.sourceUri;
   const alt = embedded?.description || embedded?.title;
-  if (alt) meta.altText = alt;
+  // Collapse newlines/CR (and surrounding whitespace) to a single space so the
+  // single-line placeholder invariant holds even for multi-line alt text.
+  if (alt) meta.altText = String(alt).replace(/\s*[\r\n]+\s*/g, ' ');
   const w = embedded?.size?.width?.magnitude;
   const h = embedded?.size?.height?.magnitude;
   if (w != null) meta.width = Math.round(w);
@@ -127,8 +142,10 @@ function renderImagePlaceholder(meta: InlineImageMeta | null): string {
   if (!meta) return '[image]';
   const parts: string[] = [`objectId=${meta.objectId}`];
   if (meta.altText) parts.push(`alt="${escapeBrackets(meta.altText).replace(/"/g, '\\"')}"`);
-  if (meta.contentUri) parts.push(`contentUri=${meta.contentUri}`);
-  if (meta.sourceUri) parts.push(`sourceUri=${meta.sourceUri}`);
+  // Bracket-escape the URIs too: a raw `]` in a source/content URL would
+  // otherwise prematurely close the `[image: ...]` delimiter.
+  if (meta.contentUri) parts.push(`contentUri=${escapeBrackets(meta.contentUri)}`);
+  if (meta.sourceUri) parts.push(`sourceUri=${escapeBrackets(meta.sourceUri)}`);
   if (meta.width != null && meta.height != null) {
     parts.push(`size=${meta.width}x${meta.height}${meta.unit || 'pt'}`);
   }
@@ -140,10 +157,14 @@ function renderImagePlaceholder(meta: InlineImageMeta | null): string {
 // single-line placeholder when no fetchable URI is available.
 function renderImageMarkdown(meta: InlineImageMeta | null): string {
   if (!meta) return '[image]';
-  const uri = meta.contentUri || meta.sourceUri;
+  // Prefer the durable original source URL. The Google contentUri is ephemeral
+  // (expires ~30 min), so embedding it in persisted markdown would 404; fall back
+  // to it only when there is no source URL. The durable objectId stays in the
+  // title slot for reliable re-fetch via getGoogleDocImage.
+  const uri = meta.sourceUri || meta.contentUri;
   if (!uri) return renderImagePlaceholder(meta);
   const alt = meta.altText ? escapeBrackets(meta.altText) : '';
-  return `![${alt}](${uri} "objectId=${meta.objectId}")`;
+  return `![${alt}](${escapeMarkdownUri(uri)} "objectId=${meta.objectId}")`;
 }
 
 // Extract plain text from body content (paragraphs + tables). Inline images are
@@ -727,6 +748,10 @@ function buildDocFormattedContent(
     text: string;
     startIndex: number;
     endIndex: number;
+    // True for inline replacements (images, persons, rich links, footnotes,
+    // rules) whose rendered text length is unrelated to their real doc span, so
+    // the displayed edit range must use [startIndex, endIndex), not text length.
+    atomic?: boolean;
     fontFamily?: string;
     fontSize?: number;
     bold?: boolean;
@@ -808,6 +833,7 @@ function buildDocFormattedContent(
                   text: inlineText,
                   startIndex: textElement.startIndex,
                   endIndex: textElement.endIndex,
+                  atomic: true,
                 });
               }
             }
@@ -849,6 +875,19 @@ function buildDocFormattedContent(
     for (const segment of segments) {
       const hasMeta = withFormatting && hasFormattingInfo(segment);
       const meta = hasMeta ? buildMetaLine(segment) : null;
+      // Atomic inline replacements occupy exactly [startIndex, endIndex) in the
+      // doc regardless of how long their placeholder text is. Emit that real
+      // range on one line so index-based edits target the object, not the text
+      // that follows it.
+      if (segment.atomic) {
+        const line = segment.text.replace(/\n/g, ' ').trim();
+        if (line) {
+          result += meta
+            ? `[${segment.startIndex}-${segment.endIndex}] ${meta}\n  ${line}\n`
+            : `[${segment.startIndex}-${segment.endIndex}] ${line}\n`;
+        }
+        continue;
+      }
       const lines = segment.text.split('\n');
       let offset = segment.startIndex;
       for (const line of lines) {
@@ -2299,20 +2338,35 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
       const contentUri = embedded.imageProperties?.contentUri;
       if (!contentUri) {
+        // An image inserted from a URL exposes only sourceUri (an external URL).
+        // We deliberately don't fetch it server-side (that would send Google
+        // credentials to a third-party host), so surface the URL instead of the
+        // misleading "embedded chart or drawing" message the readers contradict.
+        const sourceUri = embedded.imageProperties?.sourceUri;
+        if (sourceUri) {
+          return errorResponse(
+            `Inline object "${a.inlineObjectId}" has no Google-hosted image to fetch; it references an external source URL that this tool does not retrieve: ${sourceUri} — fetch it directly.`
+          );
+        }
         return errorResponse(
           `Inline object "${a.inlineObjectId}" has no fetchable image content (e.g. an embedded chart or drawing rather than a raster image).`
         );
       }
 
       // Authenticated fetch of the (fresh) contentUri — same primitive used for
-      // Drive export links elsewhere in this codebase.
-      const resp = await ctx.authClient.request({ url: contentUri, responseType: 'arraybuffer' });
+      // Drive export links elsewhere in this codebase. maxContentLength aborts an
+      // oversized body mid-download rather than buffering it all first; the
+      // byteLength check below is a backstop for responses lacking Content-Length.
+      const resp = await ctx.authClient.request({
+        url: contentUri,
+        responseType: 'arraybuffer',
+        maxContentLength: MAX_IMAGE_BYTES,
+      });
       const buffer = Buffer.from(resp.data as ArrayBuffer);
 
-      const MAX_IMAGE_BYTES = 40 * 1024 * 1024;
       if (buffer.byteLength > MAX_IMAGE_BYTES) {
         return errorResponse(
-          `Image is too large to return inline (${Math.round(buffer.byteLength / (1024 * 1024))} MB, limit 40 MB).`
+          `Image is too large to return inline (${(buffer.byteLength / (1024 * 1024)).toFixed(1)} MB, limit 40 MB).`
         );
       }
 

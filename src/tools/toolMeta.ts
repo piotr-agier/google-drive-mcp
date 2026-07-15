@@ -90,6 +90,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
   getComment: read(DRIVE_READ_SCOPES),
   getGoogleDocContent: read(DOCS_READ_SCOPES),
   getGoogleDocContentPaginated: read(DOCS_READ_SCOPES),
+  getGoogleDocImage: read(DOCS_READ_SCOPES),
   listGoogleDocs: read(DRIVE_READ_SCOPES),
   getDocumentInfo: read(DOCS_READ_SCOPES),
   readSmartChips: read(DOCS_READ_SCOPES),

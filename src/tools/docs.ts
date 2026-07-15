@@ -67,14 +67,106 @@ function findTabById(tabs: any[], targetId: string): any | null {
   return null;
 }
 
-// Extract plain text from body content (paragraphs + tables)
-function extractText(bodyContent: any[]): string {
+// Escape square brackets so bracket-delimited placeholders / markdown links
+// remain unambiguous when the payload itself contains `[` or `]`.
+function escapeBrackets(s: string): string {
+  return s.replace(/[\[\]]/g, '\\$&');
+}
+
+// Normalized view of an inline image, resolved from the document's inlineObjects
+// map. Returns null when the map is absent or has no entry for the id (callers
+// fall back to a bare `[image]` placeholder).
+interface InlineImageMeta {
+  objectId: string;
+  contentUri?: string;
+  sourceUri?: string;
+  altText?: string;
+  width?: number;
+  height?: number;
+  unit?: string;
+}
+
+function getInlineImageMeta(inlineObjectId: string, inlineObjects?: any): InlineImageMeta | null {
+  const obj = inlineObjects?.[inlineObjectId];
+  if (!obj) return null;
+  const embedded = obj.inlineObjectProperties?.embeddedObject;
+  const meta: InlineImageMeta = { objectId: inlineObjectId };
+  const img = embedded?.imageProperties;
+  if (img?.contentUri) meta.contentUri = img.contentUri;
+  if (img?.sourceUri) meta.sourceUri = img.sourceUri;
+  const alt = embedded?.description || embedded?.title;
+  if (alt) meta.altText = alt;
+  const w = embedded?.size?.width?.magnitude;
+  const h = embedded?.size?.height?.magnitude;
+  if (w != null) meta.width = Math.round(w);
+  if (h != null) meta.height = Math.round(h);
+  const unit = embedded?.size?.width?.unit || embedded?.size?.height?.unit;
+  if (unit) meta.unit = String(unit).toLowerCase();
+  return meta;
+}
+
+// Locate an inline object's embeddedObject by id across the whole document —
+// every tab's inlineObjects map plus the legacy single-body map. Returns the
+// embeddedObject (which carries imageProperties) or null when not found.
+function findInlineObjectById(doc: any, inlineObjectId: string): any | null {
+  const fromMap = (m: any) => m?.[inlineObjectId]?.inlineObjectProperties?.embeddedObject;
+  const tabs = doc.tabs as any[] | undefined;
+  if (tabs && tabs.length > 0) {
+    for (const { tab } of collectAllTabsWithLevel(tabs)) {
+      const embedded = fromMap(tab.documentTab?.inlineObjects);
+      if (embedded) return embedded;
+    }
+  }
+  return fromMap(doc.inlineObjects) || null;
+}
+
+// Single-line, self-describing image placeholder used by the text and indexed
+// readers. Deliberately contains no newline (keeps index/pagination math intact)
+// and no unescaped `|` (keeps table-cell escaping from mangling it).
+function renderImagePlaceholder(meta: InlineImageMeta | null): string {
+  if (!meta) return '[image]';
+  const parts: string[] = [`objectId=${meta.objectId}`];
+  if (meta.altText) parts.push(`alt="${escapeBrackets(meta.altText).replace(/"/g, '\\"')}"`);
+  if (meta.contentUri) parts.push(`contentUri=${meta.contentUri}`);
+  if (meta.sourceUri) parts.push(`sourceUri=${meta.sourceUri}`);
+  if (meta.width != null && meta.height != null) {
+    parts.push(`size=${meta.width}x${meta.height}${meta.unit || 'pt'}`);
+  }
+  return `[image: ${parts.join(' ')}]`;
+}
+
+// Markdown rendering: a real `![alt](uri)` carrying the durable objectId in the
+// title slot so the caller can pass it to getGoogleDocImage. Falls back to the
+// single-line placeholder when no fetchable URI is available.
+function renderImageMarkdown(meta: InlineImageMeta | null): string {
+  if (!meta) return '[image]';
+  const uri = meta.contentUri || meta.sourceUri;
+  if (!uri) return renderImagePlaceholder(meta);
+  const alt = meta.altText ? escapeBrackets(meta.altText) : '';
+  return `![${alt}](${uri} "objectId=${meta.objectId}")`;
+}
+
+// Extract plain text from body content (paragraphs + tables). Inline images are
+// rendered from `inlineObjects` (markdown `![alt](uri)` or a single-line
+// placeholder) instead of being dropped.
+function extractText(
+  bodyContent: any[],
+  inlineObjects?: any,
+  format: 'text' | 'markdown' = 'text'
+): string {
+  const renderImage = (id: string): string =>
+    format === 'markdown'
+      ? renderImageMarkdown(getInlineImageMeta(id, inlineObjects))
+      : renderImagePlaceholder(getInlineImageMeta(id, inlineObjects));
+
   let result = '';
   for (const element of bodyContent) {
     if (element.paragraph?.elements) {
       for (const elem of element.paragraph.elements) {
         if (elem.textRun?.content) {
           result += elem.textRun.content;
+        } else if (elem.inlineObjectElement?.inlineObjectId) {
+          result += renderImage(elem.inlineObjectElement.inlineObjectId);
         }
       }
     } else if (element.table) {
@@ -85,6 +177,8 @@ function extractText(bodyContent: any[]): string {
               for (const elem of cellContent.paragraph.elements) {
                 if (elem.textRun?.content) {
                   result += elem.textRun.content;
+                } else if (elem.inlineObjectElement?.inlineObjectId) {
+                  result += renderImage(elem.inlineObjectElement.inlineObjectId);
                 }
               }
             }
@@ -99,7 +193,11 @@ function extractText(bodyContent: any[]): string {
 }
 
 // Extract full text from a Google Doc, handling tabs and optional tabId filtering
-function extractDocText(doc: any, tabId?: string): { text: string; error?: string } {
+function extractDocText(
+  doc: any,
+  tabId?: string,
+  format: 'text' | 'markdown' = 'text'
+): { text: string; error?: string } {
   let text = '';
   const tabs = doc.tabs as any[] | undefined;
 
@@ -111,7 +209,7 @@ function extractDocText(doc: any, tabId?: string): { text: string; error?: strin
       }
       const bodyContent = tab.documentTab?.body?.content;
       if (bodyContent) {
-        text = extractText(bodyContent);
+        text = extractText(bodyContent, tab.documentTab?.inlineObjects, format);
       }
     } else {
       const allTabs = collectAllTabsWithLevel(tabs);
@@ -124,7 +222,7 @@ function extractDocText(doc: any, tabId?: string): { text: string; error?: strin
           text += `${indent}=== Tab: ${title} ===\n`;
         }
         if (bodyContent) {
-          text += extractText(bodyContent);
+          text += extractText(bodyContent, tab.documentTab?.inlineObjects, format);
         }
         if (isMultiTab) {
           text += '\n';
@@ -134,7 +232,7 @@ function extractDocText(doc: any, tabId?: string): { text: string; error?: strin
   } else {
     const body = doc.body;
     if (body?.content) {
-      text = extractText(body.content);
+      text = extractText(body.content, doc.inlineObjects, format);
     }
   }
 
@@ -647,18 +745,12 @@ function buildDocFormattedContent(
     }
     if (el.richLink?.richLinkProperties) {
       const rl = el.richLink.richLinkProperties;
-      const title = (rl.title || rl.uri || '').replace(/[\[\]]/g, '\\$&');
+      const title = escapeBrackets(rl.title || rl.uri || '');
       const uri = rl.uri;
       return title && uri ? `[${title}](${uri})` : title || null;
     }
     if (el.inlineObjectElement?.inlineObjectId) {
-      if (inlineObjects) {
-        const obj = inlineObjects[el.inlineObjectElement.inlineObjectId];
-        const desc = obj?.inlineObjectProperties?.embeddedObject?.description
-                  || obj?.inlineObjectProperties?.embeddedObject?.title;
-        return desc ? `[image: ${desc}]` : '[image]';
-      }
-      return '[image]';
+      return renderImagePlaceholder(getInlineImageMeta(el.inlineObjectElement.inlineObjectId, inlineObjects));
     }
     if (el.footnoteReference) {
       return `[^${el.footnoteReference.footnoteNumber || ''}]`;
@@ -1114,6 +1206,12 @@ const UpdateGoogleDocSchema = z.object({
 const GetGoogleDocContentSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
   includeFormatting: z.boolean().optional(),
+});
+
+const GetGoogleDocImageSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  inlineObjectId: z.string().min(1, "Inline object ID is required"),
+  outputFormat: z.enum(['image', 'base64']).optional().default('image'),
 });
 
 const InsertTextSchema = z.object({
@@ -1680,6 +1778,19 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
   {
+    name: "getGoogleDocImage",
+    description: "Fetch the bytes of an inline image embedded in a Google Doc, keyed by its inline object ID. Returns a native image the model can see (or base64). The doc is re-fetched so the underlying image URL is always fresh — pass the objectId, never a raw contentUri (those expire). Inline images only; floating/anchored images are not supported.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentId: { type: "string", description: "Document ID" },
+        inlineObjectId: { type: "string", description: "The inline object ID shown in readGoogleDoc / getGoogleDocContent image placeholders (the objectId=... value, e.g. \"kix.abc123\")" },
+        outputFormat: { type: "string", enum: ["image", "base64"], description: "\"image\" (default) returns a native MCP image block the model can view; \"base64\" returns a JSON envelope { inlineObjectId, mimeType, byteLength, dataBase64 } for programmatic use (forwarding, save-to-disk)" }
+      },
+      required: ["documentId", "inlineObjectId"]
+    }
+  },
+  {
     name: "insertTable",
     description: "Insert a new table with the specified dimensions at a given index. For multi-tab docs, specify tabId to target a specific tab.",
     inputSchema: {
@@ -2166,6 +2277,68 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       };
     }
 
+    case "getGoogleDocImage": {
+      const validation = GetGoogleDocImageSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const a = validation.data;
+
+      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+      // Re-fetch the doc so the resolved contentUri is fresh (they expire ~30 min).
+      const docResponse = await docs.documents.get({
+        documentId: a.documentId,
+        includeTabsContent: true,
+      });
+
+      const embedded = findInlineObjectById(docResponse.data, a.inlineObjectId);
+      if (!embedded) {
+        return errorResponse(
+          `Inline object "${a.inlineObjectId}" not found in document. Use readGoogleDoc or getGoogleDocContent to list valid inline image objectIds.`
+        );
+      }
+      const contentUri = embedded.imageProperties?.contentUri;
+      if (!contentUri) {
+        return errorResponse(
+          `Inline object "${a.inlineObjectId}" has no fetchable image content (e.g. an embedded chart or drawing rather than a raster image).`
+        );
+      }
+
+      // Authenticated fetch of the (fresh) contentUri — same primitive used for
+      // Drive export links elsewhere in this codebase.
+      const resp = await ctx.authClient.request({ url: contentUri, responseType: 'arraybuffer' });
+      const buffer = Buffer.from(resp.data as ArrayBuffer);
+
+      const MAX_IMAGE_BYTES = 40 * 1024 * 1024;
+      if (buffer.byteLength > MAX_IMAGE_BYTES) {
+        return errorResponse(
+          `Image is too large to return inline (${Math.round(buffer.byteLength / (1024 * 1024))} MB, limit 40 MB).`
+        );
+      }
+
+      const rawContentType = (resp.headers?.['content-type'] as string | undefined) || 'application/octet-stream';
+      const mimeType = rawContentType.split(';')[0].trim();
+      const dataBase64 = buffer.toString('base64');
+
+      if (a.outputFormat === 'base64') {
+        const envelope = {
+          inlineObjectId: a.inlineObjectId,
+          mimeType,
+          byteLength: buffer.byteLength,
+          dataBase64,
+        };
+        return {
+          content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
+          isError: false
+        };
+      }
+
+      return {
+        content: [{ type: "image", data: dataBase64, mimeType }],
+        isError: false
+      };
+    }
+
     // =========================================================================
     // DOC EDITING TOOLS
     // =========================================================================
@@ -2359,7 +2532,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         };
       }
 
-      const { text, error } = extractDocText(doc, a.tabId);
+      const { text, error } = extractDocText(doc, a.tabId, format === 'markdown' ? 'markdown' : 'text');
       if (error) {
         return errorResponse(error);
       }
@@ -2395,7 +2568,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const doc = docResponse.data;
       const format = a.format || 'text';
 
-      const { text, error } = extractDocText(doc, a.tabId);
+      const { text, error } = extractDocText(doc, a.tabId, format === 'markdown' ? 'markdown' : 'text');
       if (error) {
         return errorResponse(error);
       }

@@ -11,7 +11,10 @@ import type {
 
 export interface ToolResult {
   [key: string]: unknown;
-  content: Array<{ type: string; text: string }>;
+  // `text` blocks carry a string; `image` blocks carry base64 `data` + `mimeType`
+  // (an MCP image content block). Kept as a single widened shape for backward
+  // compatibility with the many `{ type: "text", text }` construction sites.
+  content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
   isError?: boolean;
 }
 

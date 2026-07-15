@@ -43,7 +43,7 @@ import {
 import type { AccountOps, AddAccountResult, ToolContext, ToolResult } from './types.js';
 import { errorResponse } from './types.js';
 import { loadRuntimeConfig, parseBoolEnv, type RuntimeConfig } from './utils/cliArgs.js';
-import { GOOGLE_CALLBACK_PATH, loadTeamConfig } from './auth/team/config.js';
+import { GOOGLE_CALLBACK_PATH, isLoopbackHost, loadTeamConfig } from './auth/team/config.js';
 import { createTeamRuntime, type TeamRuntime } from './auth/team/runtime.js';
 import { coversScopes } from './auth/accountResolver.js';
 import { describeErrorForLog } from './auth/utils.js';
@@ -1492,9 +1492,7 @@ async function startHttpTransport(args: CliArgs): Promise<void> {
       // X-Forwarded-For header (ERR_ERL_UNEXPECTED_X_FORWARDED_FOR) and per-user
       // rate limiting degrades to one shared bucket. Warn when it's likely wrong.
       if (teamConfig.trustProxy === undefined) {
-        const host = teamConfig.issuerUrl.hostname;
-        const isLocalhost = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
-        if (!isLocalhost) {
+        if (!isLoopbackHost(teamConfig.issuerUrl.hostname)) {
           console.error(
             'Warning: MCP_TRUST_PROXY is unset. Team mode is meant to run behind an https-terminating ' +
               'reverse proxy; set MCP_TRUST_PROXY to the trusted hop count (1 for a single proxy such as ' +

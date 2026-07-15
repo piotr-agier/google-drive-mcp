@@ -631,6 +631,7 @@ Team mode is mutually exclusive with service-account and external-token modes, n
   - `documentId`: Document ID
   - `format`: Output format — `text`, `json`, or `markdown` (optional, default: text)
   - `maxLength`: Maximum characters to return (optional)
+  - Inline images are surfaced (not dropped): `markdown` renders `![alt](contentUri "objectId=…")`; `text` emits a single-line `[image: objectId=… contentUri=… sourceUri=… size=WxHpt]` token. Pass the `objectId` to `getGoogleDocImage` to fetch the bytes. Floating/anchored (positioned) images are not surfaced.
 
 - **readGoogleDocPaginated** - Read a large Google Doc one page at a time (avoids host output-size truncation)
   - `documentId`: Document ID
@@ -642,12 +643,18 @@ Team mode is mutually exclusive with service-account and external-token modes, n
 - **getGoogleDocContent** - Get document content with text indices for formatting
   - `documentId`: Document ID
   - `includeFormatting`: Include font, style, and color info for each text span (optional, default: false)
+  - Inline images render as a single-line `[image: objectId=… contentUri=… sourceUri=… size=WxHpt]` token (was a bare `[image]`). Pass the `objectId` to `getGoogleDocImage`.
 
 - **getGoogleDocContentPaginated** - Paginated `getGoogleDocContent`; page ends snap to a line boundary where possible (a single line longer than `limit` is hard-cut to make forward progress)
   - `documentId`: Document ID
   - `includeFormatting`: Include font, style, and color info for each text span (optional, default: false)
   - `offset`: Character offset into the formatted output (optional, default: 0; pass the previous response's `nextOffset`)
   - `limit`: Maximum characters per page (optional, default: 50000, max: 80000)
+
+- **getGoogleDocImage** - Fetch the bytes of an inline image embedded in a Google Doc, keyed by its inline object ID (the doc is re-fetched so the underlying image URL is always fresh). Inline images only; floating/anchored (positioned) images are not supported.
+  - `documentId`: Document ID
+  - `inlineObjectId`: The inline object ID shown in `readGoogleDoc` / `getGoogleDocContent` image placeholders (the `objectId=…` value, e.g. `kix.abc123`)
+  - `outputFormat`: `image` (default) returns a native image the model can view; `base64` returns a `{ inlineObjectId, mimeType, byteLength, dataBase64 }` JSON envelope for programmatic use (forwarding, save-to-disk)
 
 - **listDocumentTabs** - List all tabs in a Google Doc with their IDs and hierarchy
   - `documentId`: Document ID

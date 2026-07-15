@@ -17,7 +17,13 @@ export interface TestContext {
   client: Client;
   mocks: AllMocks;
   cleanup: () => Promise<void>;
+  /** Override the injected auth client's `request` (used by tools that fetch
+   *  arbitrary URLs, e.g. getGoogleDocImage). Restore with `resetAuthRequest`. */
+  setAuthRequest: (fn: (opts: any) => Promise<any>) => void;
+  resetAuthRequest: () => void;
 }
+
+const DEFAULT_AUTH_REQUEST = async () => ({ data: 'mock-auth-request-response' });
 
 // We cache the server module so it's only imported once across all test files.
 let _serverModule: any = null;
@@ -37,10 +43,13 @@ export async function setupTestServer(): Promise<TestContext> {
     _serverModule = await import('../../src/index.js');
   }
 
-  // Inject fake auth client to bypass authenticate()
-  _serverModule._setAuthClientForTesting({
-    request: async () => ({ data: 'mock-auth-request-response' }),
-  });
+  // Inject fake auth client to bypass authenticate(). The object is mutable and
+  // held by reference inside the server, so swapping `.request` here is visible
+  // to `ctx.authClient.request` in tool handlers.
+  const authClientMock: { request: (opts: any) => Promise<any> } = {
+    request: DEFAULT_AUTH_REQUEST,
+  };
+  _serverModule._setAuthClientForTesting(authClientMock);
 
   const server = _serverModule.server;
 
@@ -60,7 +69,10 @@ export async function setupTestServer(): Promise<TestContext> {
     // The serverTransport closing is enough to reset the connection.
   };
 
-  return { client, mocks, cleanup };
+  const setAuthRequest = (fn: (opts: any) => Promise<any>) => { authClientMock.request = fn; };
+  const resetAuthRequest = () => { authClientMock.request = DEFAULT_AUTH_REQUEST; };
+
+  return { client, mocks, cleanup, setAuthRequest, resetAuthRequest };
 }
 
 /**
@@ -70,7 +82,7 @@ export async function callTool(
   client: Client,
   name: string,
   args: Record<string, unknown> = {},
-): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> {
+): Promise<{ content: Array<{ type: string; text: string; data?: string; mimeType?: string }>; isError?: boolean }> {
   const result = await client.callTool({ name, arguments: args });
   return result as any;
 }

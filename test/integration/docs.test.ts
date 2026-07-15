@@ -609,6 +609,165 @@ describe('Docs tools', () => {
       const res = await callTool(ctx.client, 'readGoogleDoc', {});
       assert.equal(res.isError, true);
     });
+
+    it('renders inline images as markdown with objectId in title (format=markdown)', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Doc with image',
+          body: {
+            content: [{
+              paragraph: {
+                elements: [
+                  { inlineObjectElement: { inlineObjectId: 'obj-1' } },
+                  { textRun: { content: '\n' } },
+                ],
+              },
+            }],
+          },
+          inlineObjects: {
+            'obj-1': {
+              inlineObjectProperties: {
+                embeddedObject: {
+                  description: 'Architecture diagram',
+                  imageProperties: { contentUri: 'https://lh3.googleusercontent.com/xyz' },
+                },
+              },
+            },
+          },
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', format: 'markdown' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text!.includes('![Architecture diagram](https://lh3.googleusercontent.com/xyz "objectId=obj-1")'), res.content[0].text);
+    });
+
+    it('renders inline images as a single-line placeholder (format=text)', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Doc with image',
+          body: {
+            content: [{
+              paragraph: {
+                elements: [
+                  { textRun: { content: 'Before ' } },
+                  { inlineObjectElement: { inlineObjectId: 'obj-1' } },
+                  { textRun: { content: ' after\n' } },
+                ],
+              },
+            }],
+          },
+          inlineObjects: {
+            'obj-1': {
+              inlineObjectProperties: {
+                embeddedObject: { imageProperties: { contentUri: 'https://lh3.googleusercontent.com/xyz' } },
+              },
+            },
+          },
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      assert.ok(text.includes('[image: objectId=obj-1 contentUri=https://lh3.googleusercontent.com/xyz]'), text);
+      // no markdown syntax in text format
+      assert.ok(!text.includes('!['), 'text format should not emit markdown image syntax');
+    });
+
+    it('falls back to [image] when the inlineObjects map is missing', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Doc with orphan image',
+          body: {
+            content: [{
+              paragraph: {
+                elements: [
+                  { inlineObjectElement: { inlineObjectId: 'obj-1' } },
+                  { textRun: { content: '\n' } },
+                ],
+              },
+            }],
+            // no inlineObjects map
+          },
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', format: 'markdown' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text!.includes('[image]'), res.content[0].text);
+    });
+
+    it('resolves a multi-tab image against the correct tab inlineObjects map', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Multi-tab image doc',
+          tabs: [
+            {
+              tabProperties: { tabId: 'tab-1', title: 'Tab1' },
+              documentTab: {
+                body: { content: [{ paragraph: { elements: [{ textRun: { content: 'First tab\n' } }] } }] },
+                inlineObjects: {},
+              },
+            },
+            {
+              tabProperties: { tabId: 'tab-2', title: 'Tab2' },
+              documentTab: {
+                body: {
+                  content: [{
+                    paragraph: {
+                      elements: [
+                        { inlineObjectElement: { inlineObjectId: 'obj-2' } },
+                        { textRun: { content: '\n' } },
+                      ],
+                    },
+                  }],
+                },
+                inlineObjects: {
+                  'obj-2': {
+                    inlineObjectProperties: {
+                      embeddedObject: { imageProperties: { contentUri: 'https://lh3.googleusercontent.com/tab2' } },
+                    },
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text!.includes('contentUri=https://lh3.googleusercontent.com/tab2'), res.content[0].text);
+    });
+
+    it('readGoogleDocPaginated carries inline images (proves format threading)', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Paginated image doc',
+          body: {
+            content: [{
+              paragraph: {
+                elements: [
+                  { inlineObjectElement: { inlineObjectId: 'obj-1' } },
+                  { textRun: { content: '\n' } },
+                ],
+              },
+            }],
+          },
+          inlineObjects: {
+            'obj-1': {
+              inlineObjectProperties: {
+                embeddedObject: {
+                  description: 'Diagram',
+                  imageProperties: { contentUri: 'https://lh3.googleusercontent.com/xyz' },
+                },
+              },
+            },
+          },
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', format: 'markdown' });
+      assert.equal(res.isError, false);
+      const envelope = JSON.parse(res.content[0].text!);
+      assert.ok(envelope.content.includes('![Diagram](https://lh3.googleusercontent.com/xyz "objectId=obj-1")'), envelope.content);
+    });
   });
 
   // --- listDocumentTabs ---
@@ -1122,7 +1281,7 @@ describe('Docs tools', () => {
       assert.ok(res.content[0].text.includes('[Design Doc](https://docs.google.com/doc/123)'));
     });
 
-    it('extracts inline images with description', async () => {
+    it('extracts inline images with description, uri, and size on one line', async () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({
         data: {
           documentId: 'doc-1',
@@ -1143,7 +1302,17 @@ describe('Docs tools', () => {
               inlineObjects: {
                 'obj-1': {
                   inlineObjectProperties: {
-                    embeddedObject: { description: 'Architecture diagram' },
+                    embeddedObject: {
+                      description: 'Architecture diagram',
+                      imageProperties: {
+                        contentUri: 'https://lh3.googleusercontent.com/xyz',
+                        sourceUri: 'https://example.com/a.png',
+                      },
+                      size: {
+                        width: { magnitude: 468, unit: 'PT' },
+                        height: { magnitude: 286, unit: 'PT' },
+                      },
+                    },
                   },
                 },
               },
@@ -1153,7 +1322,142 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('[image: Architecture diagram]'));
+      const text = res.content[0].text!;
+      // The whole image token must live on a single line.
+      const imageLine = text.split('\n').find(l => l.includes('objectId=obj-1'));
+      assert.ok(imageLine, 'image token should be present on one line');
+      assert.ok(imageLine!.includes('alt="Architecture diagram"'));
+      assert.ok(imageLine!.includes('contentUri=https://lh3.googleusercontent.com/xyz'));
+      assert.ok(imageLine!.includes('sourceUri=https://example.com/a.png'));
+      assert.ok(imageLine!.includes('size=468x286pt'));
+    });
+
+    it('surfaces sourceUri when contentUri is absent', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Doc with source-only image',
+          tabs: [{
+            tabProperties: { title: 'Main' },
+            documentTab: {
+              body: {
+                content: [{
+                  paragraph: {
+                    elements: [
+                      { inlineObjectElement: { inlineObjectId: 'obj-1' }, startIndex: 0, endIndex: 1 },
+                      { textRun: { content: '\n' }, startIndex: 1, endIndex: 2 },
+                    ],
+                  },
+                }],
+              },
+              inlineObjects: {
+                'obj-1': {
+                  inlineObjectProperties: {
+                    embeddedObject: {
+                      imageProperties: { sourceUri: 'https://example.com/a.png' },
+                    },
+                  },
+                },
+              },
+            },
+          }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      assert.ok(text.includes('sourceUri=https://example.com/a.png'));
+      assert.ok(!text.includes('contentUri='), 'contentUri should be omitted when absent');
+    });
+
+    it('escapes brackets and quotes in image alt text', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Doc with bracketed alt',
+          tabs: [{
+            tabProperties: { title: 'Main' },
+            documentTab: {
+              body: {
+                content: [{
+                  paragraph: {
+                    elements: [
+                      { inlineObjectElement: { inlineObjectId: 'obj-1' }, startIndex: 0, endIndex: 1 },
+                      { textRun: { content: '\n' }, startIndex: 1, endIndex: 2 },
+                    ],
+                  },
+                }],
+              },
+              inlineObjects: {
+                'obj-1': {
+                  inlineObjectProperties: {
+                    embeddedObject: {
+                      description: 'Chart [v2] "final"',
+                      imageProperties: { contentUri: 'https://lh3.googleusercontent.com/xyz' },
+                    },
+                  },
+                },
+              },
+            },
+          }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      assert.ok(text.includes('alt="Chart \\[v2\\] \\"final\\""'), `alt not escaped: ${text}`);
+    });
+
+    it('renders inline images inside table cells without embedded pipes', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Doc with table image',
+          tabs: [{
+            tabProperties: { title: 'Main' },
+            documentTab: {
+              body: {
+                content: [{
+                  startIndex: 0,
+                  endIndex: 2,
+                  table: {
+                    tableRows: [{
+                      tableCells: [{
+                        content: [{
+                          paragraph: {
+                            elements: [
+                              { inlineObjectElement: { inlineObjectId: 'obj-1' }, startIndex: 1, endIndex: 2 },
+                            ],
+                          },
+                        }],
+                      }],
+                    }],
+                  },
+                }],
+              },
+              inlineObjects: {
+                'obj-1': {
+                  inlineObjectProperties: {
+                    embeddedObject: {
+                      imageProperties: { contentUri: 'https://lh3.googleusercontent.com/xyz' },
+                    },
+                  },
+                },
+              },
+            },
+          }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      const imageLine = text.split('\n').find(l => l.includes('objectId=obj-1'));
+      assert.ok(imageLine, 'image token should appear in the table row');
+      // The token itself (from `[image:` to its closing `]`) must contain no `|`,
+      // so it can't break the surrounding `| cell |` table structure.
+      const start = imageLine!.indexOf('[image:');
+      const token = imageLine!.slice(start, imageLine!.indexOf(']', start) + 1);
+      assert.ok(!token.includes('|'), `image token should not contain a pipe: ${token}`);
     });
 
     it('extracts footnote references', async () => {
@@ -1448,6 +1752,127 @@ describe('Docs tools', () => {
       const text = res.content[0].text;
       assert.ok(text.includes('Hello World'), 'multi-paragraph cell should join with space');
       assert.ok(!text.includes('HelloWorld'), 'paragraphs should not be concatenated without separator');
+    });
+  });
+
+  // --- getGoogleDocImage ---
+  describe('getGoogleDocImage', () => {
+    const PNG_BYTES = Buffer.from('89504e470d0a1a0a', 'hex'); // PNG signature, stand-in bytes
+    // Exact ArrayBuffer (Buffer.from(...).buffer is a shared/pooled 8KB buffer).
+    const pngArrayBuffer = () => new Uint8Array(PNG_BYTES).buffer;
+    const imageDocData = {
+      documentId: 'doc-1', title: 'Doc with image',
+      body: {
+        content: [{
+          paragraph: { elements: [{ inlineObjectElement: { inlineObjectId: 'obj-1' } }] },
+        }],
+      },
+      inlineObjects: {
+        'obj-1': {
+          inlineObjectProperties: {
+            embeddedObject: { imageProperties: { contentUri: 'https://lh3.googleusercontent.com/xyz' } },
+          },
+        },
+      },
+    };
+
+    afterEach(() => {
+      ctx.resetAuthRequest();
+    });
+
+    it('returns a native MCP image block by default', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: imageDocData }));
+      let requestedUrl = '';
+      ctx.setAuthRequest(async (opts: any) => {
+        requestedUrl = opts.url;
+        return { data: pngArrayBuffer(), headers: { 'content-type': 'image/png' } };
+      });
+      const res = await callTool(ctx.client, 'getGoogleDocImage', { documentId: 'doc-1', inlineObjectId: 'obj-1' });
+      assert.equal(res.isError, false);
+      assert.equal(requestedUrl, 'https://lh3.googleusercontent.com/xyz');
+      assert.equal(res.content[0].type, 'image');
+      assert.equal(res.content[0].mimeType, 'image/png');
+      assert.equal(res.content[0].data, PNG_BYTES.toString('base64'));
+    });
+
+    it('strips charset from the content-type header', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: imageDocData }));
+      ctx.setAuthRequest(async () => ({ data: pngArrayBuffer(), headers: { 'content-type': 'image/jpeg; charset=binary' } }));
+      const res = await callTool(ctx.client, 'getGoogleDocImage', { documentId: 'doc-1', inlineObjectId: 'obj-1' });
+      assert.equal(res.isError, false);
+      assert.equal(res.content[0].mimeType, 'image/jpeg');
+    });
+
+    it('returns a base64 JSON envelope when outputFormat=base64', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: imageDocData }));
+      ctx.setAuthRequest(async () => ({ data: pngArrayBuffer(), headers: { 'content-type': 'image/png' } }));
+      const res = await callTool(ctx.client, 'getGoogleDocImage', { documentId: 'doc-1', inlineObjectId: 'obj-1', outputFormat: 'base64' });
+      assert.equal(res.isError, false);
+      assert.equal(res.content[0].type, 'text');
+      const envelope = JSON.parse(res.content[0].text!);
+      assert.equal(envelope.inlineObjectId, 'obj-1');
+      assert.equal(envelope.mimeType, 'image/png');
+      assert.equal(envelope.byteLength, PNG_BYTES.byteLength);
+      assert.equal(envelope.dataBase64, PNG_BYTES.toString('base64'));
+    });
+
+    it('resolves an inline object from a multi-tab document', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Multi-tab image doc',
+          tabs: [
+            { tabProperties: { tabId: 'tab-1', title: 'Tab1' }, documentTab: { body: { content: [] }, inlineObjects: {} } },
+            {
+              tabProperties: { tabId: 'tab-2', title: 'Tab2' },
+              documentTab: {
+                body: { content: [] },
+                inlineObjects: {
+                  'obj-2': {
+                    inlineObjectProperties: {
+                      embeddedObject: { imageProperties: { contentUri: 'https://lh3.googleusercontent.com/tab2' } },
+                    },
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }));
+      let requestedUrl = '';
+      ctx.setAuthRequest(async (opts: any) => {
+        requestedUrl = opts.url;
+        return { data: pngArrayBuffer(), headers: { 'content-type': 'image/png' } };
+      });
+      const res = await callTool(ctx.client, 'getGoogleDocImage', { documentId: 'doc-1', inlineObjectId: 'obj-2' });
+      assert.equal(res.isError, false);
+      assert.equal(requestedUrl, 'https://lh3.googleusercontent.com/tab2');
+    });
+
+    it('errors when the inlineObjectId is not found', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: imageDocData }));
+      const res = await callTool(ctx.client, 'getGoogleDocImage', { documentId: 'doc-1', inlineObjectId: 'nope' });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text!.includes('not found'));
+    });
+
+    it('errors when the inline object has no fetchable image content', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Doc with chart',
+          body: { content: [] },
+          inlineObjects: {
+            'obj-1': { inlineObjectProperties: { embeddedObject: { title: 'A chart' } } },
+          },
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocImage', { documentId: 'doc-1', inlineObjectId: 'obj-1' });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text!.includes('no fetchable image content'));
+    });
+
+    it('validation error when inlineObjectId is missing', async () => {
+      const res = await callTool(ctx.client, 'getGoogleDocImage', { documentId: 'doc-1' });
+      assert.equal(res.isError, true);
     });
   });
 

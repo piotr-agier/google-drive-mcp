@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Features
+
+- **docs:** surface embedded inline images instead of dropping or opaquely placeholdering them. `readGoogleDoc`/`readGoogleDocPaginated` now render each inline image (markdown → `![alt](contentUri "objectId=…")`; text → a single-line `[image: objectId=… contentUri=… sourceUri=… size=WxHpt]` token) instead of silently omitting it, and `getGoogleDocContent`/`getGoogleDocContentPaginated` upgrade the bare `[image]` placeholder to the same self-describing token (objectId, contentUri/sourceUri, size, alt text). A new **`getGoogleDocImage`** tool fetches an inline image's bytes by `(documentId, inlineObjectId)` — it re-fetches the doc to resolve a fresh, non-expired image URL and returns a native MCP image block (or, with `outputFormat: "base64"`, a `{ inlineObjectId, mimeType, byteLength, dataBase64 }` envelope) so downstream OCR/vision/forwarding workflows can reach the content. Keyed by the durable objectId (never a raw contentUri, which expires ~30 min). Floating/anchored images stored as `positionedObjects` remain unrendered (documented limitation) ([#132](https://github.com/piotr-agier/google-drive-mcp/issues/132))
+
 ## [2.4.0](https://github.com/piotr-agier/google-drive-mcp/compare/v2.3.0...v2.4.0) (2026-07-15)
 
 Adds opt-in **team mode**: an MCP-spec OAuth 2.1 authorization server for multi-user HTTP deployments, so a single running server can be shared by a team (e.g. through claude.ai custom connectors) with each member authenticated individually and every tool call running as the caller. Purely additive — default stdio/HTTP behavior for existing single-user deployments is unchanged.

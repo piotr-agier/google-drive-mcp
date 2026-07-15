@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.5.0](https://github.com/piotr-agier/google-drive-mcp/compare/v2.4.0...v2.5.0) (2026-07-15)
+
+Surfaces **embedded inline images** in Google Docs instead of silently dropping them: the read tools now emit a self-describing image token, and a new **`getGoogleDocImage`** tool fetches an image's bytes on demand for OCR/vision workflows. Additive — no removed or renamed tools/parameters; existing single-user deployments are unaffected.
+
 ### Features
 
 - **docs:** surface embedded inline images instead of dropping or opaquely placeholdering them. `readGoogleDoc`/`readGoogleDocPaginated` now render each inline image (markdown → `![alt](contentUri "objectId=…")`; text → a single-line `[image: objectId=… contentUri=… sourceUri=… size=WxHpt]` token) instead of silently omitting it, and `getGoogleDocContent`/`getGoogleDocContentPaginated` upgrade the bare `[image]` placeholder to the same self-describing token (objectId, contentUri/sourceUri, size, alt text). A new **`getGoogleDocImage`** tool fetches an inline image's bytes by `(documentId, inlineObjectId)` — it re-fetches the doc to resolve a fresh, non-expired image URL and returns a native MCP image block (or, with `outputFormat: "base64"`, a `{ inlineObjectId, mimeType, byteLength, dataBase64 }` envelope) so downstream OCR/vision/forwarding workflows can reach the content. Keyed by the durable objectId (never a raw contentUri, which expires ~30 min). Floating/anchored images stored as `positionedObjects` remain unrendered (documented limitation) ([#132](https://github.com/piotr-agier/google-drive-mcp/issues/132))

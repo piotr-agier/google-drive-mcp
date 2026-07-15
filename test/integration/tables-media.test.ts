@@ -19,7 +19,7 @@ describe('Tables & Media tools', () => {
         documentId: 'doc-1', rows: 3, columns: 4, index: 1,
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('3x4'));
+      assert.ok(res.content[0].text!.includes('3x4'));
     });
 
     it('validation error', async () => {
@@ -56,7 +56,7 @@ describe('Tables & Media tools', () => {
         textContent: 'new value',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('edited cell'));
+      assert.ok(res.content[0].text!.includes('edited cell'));
     });
 
     it('validation error', async () => {
@@ -72,7 +72,7 @@ describe('Tables & Media tools', () => {
         documentId: 'doc-1', imageUrl: 'https://example.com/image.png', index: 1,
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('inserted image'));
+      assert.ok(res.content[0].text!.includes('inserted image'));
     });
 
     it('validation error', async () => {

@@ -24,7 +24,7 @@ describe('Upload & Download tools', () => {
     it('error when file does not exist', async () => {
       const res = await callTool(ctx.client, 'uploadFile', { localPath: '/nonexistent/file.txt' });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('not found'));
+      assert.ok(res.content[0].text!.includes('not found'));
     });
 
     it('validation error when both localPath and contentBase64 are provided', async () => {
@@ -33,7 +33,7 @@ describe('Upload & Download tools', () => {
         contentBase64: 'aGVsbG8=',
       });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('exactly one'));
+      assert.ok(res.content[0].text!.includes('exactly one'));
     });
 
     it('creates a new file from contentBase64', async () => {
@@ -42,7 +42,7 @@ describe('Upload & Download tools', () => {
         name: 'hello.png',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Uploaded:'));
+      assert.ok(res.content[0].text!.includes('Uploaded:'));
       const creates = ctx.mocks.drive.tracker.getCalls('files.create');
       assert.equal(creates.length, 1);
       assert.equal(creates[0].args[0].requestBody.name, 'hello.png');
@@ -55,7 +55,7 @@ describe('Upload & Download tools', () => {
         contentBase64: 'aGVsbG8=',
       });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('name is required'));
+      assert.ok(res.content[0].text!.includes('name is required'));
     });
 
     it('uploads a new version of an existing file when fileId is provided', async () => {
@@ -64,7 +64,7 @@ describe('Upload & Download tools', () => {
         contentBase64: Buffer.from('new content').toString('base64'),
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Updated (new version)'));
+      assert.ok(res.content[0].text!.includes('Updated (new version)'));
       const updates = ctx.mocks.drive.tracker.getCalls('files.update');
       assert.equal(updates.length, 1);
       assert.equal(updates[0].args[0].fileId, 'file-1');
@@ -80,7 +80,7 @@ describe('Upload & Download tools', () => {
         convertToGoogleFormat: true,
       });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('convertToGoogleFormat'));
+      assert.ok(res.content[0].text!.includes('convertToGoogleFormat'));
     });
 
     it('rejects fileId combined with parentFolderId', async () => {
@@ -90,7 +90,7 @@ describe('Upload & Download tools', () => {
         parentFolderId: '/Work',
       });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('parentFolderId'));
+      assert.ok(res.content[0].text!.includes('parentFolderId'));
     });
 
     it('rejects in-place update of a Google Workspace file without explicit mimeType', async () => {
@@ -103,7 +103,7 @@ describe('Upload & Download tools', () => {
           contentBase64: 'aGVsbG8=',
         });
         assert.equal(res.isError, true);
-        assert.ok(res.content[0].text.includes('Google Workspace file'));
+        assert.ok(res.content[0].text!.includes('Google Workspace file'));
       } finally {
         ctx.mocks.drive.service.files.get._resetImpl();
       }
@@ -115,7 +115,7 @@ describe('Upload & Download tools', () => {
         name: 'bad.png',
       });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('valid base64'));
+      assert.ok(res.content[0].text!.includes('valid base64'));
       assert.equal(ctx.mocks.drive.tracker.getCalls('files.create').length, 0);
       assert.equal(ctx.mocks.drive.tracker.getCalls('files.update').length, 0);
     });
@@ -126,7 +126,7 @@ describe('Upload & Download tools', () => {
         name: 'blank.png',
       });
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('valid base64'));
+      assert.ok(res.content[0].text!.includes('valid base64'));
       assert.equal(ctx.mocks.drive.tracker.getCalls('files.create').length, 0);
     });
 
@@ -140,7 +140,7 @@ describe('Upload & Download tools', () => {
           localPath,
         });
         assert.equal(res.isError, false);
-        assert.ok(res.content[0].text.includes('Updated (new version)'));
+        assert.ok(res.content[0].text!.includes('Updated (new version)'));
         const updates = ctx.mocks.drive.tracker.getCalls('files.update');
         assert.equal(updates.length, 1);
         assert.equal(updates[0].args[0].fileId, 'file-1');
@@ -161,7 +161,7 @@ describe('Upload & Download tools', () => {
         mimeType: docxMime,
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Updated (new version)'));
+      assert.ok(res.content[0].text!.includes('Updated (new version)'));
       const updates = ctx.mocks.drive.tracker.getCalls('files.update');
       assert.equal(updates.length, 1);
       assert.equal(updates[0].args[0].fileId, 'doc-1');

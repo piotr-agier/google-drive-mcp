@@ -16,14 +16,14 @@ describe('Calendar tools', () => {
     it('happy path', async () => {
       const res = await callTool(ctx.client, 'listCalendars', {});
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('My Calendar'));
+      assert.ok(res.content[0].text!.includes('My Calendar'));
     });
 
     it('propagates API error', async () => {
       ctx.mocks.calendar.service.calendarList.list._setImpl(async () => { throw new Error('Cal API down'); });
       const res = await callTool(ctx.client, 'listCalendars', {});
       assert.equal(res.isError, true);
-      assert.ok(res.content[0].text.includes('Cal API down'));
+      assert.ok(res.content[0].text!.includes('Cal API down'));
       ctx.mocks.calendar.service.calendarList.list._resetImpl();
     });
   });
@@ -33,15 +33,15 @@ describe('Calendar tools', () => {
     it('happy path', async () => {
       const res = await callTool(ctx.client, 'getCalendarEvents', {});
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Test Event'));
+      assert.ok(res.content[0].text!.includes('Test Event'));
     });
 
     it('surfaces attachments for listed events', async () => {
       const res = await callTool(ctx.client, 'getCalendarEvents', {});
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Attachments:'));
-      assert.ok(res.content[0].text.includes('Agenda.pdf'));
-      assert.ok(res.content[0].text.includes('https://drive.google.com/file/d/file-1/view'));
+      assert.ok(res.content[0].text!.includes('Attachments:'));
+      assert.ok(res.content[0].text!.includes('Agenda.pdf'));
+      assert.ok(res.content[0].text!.includes('https://drive.google.com/file/d/file-1/view'));
     });
   });
 
@@ -50,7 +50,7 @@ describe('Calendar tools', () => {
     it('happy path', async () => {
       const res = await callTool(ctx.client, 'getCalendarEvent', { eventId: 'event-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Test Event'));
+      assert.ok(res.content[0].text!.includes('Test Event'));
     });
 
     it('validation error', async () => {
@@ -61,9 +61,9 @@ describe('Calendar tools', () => {
     it('surfaces attachments in the response', async () => {
       const res = await callTool(ctx.client, 'getCalendarEvent', { eventId: 'event-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Attachments:'));
-      assert.ok(res.content[0].text.includes('Agenda.pdf'));
-      assert.ok(res.content[0].text.includes('https://drive.google.com/file/d/file-1/view'));
+      assert.ok(res.content[0].text!.includes('Attachments:'));
+      assert.ok(res.content[0].text!.includes('Agenda.pdf'));
+      assert.ok(res.content[0].text!.includes('https://drive.google.com/file/d/file-1/view'));
     });
 
     it('renders a title-less attachment without duplicating the URL', async () => {
@@ -80,8 +80,8 @@ describe('Calendar tools', () => {
       const res = await callTool(ctx.client, 'getCalendarEvent', { eventId: 'event-1' });
       ctx.mocks.calendar.service.events.get._resetImpl();
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('Attachments: https://example.com/f'));
-      assert.ok(!res.content[0].text.includes('https://example.com/f (https://example.com/f)'));
+      assert.ok(res.content[0].text!.includes('Attachments: https://example.com/f'));
+      assert.ok(!res.content[0].text!.includes('https://example.com/f (https://example.com/f)'));
     });
   });
 
@@ -94,7 +94,7 @@ describe('Calendar tools', () => {
         end: { dateTime: '2025-06-01T11:00:00Z' },
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('created'));
+      assert.ok(res.content[0].text!.includes('created'));
     });
 
     it('validation error', async () => {
@@ -136,7 +136,7 @@ describe('Calendar tools', () => {
         eventId: 'event-1', summary: 'Updated Event',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('updated'));
+      assert.ok(res.content[0].text!.includes('updated'));
     });
 
     it('validation error', async () => {
@@ -186,7 +186,7 @@ describe('Calendar tools', () => {
     it('happy path', async () => {
       const res = await callTool(ctx.client, 'deleteCalendarEvent', { eventId: 'event-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text.includes('deleted'));
+      assert.ok(res.content[0].text!.includes('deleted'));
     });
 
     it('validation error', async () => {

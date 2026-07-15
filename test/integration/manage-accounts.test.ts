@@ -21,7 +21,7 @@ describe('manage_accounts (test-mode harness)', () => {
   it("list returns the synthetic 'test' account", async () => {
     const result = await callTool(ctx.client, 'manage_accounts', { action: 'list' });
     assert.notEqual(result.isError, true, `list errored: ${JSON.stringify(result)}`);
-    const text = result.content[0].text;
+    const text = result.content[0].text!;
     const payload = JSON.parse(text);
     assert.equal(payload.mode, 'test');
     assert.equal(payload.defaultAccount, 'test');
@@ -41,7 +41,7 @@ describe('manage_accounts (test-mode harness)', () => {
     });
     assert.equal(result.isError, true);
     assert.match(
-      result.content[0].text,
+      result.content[0].text!,
       /only supported in local-OAuth mode.*test/,
     );
   });
@@ -64,7 +64,7 @@ describe('manage_accounts (test-mode harness)', () => {
       account_id: 'test',
     });
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /only supported in local-OAuth mode/);
+    assert.match(result.content[0].text!, /only supported in local-OAuth mode/);
   });
 
   it('set_default refuses in non-local-oauth modes', async () => {
@@ -73,7 +73,7 @@ describe('manage_accounts (test-mode harness)', () => {
       account_id: 'test',
     });
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /only supported in local-OAuth mode/);
+    assert.match(result.content[0].text!, /only supported in local-OAuth mode/);
   });
 
   it('missing action returns a zod validation error', async () => {
@@ -115,8 +115,8 @@ describe('per-tool account parameter', () => {
       account: 'nope',
     });
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /Unknown account/);
-    assert.match(result.content[0].text, /manage_accounts list/);
+    assert.match(result.content[0].text!, /Unknown account/);
+    assert.match(result.content[0].text!, /manage_accounts list/);
   });
 
   it('strips account from args before the handler sees them', async () => {
@@ -192,7 +192,7 @@ describe('manage_accounts with zero accounts', () => {
   it('list returns an empty list instead of a lockout error', async () => {
     const result = await callTool(ctx.client, 'manage_accounts', { action: 'list' });
     assert.notEqual(result.isError, true, `list errored: ${JSON.stringify(result)}`);
-    const payload = JSON.parse(result.content[0].text);
+    const payload = JSON.parse(result.content[0].text!);
     assert.equal(payload.defaultAccount, null);
     assert.deepEqual(payload.accounts, []);
   });
@@ -237,8 +237,8 @@ describe('manage_accounts set_default accepts JSON null (finding 13)', () => {
       account_id: null,
     });
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /only supported in local-OAuth mode/);
-    assert.doesNotMatch(result.content[0].text, /Expected string|Invalid|received null/);
+    assert.match(result.content[0].text!, /only supported in local-OAuth mode/);
+    assert.doesNotMatch(result.content[0].text!, /Expected string|Invalid|received null/);
   });
 });
 

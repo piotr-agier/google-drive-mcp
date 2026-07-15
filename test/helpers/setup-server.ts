@@ -82,7 +82,7 @@ export async function callTool(
   client: Client,
   name: string,
   args: Record<string, unknown> = {},
-): Promise<{ content: Array<{ type: string; text: string; data?: string; mimeType?: string }>; isError?: boolean }> {
+): Promise<{ content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>; isError?: boolean }> {
   const result = await client.callTool({ name, arguments: args });
   return result as any;
 }

@@ -12,6 +12,12 @@ All notable changes to this project will be documented in this file.
 
 - **docs:** `formatGoogleDocText` now advertises `baselineOffset` in its input schema. The alias shares a handler and validation schema with `applyTextStyle`, so the parameter already worked at runtime, but it was missing from the advertised tool definition — clients that build arguments from (or validate against) the published schema could not reach superscript/subscript through the alias
 
+## [2.5.1](https://github.com/piotr-agier/google-drive-mcp/compare/v2.5.0...v2.5.1) (2026-07-17)
+
+### Distribution
+
+- Publish verified npm/stdio metadata to the official MCP Registry under `io.github.piotr-agier/google-drive-mcp`, with live schema validation and GitHub OIDC publication integrated into the release workflow.
+
 ## [2.5.0](https://github.com/piotr-agier/google-drive-mcp/compare/v2.4.0...v2.5.0) (2026-07-15)
 
 Surfaces **embedded inline images** in Google Docs instead of silently dropping them: the read tools now emit a self-describing image token, and a new **`getGoogleDocImage`** tool fetches an image's bytes on demand for OCR/vision workflows. Additive — no removed or renamed tools/parameters; existing single-user deployments are unaffected.

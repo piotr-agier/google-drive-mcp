@@ -1,10 +1,11 @@
 {
     "name": "@piotr-agier/google-drive-mcp",
-    "version": "2.5.0",
-    "description": "Google Drive MCP Server - Model Context Protocol server providing secure access to Google Drive, Docs, Sheets, and Slides through MCP clients e.g. Claude Desktop",
+    "version": "2.5.1",
+    "mcpName": "io.github.piotr-agier/google-drive-mcp",
+    "description": "Secure access to Google Drive, Docs, Sheets, Slides, and Calendar through MCP.",
     "license": "MIT",
     "author": "Piotr Agier <piotr.agier@gmail.com>",
-    "homepage": "https://piotragier.net",
+    "homepage": "https://github.com/piotr-agier/google-drive-mcp#readme",
     "bugs": "https://github.com/piotr-agier/google-drive-mcp/issues",
     "repository": {
         "type": "git",
@@ -41,6 +42,8 @@
         "start": "node dist/index.js",
         "auth": "node dist/index.js auth",
         "watch": "node scripts/build.js --watch",
+        "registry:validate": "node scripts/registry-metadata.js validate",
+        "registry:verify": "node scripts/registry-metadata.js verify",
         "prepare": "npm run build",
         "test": "npm run test:build && MCP_TESTING=1 node --test \".tmp-test/test/**/*.test.js\"",
         "test:build": "shx rm -rf .tmp-test && tsc -p tsconfig.test.json && shx cp package.json .tmp-test/ && node scripts/build.js",

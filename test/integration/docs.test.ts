@@ -867,6 +867,21 @@ describe('Docs tools', () => {
       const res = await callTool(ctx.client, 'applyTextStyle', {});
       assert.equal(res.isError, true);
     });
+
+    it('accepts baselineOffset as the only style option', async () => {
+      const res = await callTool(ctx.client, 'applyTextStyle', {
+        documentId: 'doc-1', startIndex: 1, endIndex: 5, baselineOffset: 'SUPERSCRIPT',
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text!.includes('applied text style'));
+    });
+
+    it('rejects an invalid baselineOffset value', async () => {
+      const res = await callTool(ctx.client, 'applyTextStyle', {
+        documentId: 'doc-1', startIndex: 1, endIndex: 5, baselineOffset: 'MIDDLE',
+      });
+      assert.equal(res.isError, true);
+    });
   });
 
   // --- applyParagraphStyle ---
@@ -2527,6 +2542,22 @@ describe('Docs tools', () => {
         assert.ok(res.content[0].text!.includes('listDocumentTabs'));
         assert.equal(ctx.mocks.docs.tracker.getCalls('documents.batchUpdate').length, before);
         ctx.mocks.docs.service.documents.get._resetImpl();
+      });
+
+      it('sends baselineOffset in the updateTextStyle payload with a matching field mask', async () => {
+        const res = await callTool(ctx.client, 'applyTextStyle', { documentId: 'doc-1', startIndex: 1, endIndex: 5, baselineOffset: 'SUBSCRIPT' });
+        assert.equal(res.isError, false);
+        const req = lastRequests()[0].updateTextStyle;
+        assert.equal(req.textStyle.baselineOffset, 'SUBSCRIPT');
+        assert.ok(req.fields.split(',').includes('baselineOffset'));
+      });
+
+      it('passes NONE through so existing super/subscript can be reset', async () => {
+        const res = await callTool(ctx.client, 'applyTextStyle', { documentId: 'doc-1', startIndex: 1, endIndex: 5, baselineOffset: 'NONE' });
+        assert.equal(res.isError, false);
+        const req = lastRequests()[0].updateTextStyle;
+        assert.equal(req.textStyle.baselineOffset, 'NONE');
+        assert.ok(req.fields.split(',').includes('baselineOffset'));
       });
     });
 

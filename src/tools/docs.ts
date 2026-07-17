@@ -491,6 +491,7 @@ function buildUpdateTextStyleRequest(
     foregroundColor?: string;
     backgroundColor?: string;
     linkUrl?: string;
+    baselineOffset?: 'SUPERSCRIPT' | 'SUBSCRIPT' | 'NONE';
   },
   tabId?: string
 ): { request: any; fields: string[] } | null {
@@ -521,6 +522,11 @@ function buildUpdateTextStyleRequest(
   if (style.linkUrl !== undefined) {
     textStyle.link = { url: style.linkUrl };
     fieldsToUpdate.push('link');
+  }
+
+  if (style.baselineOffset !== undefined) {
+    textStyle.baselineOffset = style.baselineOffset;
+    fieldsToUpdate.push('baselineOffset');
   }
 
   if (fieldsToUpdate.length === 0) return null;
@@ -1313,6 +1319,7 @@ const ApplyTextStyleSchema = z.object({
   foregroundColor: z.string().optional(),
   backgroundColor: z.string().optional(),
   linkUrl: z.string().url().optional(),
+  baselineOffset: z.enum(['SUPERSCRIPT', 'SUBSCRIPT', 'NONE']).optional(),
   tabId: z.string().optional()
 });
 
@@ -1613,6 +1620,7 @@ export const toolDefinitions: ToolDefinition[] = [
         foregroundColor: { type: "string", description: "Hex color (e.g., #FF0000)" },
         backgroundColor: { type: "string", description: "Hex background color" },
         linkUrl: { type: "string", description: "URL for hyperlink" },
+        baselineOffset: { type: "string", enum: ["SUPERSCRIPT", "SUBSCRIPT", "NONE"], description: "Vertical text offset: SUPERSCRIPT or SUBSCRIPT. Use NONE to reset text to the normal baseline." },
         tabId: { type: "string", description: "Optional. Tab ID to format within (from listDocumentTabs). If omitted, operates on the first/default tab." }
       },
       required: ["documentId"]
@@ -2784,7 +2792,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         fontFamily: a.fontFamily,
         foregroundColor: a.foregroundColor,
         backgroundColor: a.backgroundColor,
-        linkUrl: a.linkUrl
+        linkUrl: a.linkUrl,
+        baselineOffset: a.baselineOffset
       };
 
       // Build the update request

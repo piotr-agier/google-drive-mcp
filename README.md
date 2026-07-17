@@ -1541,8 +1541,11 @@ npm run typecheck # Type checking without compilation
 - `npm run watch` - Build and watch for changes
 - `npm run typecheck` - Run TypeScript type checking only
 - `npm run lint` - Run TypeScript type checking (alias for typecheck)
+- `npm run registry:validate` - Validate `server.json` with the official MCP Registry API
 - `npm run prepare` - Auto-runs build before npm publish
 - `npm test` - Run unit tests
+
+Maintainers should follow the [MCP Registry publishing contract](docs/registry-publishing.md) when preparing releases.
 
 ## Advanced Configuration
 

@@ -32,5 +32,8 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Validate MCP Registry metadata
+        run: npm run registry:validate
+
       - name: Test
         run: npm test

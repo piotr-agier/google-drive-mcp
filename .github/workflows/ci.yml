@@ -33,7 +33,19 @@ jobs:
         run: npm run build
 
       - name: Validate MCP Registry metadata
-        run: npm run registry:validate
+        # Blocks on genuinely invalid metadata (exit 1) but soft-passes when the
+        # live registry is merely unreachable (exit 3), so unrelated PRs are not
+        # failed by a registry outage. The release workflow validates again.
+        run: |
+          set +e
+          npm run registry:validate
+          status=$?
+          set -e
+          if [ "$status" -eq 3 ]; then
+            echo "::warning::MCP Registry unreachable; skipping validation gate"
+            exit 0
+          fi
+          exit "$status"
 
       - name: Test
         run: npm test

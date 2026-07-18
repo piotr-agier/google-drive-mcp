@@ -2,10 +2,17 @@
 
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { withRetry } from '../src/utils/retry.core.js';
 
 const registryBaseUrl = (process.env.MCP_REGISTRY_URL || 'https://registry.modelcontextprotocol.io').replace(/\/$/, '');
 const command = process.argv[2];
 const serverFile = resolve(process.cwd(), process.argv[3] || 'server.json');
+
+// Shared retry policy for one-shot registry requests. Mirrors the app defaults
+// (see src/utils/retry.core.js): ~3 attempts with a 15s per-attempt timeout.
+const requestConfig = { apiTimeout: 15_000, retryMax: 2, retryBaseDelay: 1_000 };
 
 function usage() {
   console.error('Usage: node scripts/registry-metadata.js <validate|verify> [server.json]');
@@ -23,38 +30,58 @@ async function readServerMetadata() {
   }
 }
 
-async function requestJson(url, options, attempts) {
-  let lastError;
+// A registry request is "unreachable" (a transient/transport problem rather than
+// a rejected payload) when it has no HTTP status (network/timeout/abort) or a
+// status that signals server-side/transient trouble (429 or 5xx). Genuine 4xx
+// client errors — a malformed request or wrong path — are NOT unreachable.
+function isUnreachable(error) {
+  const status = error?.status ?? error?.response?.status;
+  if (typeof status === 'number') return status === 429 || status >= 500;
+  return true;
+}
 
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      const response = await fetch(url, {
-        ...options,
-        signal: AbortSignal.timeout(15_000),
-      });
-      const body = await response.text();
-      let parsed;
-      try {
-        parsed = JSON.parse(body);
-      } catch {
-        throw new Error(`Registry returned non-JSON response (${response.status}): ${body.slice(0, 500)}`);
-      }
+async function requestJson(url, options, label) {
+  try {
+    return await withRetry(
+      async (signal) => {
+        let response;
+        try {
+          response = await fetch(url, { ...options, signal });
+        } catch (error) {
+          // Transport-level failure (DNS/connection/abort). Give it a retryable
+          // code so withRetry treats it like a transient error.
+          if (typeof error.code !== 'string') {
+            error.code = error?.cause?.code || 'ECONNRESET';
+          }
+          throw error;
+        }
 
-      if (!response.ok) {
-        const error = new Error(`Registry request failed (${response.status}): ${JSON.stringify(parsed)}`);
-        if (response.status < 500) throw error;
-        lastError = error;
-      } else {
+        const body = await response.text();
+        let parsed;
+        try {
+          parsed = JSON.parse(body);
+        } catch {
+          const error = new Error(`Registry returned non-JSON response (${response.status}): ${body.slice(0, 500)}`);
+          error.status = response.status;
+          throw error;
+        }
+
+        if (!response.ok) {
+          // withRetry retries 429/503/504 and gives up immediately on other 4xx/5xx.
+          const error = new Error(`Registry request failed (${response.status}): ${JSON.stringify(parsed)}`);
+          error.status = response.status;
+          throw error;
+        }
+
         return parsed;
-      }
-    } catch (error) {
-      lastError = error;
-    }
-
-    if (attempt < attempts) await sleep(attempt * 1_000);
+      },
+      requestConfig,
+      label,
+    );
+  } catch (error) {
+    if (isUnreachable(error)) error.unreachable = true;
+    throw error;
   }
-
-  throw lastError;
 }
 
 function formatIssue(issue) {
@@ -71,7 +98,7 @@ async function validate(server) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(server),
     },
-    3,
+    'registry:validate',
   );
 
   if (!result.valid) {
@@ -82,10 +109,32 @@ async function validate(server) {
   console.log(`MCP Registry validation passed for ${server.name}@${server.version}.`);
 }
 
-function comparePublishedRecord(expected, actual) {
+function isPlainObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+// True when every field declared in `expected` is present in `actual` with an
+// equal value. Object key order and any extra fields the registry adds (e.g.
+// registryBaseUrl, status metadata) are ignored — only the metadata we own is
+// asserted, so re-serialization by the registry does not read as a mismatch.
+export function matchesExpected(expected, actual) {
+  if (Array.isArray(expected)) {
+    return (
+      Array.isArray(actual) &&
+      actual.length === expected.length &&
+      expected.every((item, index) => matchesExpected(item, actual[index]))
+    );
+  }
+  if (isPlainObject(expected)) {
+    return isPlainObject(actual) && Object.keys(expected).every((key) => matchesExpected(expected[key], actual[key]));
+  }
+  return expected === actual;
+}
+
+export function comparePublishedRecord(expected, actual) {
   const differences = [];
   const compare = (label, expectedValue, actualValue) => {
-    if (JSON.stringify(actualValue) !== JSON.stringify(expectedValue)) {
+    if (!matchesExpected(expectedValue, actualValue)) {
       differences.push(`${label}: expected ${JSON.stringify(expectedValue)}, got ${JSON.stringify(actualValue)}`);
     }
   };
@@ -105,7 +154,7 @@ async function verify(server) {
   const attempts = Math.max(1, Number.parseInt(process.env.MCP_REGISTRY_VERIFY_ATTEMPTS || '1', 10) || 1);
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const result = await requestJson(url, { method: 'GET' }, 3);
+    const result = await requestJson(url, { method: 'GET' }, 'registry:verify');
     const record = result.servers?.find(
       (entry) => entry.server?.name === server.name && entry.server?.version === server.version,
     )?.server;
@@ -126,16 +175,22 @@ async function verify(server) {
   process.exitCode = 2;
 }
 
-try {
-  if (command !== 'validate' && command !== 'verify') {
-    usage();
-    process.exitCode = 1;
-  } else {
-    const server = await readServerMetadata();
-    if (command === 'validate') await validate(server);
-    else await verify(server);
+const isMain = Boolean(process.argv[1]) && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isMain) {
+  try {
+    if (command !== 'validate' && command !== 'verify') {
+      usage();
+      process.exitCode = 1;
+    } else {
+      const server = await readServerMetadata();
+      if (command === 'validate') await validate(server);
+      else await verify(server);
+    }
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    // 3 = registry unreachable (transient); 1 = genuine failure (invalid
+    // metadata, record mismatch, bad command). verify() sets 2 for not-found.
+    process.exitCode = error?.unreachable ? 3 : 1;
   }
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
 }

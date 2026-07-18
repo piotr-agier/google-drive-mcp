@@ -43,9 +43,9 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Validate MCP Registry metadata
-        run: npm run registry:validate
-
+      # Registry metadata is validated pre-merge in CI and again in the
+      # publish-registry job. Keeping it out of this job means a registry outage
+      # cannot block the npm release, which depends only on npmjs.org + OIDC.
       - name: Verify version matches tag
         run: |
           PACKAGE_VERSION="v$(node -p "require('./package.json').version")"
@@ -72,14 +72,8 @@ jobs:
         with:
           node-version: 22
 
-      - name: Verify version matches tag
-        run: |
-          PACKAGE_VERSION="v$(node -p "require('./package.json').version")"
-          if [ "$PACKAGE_VERSION" != "${{ github.event.release.tag_name }}" ]; then
-            echo "Tag ${{ github.event.release.tag_name }} does not match package.json version $PACKAGE_VERSION"
-            exit 1
-          fi
-
+      # The version-vs-tag check already ran in the publish job (needs: publish),
+      # which checked out the same immutable release tag, so it is not repeated here.
       - name: Validate MCP Registry metadata
         run: npm run registry:validate
 

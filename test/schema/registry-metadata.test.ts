@@ -40,6 +40,10 @@ describe('MCP Registry metadata', () => {
     assert.equal(packageJson.repository.url, 'git+https://github.com/piotr-agier/google-drive-mcp.git');
   });
 
+  it('keeps the description identical across npm and Registry metadata', () => {
+    assert.equal(packageJson.description, serverJson.description);
+  });
+
   it('prompts Registry installers for the OAuth credentials file', () => {
     assert.deepEqual(npmPackage.environmentVariables, [
       {

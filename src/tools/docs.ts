@@ -167,8 +167,45 @@ function renderImageMarkdown(meta: InlineImageMeta | null): string {
   return `![${alt}](${escapeMarkdownUri(uri)} "objectId=${meta.objectId}")`;
 }
 
-// Google Docs named paragraph styles that map onto ATX headings.
+// Render a non-textRun paragraph element (person chip, rich link, image,
+// footnote reference, horizontal rule) as text, or null when the element type
+// carries no text. Shared by the markdown reader and the indexed reader; only
+// image rendering differs between them.
+function resolveInlineElementText(
+  el: any,
+  inlineObjects?: any,
+  format: 'text' | 'markdown' = 'text'
+): string | null {
+  if (el.person?.personProperties) {
+    const p = el.person.personProperties;
+    if (p.name && p.email) return `@${p.name} (${p.email})`;
+    return `@${p.name || p.email || ''}`;
+  }
+  if (el.richLink?.richLinkProperties) {
+    const rl = el.richLink.richLinkProperties;
+    const title = escapeBrackets(rl.title || rl.uri || '');
+    const uri = rl.uri;
+    return title && uri ? `[${title}](${uri})` : title || null;
+  }
+  if (el.inlineObjectElement?.inlineObjectId) {
+    const meta = getInlineImageMeta(el.inlineObjectElement.inlineObjectId, inlineObjects);
+    return format === 'markdown' ? renderImageMarkdown(meta) : renderImagePlaceholder(meta);
+  }
+  if (el.footnoteReference) {
+    return `[^${el.footnoteReference.footnoteNumber || ''}]`;
+  }
+  if (el.horizontalRule) {
+    return '---\n';
+  }
+  return null;
+}
+
+// Google Docs named paragraph styles that map onto ATX headings. TITLE and
+// SUBTITLE have no exact ATX equivalent, but leaving them unmapped drops the
+// most prominent heading in the document from the outline entirely.
 const MARKDOWN_HEADING_PREFIX: Record<string, string> = {
+  TITLE: '#',
+  SUBTITLE: '##',
   HEADING_1: '#',
   HEADING_2: '##',
   HEADING_3: '###',
@@ -183,36 +220,180 @@ function markdownHeadingPrefix(paragraph: any): string {
   return hashes ? `${hashes} ` : '';
 }
 
-// `- ` / `1. ` (indented by nesting level) for a list paragraph, '' otherwise.
-// Ordered vs unordered comes from the list definition: ordered nesting levels
-// carry a `glyphType`, unordered ones a `glyphSymbol`.
-function markdownListPrefix(paragraph: any, lists?: any): string {
-  const bullet = paragraph?.bullet;
-  if (!bullet) return '';
-  const nestingLevel = bullet.nestingLevel ?? 0;
-  const level = lists?.[bullet.listId]?.listProperties?.nestingLevels?.[nestingLevel];
-  const glyphType = level?.glyphType;
-  const ordered = !!glyphType && glyphType !== 'NONE' && glyphType !== 'GLYPH_TYPE_UNSPECIFIED';
-  // Every ordered item is emitted as `1.` — markdown renderers renumber
-  // automatically, and the Docs model has no reliable per-item ordinal here.
-  return `${'  '.repeat(nestingLevel)}${ordered ? '1. ' : '- '}`;
+// `- ` / `1. ` for a list paragraph, indented to its parent item's content
+// column. The indent has to be measured, not assumed: a fixed two spaces per
+// level is short of the three an ordered `1. ` parent needs, and CommonMark
+// reads an under-indented child as a sibling list rather than a nested one.
+// Marker widths are recorded per list as the levels are encountered, so a
+// child always knows how wide its actual ancestors were.
+function createListPrefixer(lists?: any) {
+  const markerWidths = new Map<string, number[]>();
+
+  return (paragraph: any): string => {
+    const bullet = paragraph?.bullet;
+    if (!bullet) return '';
+    const nestingLevel = bullet.nestingLevel ?? 0;
+    const level = lists?.[bullet.listId]?.listProperties?.nestingLevels?.[nestingLevel];
+    const glyphType = level?.glyphType;
+    const ordered = !!glyphType && glyphType !== 'NONE' && glyphType !== 'GLYPH_TYPE_UNSPECIFIED';
+    // Every ordered item is emitted as `1.` — markdown renderers renumber
+    // automatically, and the Docs model has no reliable per-item ordinal here.
+    const marker = ordered ? '1. ' : '- ';
+
+    const widths = markerWidths.get(bullet.listId) ?? [];
+    let indent = 0;
+    for (let i = 0; i < nestingLevel; i++) indent += widths[i] ?? 2;
+    widths[nestingLevel] = marker.length;
+    // Levels deeper than this one are stale once the list comes back up.
+    widths.length = nestingLevel + 1;
+    markerWidths.set(bullet.listId, widths);
+
+    return `${' '.repeat(indent)}${marker}`;
+  };
 }
 
-// Wrap a text run in markdown emphasis. Markers are kept tight against the
-// visible text — surrounding whitespace, including the paragraph's trailing
-// newline, stays outside, otherwise the emphasis span never closes.
-function applyMarkdownEmphasis(content: string, textStyle: any): string {
-  if (!textStyle) return content;
-  const open: string[] = [];
-  if (textStyle.bold) open.push('**');
-  if (textStyle.italic) open.push('*');
-  if (textStyle.strikethrough) open.push('~~');
-  if (open.length === 0) return content;
+type EmphasisKey = 'bold' | 'italic' | 'strikethrough';
 
-  const [, lead, core, trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(content) ?? [];
-  if (!core) return content;
-  const close = [...open].reverse();
-  return `${lead}${open.join('')}${core}${close.join('')}${trail}`;
+// Ordered outermost-first, so the markers a run shares with its neighbours are
+// always opened in the same sequence and can stay open across run boundaries.
+const EMPHASIS_MARKERS: Array<{ key: EmphasisKey; marker: string }> = [
+  { key: 'bold', marker: '**' },
+  { key: 'italic', marker: '*' },
+  { key: 'strikethrough', marker: '~~' },
+];
+
+interface MarkdownRun {
+  text: string;
+  keys: EmphasisKey[];
+  // Already-rendered markdown (an image, chip or footnote marker) — never
+  // escaped, never emphasised.
+  literal?: boolean;
+}
+
+function emphasisKeys(textStyle: any): EmphasisKey[] {
+  return EMPHASIS_MARKERS.filter(m => textStyle?.[m.key]).map(m => m.key);
+}
+
+// Escape the inline metacharacters that would otherwise change how the
+// document's own text renders. A literal `*` inside a bold run is the worst
+// case: it pairs with one of the surrounding markers and mangles the span.
+// `_` is only emphasis at a word boundary in CommonMark, so snake_case stays
+// readable.
+function escapeMarkdownText(text: string): string {
+  return text.replace(/[\\`*~[\]]|(?<![A-Za-z0-9])_|_(?![A-Za-z0-9])/g, m => `\\${m}`);
+}
+
+// Emphasis markers must sit tight against visible text, so whitespace at a
+// styled run's edges — including the paragraph's trailing newline — is pulled
+// out into unstyled runs. Neighbouring runs that share a style set are then
+// merged: Docs splits a visually continuous span at every style boundary, and
+// wrapping each fragment separately produces fused delimiter runs such as
+// `**re*****ally***`, which renders as literal asterisks.
+function normalizeMarkdownRuns(runs: MarkdownRun[]): MarkdownRun[] {
+  const mergeAdjacent = (input: MarkdownRun[]): MarkdownRun[] => {
+    const out: MarkdownRun[] = [];
+    for (const run of input) {
+      const prev = out[out.length - 1];
+      const mergeable =
+        prev && !prev.literal && !run.literal &&
+        prev.keys.length === run.keys.length &&
+        prev.keys.every((k, i) => k === run.keys[i]);
+      if (mergeable) {
+        prev.text += run.text;
+      } else {
+        out.push({ ...run });
+      }
+    }
+    return out;
+  };
+
+  // Coalesce before measuring edges: a span Docs fragmented mid-word has to be
+  // one run first, or the whitespace between the fragments reads as an edge and
+  // the span is split back apart.
+  const split: MarkdownRun[] = [];
+  for (const run of mergeAdjacent(runs)) {
+    if (run.literal) {
+      split.push(run);
+      continue;
+    }
+    if (run.keys.length === 0 || run.text.trim() === '') {
+      split.push({ text: run.text, keys: [] });
+      continue;
+    }
+    const [, lead, core, trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(run.text) ?? [];
+    if (lead) split.push({ text: lead, keys: [] });
+    split.push({ text: core, keys: run.keys });
+    if (trail) split.push({ text: trail, keys: [] });
+  }
+  return mergeAdjacent(split);
+}
+
+// Render a paragraph's runs, opening and closing emphasis markers across run
+// boundaries so spans nest properly instead of being reopened per run.
+function renderMarkdownRuns(runs: MarkdownRun[]): string {
+  const markerFor = (key: EmphasisKey) => EMPHASIS_MARKERS.find(m => m.key === key)!.marker;
+  let result = '';
+  let open: EmphasisKey[] = [];
+
+  for (const run of normalizeMarkdownRuns(runs)) {
+    const keys = run.literal ? [] : run.keys;
+    // Close markers that are no longer active, plus everything opened after
+    // them — markers only nest, so they close in reverse order.
+    const stale = open.findIndex(k => !keys.includes(k));
+    if (stale !== -1) {
+      for (let i = open.length - 1; i >= stale; i--) result += markerFor(open[i]);
+      open = open.slice(0, stale);
+    }
+    for (const m of EMPHASIS_MARKERS) {
+      if (keys.includes(m.key) && !open.includes(m.key)) {
+        result += m.marker;
+        open.push(m.key);
+      }
+    }
+    result += run.literal ? run.text : escapeMarkdownText(run.text);
+  }
+
+  for (let i = open.length - 1; i >= 0; i--) result += markerFor(open[i]);
+  return result;
+}
+
+// Assemble a GFM pipe table from already-escaped cell text.
+//
+// GFM has no colspan, and it sizes the whole table from the header row: a
+// merged first-row cell would otherwise define a one-column table and every
+// body column past the first would be dropped from the rendering. Rows are
+// padded to the widest row so no cell is lost.
+function renderPipeTable(rows: string[][]): string {
+  if (rows.length === 0) return '';
+  const width = Math.max(...rows.map(r => r.length));
+  const line = (cells: string[]) =>
+    `| ${Array.from({ length: width }, (_, i) => cells[i] ?? '').join(' | ')} |`;
+  const lines = [line(rows[0]), `| ${Array.from({ length: width }, () => '---').join(' | ')} |`];
+  for (const row of rows.slice(1)) lines.push(line(row));
+  return lines.join('\n');
+}
+
+// One entry per column the row occupies: a cell merged across N columns
+// contributes its text plus N-1 empty cells, keeping later rows aligned.
+function expandRowCells(row: any, renderCell: (cell: any) => string): string[] {
+  const cells: string[] = [];
+  for (const cell of row.tableCells || []) {
+    cells.push(renderCell(cell));
+    const span = cell.tableCellStyle?.columnSpan ?? 1;
+    for (let i = 1; i < span; i++) cells.push('');
+  }
+  return cells;
+}
+
+// A newline would terminate the table row, so multi-paragraph cell content is
+// joined with `<br>` rather than flattened into one run-on line. `|` has to be
+// escaped or it reads as a column separator.
+function escapeTableCell(text: string): string {
+  return text
+    .replace(/\|/g, '\\|')
+    .replace(/[ \t]*\n[ \t]*/g, '<br>')
+    .replace(/^(?:<br>)+|(?:<br>)+$/g, '')
+    .trim();
 }
 
 // Extract text from body content (paragraphs + tables). Inline images are
@@ -229,63 +410,24 @@ function extractText(
   format: 'text' | 'markdown' = 'text',
   lists?: any
 ): string {
+  if (format === 'markdown') {
+    return extractMarkdown(bodyContent, inlineObjects, lists);
+  }
+
   const renderImage = (id: string): string =>
-    format === 'markdown'
-      ? renderImageMarkdown(getInlineImageMeta(id, inlineObjects))
-      : renderImagePlaceholder(getInlineImageMeta(id, inlineObjects));
+    renderImagePlaceholder(getInlineImageMeta(id, inlineObjects));
 
   let result = '';
   for (const element of bodyContent) {
     if (element.paragraph?.elements) {
-      let paragraphText = '';
       for (const elem of element.paragraph.elements) {
         if (elem.textRun?.content) {
-          paragraphText += format === 'markdown'
-            ? applyMarkdownEmphasis(elem.textRun.content, elem.textRun.textStyle)
-            : elem.textRun.content;
+          result += elem.textRun.content;
         } else if (elem.inlineObjectElement?.inlineObjectId) {
-          paragraphText += renderImage(elem.inlineObjectElement.inlineObjectId);
+          result += renderImage(elem.inlineObjectElement.inlineObjectId);
         }
       }
-      if (format === 'markdown' && paragraphText.trim() !== '') {
-        // Skip empty paragraphs — a bare `## ` or `- ` is not a heading or a
-        // list item, and would survive a markdown round trip as visible junk.
-        // A bulleted paragraph reads as a list item even when it also carries a
-        // heading style, so the list prefix wins.
-        paragraphText = element.paragraph.bullet
-          ? markdownListPrefix(element.paragraph, lists) + paragraphText
-          : markdownHeadingPrefix(element.paragraph) + paragraphText;
-      }
-      result += paragraphText;
-    } else if (element.table && format === 'markdown') {
-      const rows = element.table.tableRows || [];
-      rows.forEach((row: any, rowIdx: number) => {
-        const cells = (row.tableCells || []).map((cell: any) => {
-          let cellText = '';
-          for (const cellContent of cell.content || []) {
-            if (cellContent.paragraph?.elements) {
-              for (const elem of cellContent.paragraph.elements) {
-                if (elem.textRun?.content) {
-                  cellText += applyMarkdownEmphasis(elem.textRun.content, elem.textRun.textStyle);
-                } else if (elem.inlineObjectElement?.inlineObjectId) {
-                  cellText += renderImage(elem.inlineObjectElement.inlineObjectId);
-                }
-              }
-            }
-          }
-          // A cell spanning multiple paragraphs collapses to one line — a
-          // newline would terminate the table row. `|` must be escaped or it
-          // would read as a column separator.
-          return cellText.replace(/\s*\n\s*/g, ' ').replace(/\|/g, '\\|').trim();
-        });
-        result += `| ${cells.join(' | ')} |\n`;
-        if (rowIdx === 0) {
-          result += `| ${cells.map(() => '---').join(' | ')} |\n`;
-        }
-      });
-      result += '\n';
     } else if (element.table) {
-      // Text mode: the legacy tab-separated rendering, left untouched.
       for (const row of element.table.tableRows || []) {
         for (const cell of row.tableCells || []) {
           for (const cellContent of cell.content || []) {
@@ -306,6 +448,85 @@ function extractText(
     }
   }
   return result;
+}
+
+// Markdown rendering of body content, assembled as discrete blocks rather than
+// by string concatenation: markdown separates blocks with a blank line, and a
+// single newline between two paragraphs is only a soft break — the renderer
+// would merge them back into one paragraph and the document's most basic
+// structure would be lost. Consecutive list items stay one newline apart so a
+// list renders tight rather than as a series of loose paragraphs.
+function extractMarkdown(bodyContent: any[], inlineObjects?: any, lists?: any): string {
+  const listPrefix = createListPrefixer(lists);
+  const blocks: Array<{ text: string; list: boolean }> = [];
+
+  const paragraphRuns = (paragraph: any): MarkdownRun[] => {
+    const runs: MarkdownRun[] = [];
+    for (const elem of paragraph.elements || []) {
+      if (elem.textRun?.content) {
+        runs.push({ text: elem.textRun.content, keys: emphasisKeys(elem.textRun.textStyle) });
+      } else {
+        const inline = resolveInlineElementText(elem, inlineObjects, 'markdown');
+        if (inline) runs.push({ text: inline, keys: [], literal: true });
+      }
+    }
+    return runs;
+  };
+
+  // The paragraph's own trailing newline is dropped — block separation is the
+  // joiner's job below.
+  const paragraphBody = (paragraph: any): string =>
+    renderMarkdownRuns(paragraphRuns(paragraph)).replace(/\n+$/, '');
+
+  const renderCell = (cell: any): string => {
+    // A fresh prefixer per cell: list nesting inside a cell is independent of
+    // the surrounding document's lists.
+    const cellPrefix = createListPrefixer(lists);
+    const lines: string[] = [];
+    for (const cellContent of cell.content || []) {
+      if (!cellContent.paragraph?.elements) continue;
+      const body = paragraphBody(cellContent.paragraph);
+      if (body.trim() === '') continue;
+      lines.push((cellContent.paragraph.bullet ? cellPrefix(cellContent.paragraph) : '') + body);
+    }
+    return escapeTableCell(lines.join('\n'));
+  };
+
+  for (const element of bodyContent) {
+    if (element.paragraph?.elements) {
+      const body = paragraphBody(element.paragraph);
+      // Empty paragraphs carry no content and would only emit a bare `## ` or
+      // `- `; block separation already reproduces the vertical space.
+      if (body.trim() === '') continue;
+      const bullet = element.paragraph.bullet;
+      // A bulleted paragraph reads as a list item even when it also carries a
+      // heading style, so the list prefix wins.
+      const prefix = bullet
+        ? listPrefix(element.paragraph)
+        : markdownHeadingPrefix(element.paragraph);
+      blocks.push({ text: prefix + body, list: !!bullet });
+    } else if (element.table?.tableRows) {
+      const rows = element.table.tableRows.map((row: any) => expandRowCells(row, renderCell));
+      const table = renderPipeTable(rows);
+      if (table) blocks.push({ text: table, list: false });
+    }
+  }
+
+  let result = '';
+  blocks.forEach((block, i) => {
+    if (i > 0) result += block.list && blocks[i - 1].list ? '\n' : '\n\n';
+    result += block.text;
+  });
+  return result === '' ? '' : `${result}\n`;
+}
+
+// Prepend the document title as the markdown H1. A TITLE-styled paragraph in
+// the body renders as `# Title` in its own right, so when the two say the same
+// thing the prefix is dropped rather than giving the document two identical H1s.
+function withMarkdownTitle(title: string | null | undefined, body: string): string {
+  const heading = `# ${title}`;
+  if (body === heading || body.startsWith(`${heading}\n`)) return body;
+  return `${heading}\n\n${body}`;
 }
 
 // Extract full text from a Google Doc, handling tabs and optional tabId filtering
@@ -335,7 +556,9 @@ function extractDocText(
         if (isMultiTab) {
           const title = tab.tabProperties?.title || 'Untitled';
           const indent = '  '.repeat(level);
-          text += `${indent}=== Tab: ${title} ===\n`;
+          // The blank line keeps the header its own markdown block; without it
+          // the tab's first paragraph folds into the header line.
+          text += `${indent}=== Tab: ${title} ===\n${format === 'markdown' ? '\n' : ''}`;
         }
         if (bodyContent) {
           text += extractText(bodyContent, tab.documentTab?.inlineObjects, format, tab.documentTab?.lists);
@@ -867,30 +1090,6 @@ function buildDocFormattedContent(
     baselineOffset?: 'SUPERSCRIPT' | 'SUBSCRIPT';
   }
 
-  function resolveInlineElementText(el: any, inlineObjects?: any): string | null {
-    if (el.person?.personProperties) {
-      const p = el.person.personProperties;
-      if (p.name && p.email) return `@${p.name} (${p.email})`;
-      return `@${p.name || p.email || ''}`;
-    }
-    if (el.richLink?.richLinkProperties) {
-      const rl = el.richLink.richLinkProperties;
-      const title = escapeBrackets(rl.title || rl.uri || '');
-      const uri = rl.uri;
-      return title && uri ? `[${title}](${uri})` : title || null;
-    }
-    if (el.inlineObjectElement?.inlineObjectId) {
-      return renderImagePlaceholder(getInlineImageMeta(el.inlineObjectElement.inlineObjectId, inlineObjects));
-    }
-    if (el.footnoteReference) {
-      return `[^${el.footnoteReference.footnoteNumber || ''}]`;
-    }
-    if (el.horizontalRule) {
-      return '---\n';
-    }
-    return null;
-  }
-
   function extractSegments(bodyContent: any[], inlineObjects?: any): Segment[] {
     const segments: Segment[] = [];
 
@@ -947,20 +1146,12 @@ function buildDocFormattedContent(
             }
           }
         } else if (element.table?.tableRows) {
-          const rows: string[] = [];
-          for (let rowIdx = 0; rowIdx < element.table.tableRows.length; rowIdx++) {
-            const row = element.table.tableRows[rowIdx];
+          const rows: string[][] = [];
+          for (const row of element.table.tableRows) {
             if (!row.tableCells) continue;
-            const cellTexts: string[] = [];
-            for (const cell of row.tableCells) {
-              cellTexts.push(cell.content ? getCellText(cell.content) : '');
-            }
-            rows.push('| ' + cellTexts.join(' | ') + ' |');
-            if (rowIdx === 0) {
-              rows.push('| ' + cellTexts.map(() => '---').join(' | ') + ' |');
-            }
+            rows.push(expandRowCells(row, (cell: any) => (cell.content ? getCellText(cell.content) : '')));
           }
-          const md = rows.join('\n') + '\n\n';
+          const md = renderPipeTable(rows) + '\n\n';
           if (element.startIndex != null && element.endIndex != null) {
             segments.push({
               text: md,
@@ -1116,6 +1307,33 @@ function sliceByLine(content: string, offset: number, limit: number): { slice: s
     if (nl > offset) end = nl + 1;
   }
   return { slice: content.slice(offset, end), end };
+}
+
+// Line-boundary slicing is enough for text output, where every line stands on
+// its own, but a markdown table spans several lines that only render together:
+// cut between them and the first page ends in a headerless fragment while the
+// next begins with orphaned `| a | b |` rows. Snap the cut back to the start of
+// the table instead. A table longer than `limit` keeps the hard cut, so
+// pagination still makes forward progress.
+function sliceMarkdownByBlock(content: string, offset: number, limit: number): { slice: string; end: number } {
+  const { end } = sliceByLine(content, offset, limit);
+  if (end >= content.length) return { slice: content.slice(offset, end), end };
+
+  const isTableLine = (lineStart: number) => content.startsWith('|', lineStart);
+  // `end` sits at the start of the next page's first line.
+  if (!isTableLine(end)) return { slice: content.slice(offset, end), end };
+
+  let tableStart = end;
+  while (tableStart > offset) {
+    const prevBreak = content.lastIndexOf('\n', tableStart - 2);
+    const lineStart = prevBreak === -1 ? 0 : prevBreak + 1;
+    if (lineStart < offset || !isTableLine(lineStart)) break;
+    tableStart = lineStart;
+  }
+  // The table starts at or before this page's own start — it cannot be moved
+  // wholly onto the next page.
+  if (tableStart <= offset) return { slice: content.slice(offset, end), end };
+  return { slice: content.slice(offset, tableStart), end: tableStart };
 }
 
 /**
@@ -2705,7 +2923,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
 
       let resultText = text;
       if (format === 'markdown') {
-        resultText = `# ${doc.title}\n\n${resultText}`;
+        resultText = withMarkdownTitle(doc.title, resultText);
       }
 
       if (a.maxLength && resultText.length > a.maxLength) {
@@ -2741,12 +2959,14 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
 
       let fullText = text;
       if (format === 'markdown') {
-        fullText = `# ${doc.title}\n\n${fullText}`;
+        fullText = withMarkdownTitle(doc.title, fullText);
       }
 
       const offset = a.offset;
       const limit = a.limit;
-      const { slice: slicedText, end } = sliceByLine(fullText, offset, limit);
+      const { slice: slicedText, end } = format === 'markdown'
+        ? sliceMarkdownByBlock(fullText, offset, limit)
+        : sliceByLine(fullText, offset, limit);
       const hasMore = end < fullText.length;
 
       const result = {

@@ -167,13 +167,67 @@ function renderImageMarkdown(meta: InlineImageMeta | null): string {
   return `![${alt}](${escapeMarkdownUri(uri)} "objectId=${meta.objectId}")`;
 }
 
-// Extract plain text from body content (paragraphs + tables). Inline images are
+// Google Docs named paragraph styles that map onto ATX headings.
+const MARKDOWN_HEADING_PREFIX: Record<string, string> = {
+  HEADING_1: '#',
+  HEADING_2: '##',
+  HEADING_3: '###',
+  HEADING_4: '####',
+  HEADING_5: '#####',
+  HEADING_6: '######',
+};
+
+// `# ` / `## ` / … for a heading paragraph, '' for body text.
+function markdownHeadingPrefix(paragraph: any): string {
+  const hashes = MARKDOWN_HEADING_PREFIX[paragraph?.paragraphStyle?.namedStyleType];
+  return hashes ? `${hashes} ` : '';
+}
+
+// `- ` / `1. ` (indented by nesting level) for a list paragraph, '' otherwise.
+// Ordered vs unordered comes from the list definition: ordered nesting levels
+// carry a `glyphType`, unordered ones a `glyphSymbol`.
+function markdownListPrefix(paragraph: any, lists?: any): string {
+  const bullet = paragraph?.bullet;
+  if (!bullet) return '';
+  const nestingLevel = bullet.nestingLevel ?? 0;
+  const level = lists?.[bullet.listId]?.listProperties?.nestingLevels?.[nestingLevel];
+  const glyphType = level?.glyphType;
+  const ordered = !!glyphType && glyphType !== 'NONE' && glyphType !== 'GLYPH_TYPE_UNSPECIFIED';
+  // Every ordered item is emitted as `1.` — markdown renderers renumber
+  // automatically, and the Docs model has no reliable per-item ordinal here.
+  return `${'  '.repeat(nestingLevel)}${ordered ? '1. ' : '- '}`;
+}
+
+// Wrap a text run in markdown emphasis. Markers are kept tight against the
+// visible text — surrounding whitespace, including the paragraph's trailing
+// newline, stays outside, otherwise the emphasis span never closes.
+function applyMarkdownEmphasis(content: string, textStyle: any): string {
+  if (!textStyle) return content;
+  const open: string[] = [];
+  if (textStyle.bold) open.push('**');
+  if (textStyle.italic) open.push('*');
+  if (textStyle.strikethrough) open.push('~~');
+  if (open.length === 0) return content;
+
+  const [, lead, core, trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(content) ?? [];
+  if (!core) return content;
+  const close = [...open].reverse();
+  return `${lead}${open.join('')}${core}${close.join('')}${trail}`;
+}
+
+// Extract text from body content (paragraphs + tables). Inline images are
 // rendered from `inlineObjects` (markdown `![alt](uri)` or a single-line
 // placeholder) instead of being dropped.
+//
+// In markdown mode the document's structure is carried over too: heading
+// paragraphs get their ATX prefix, list paragraphs a `- `/`1. ` marker indented
+// by nesting level, styled runs their emphasis markers, and tables render as
+// pipe tables. Text mode is unchanged — plain runs, tab-separated table cells.
 function extractText(
   bodyContent: any[],
   inlineObjects?: any,
-  format: 'text' | 'markdown' = 'text'
+  format: 'text' | 'markdown' = 'text',
+  lists?: any
 ): string {
   const renderImage = (id: string): string =>
     format === 'markdown'
@@ -183,14 +237,55 @@ function extractText(
   let result = '';
   for (const element of bodyContent) {
     if (element.paragraph?.elements) {
+      let paragraphText = '';
       for (const elem of element.paragraph.elements) {
         if (elem.textRun?.content) {
-          result += elem.textRun.content;
+          paragraphText += format === 'markdown'
+            ? applyMarkdownEmphasis(elem.textRun.content, elem.textRun.textStyle)
+            : elem.textRun.content;
         } else if (elem.inlineObjectElement?.inlineObjectId) {
-          result += renderImage(elem.inlineObjectElement.inlineObjectId);
+          paragraphText += renderImage(elem.inlineObjectElement.inlineObjectId);
         }
       }
+      if (format === 'markdown' && paragraphText.trim() !== '') {
+        // Skip empty paragraphs — a bare `## ` or `- ` is not a heading or a
+        // list item, and would survive a markdown round trip as visible junk.
+        // A bulleted paragraph reads as a list item even when it also carries a
+        // heading style, so the list prefix wins.
+        paragraphText = element.paragraph.bullet
+          ? markdownListPrefix(element.paragraph, lists) + paragraphText
+          : markdownHeadingPrefix(element.paragraph) + paragraphText;
+      }
+      result += paragraphText;
+    } else if (element.table && format === 'markdown') {
+      const rows = element.table.tableRows || [];
+      rows.forEach((row: any, rowIdx: number) => {
+        const cells = (row.tableCells || []).map((cell: any) => {
+          let cellText = '';
+          for (const cellContent of cell.content || []) {
+            if (cellContent.paragraph?.elements) {
+              for (const elem of cellContent.paragraph.elements) {
+                if (elem.textRun?.content) {
+                  cellText += applyMarkdownEmphasis(elem.textRun.content, elem.textRun.textStyle);
+                } else if (elem.inlineObjectElement?.inlineObjectId) {
+                  cellText += renderImage(elem.inlineObjectElement.inlineObjectId);
+                }
+              }
+            }
+          }
+          // A cell spanning multiple paragraphs collapses to one line — a
+          // newline would terminate the table row. `|` must be escaped or it
+          // would read as a column separator.
+          return cellText.replace(/\s*\n\s*/g, ' ').replace(/\|/g, '\\|').trim();
+        });
+        result += `| ${cells.join(' | ')} |\n`;
+        if (rowIdx === 0) {
+          result += `| ${cells.map(() => '---').join(' | ')} |\n`;
+        }
+      });
+      result += '\n';
     } else if (element.table) {
+      // Text mode: the legacy tab-separated rendering, left untouched.
       for (const row of element.table.tableRows || []) {
         for (const cell of row.tableCells || []) {
           for (const cellContent of cell.content || []) {
@@ -230,7 +325,7 @@ function extractDocText(
       }
       const bodyContent = tab.documentTab?.body?.content;
       if (bodyContent) {
-        text = extractText(bodyContent, tab.documentTab?.inlineObjects, format);
+        text = extractText(bodyContent, tab.documentTab?.inlineObjects, format, tab.documentTab?.lists);
       }
     } else {
       const allTabs = collectAllTabsWithLevel(tabs);
@@ -243,7 +338,7 @@ function extractDocText(
           text += `${indent}=== Tab: ${title} ===\n`;
         }
         if (bodyContent) {
-          text += extractText(bodyContent, tab.documentTab?.inlineObjects, format);
+          text += extractText(bodyContent, tab.documentTab?.inlineObjects, format, tab.documentTab?.lists);
         }
         if (isMultiTab) {
           text += '\n';
@@ -253,7 +348,7 @@ function extractDocText(
   } else {
     const body = doc.body;
     if (body?.content) {
-      text = extractText(body.content, doc.inlineObjects, format);
+      text = extractText(body.content, doc.inlineObjects, format, doc.lists);
     }
   }
 

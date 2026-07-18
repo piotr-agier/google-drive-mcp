@@ -641,6 +641,232 @@ describe('Docs tools', () => {
       assert.ok(res.content[0].text!.includes('![Architecture diagram](https://lh3.googleusercontent.com/xyz "objectId=obj-1")'), res.content[0].text!);
     });
 
+    it('renders heading paragraphs as ATX hashes (format=markdown)', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Doc with headings',
+          body: {
+            content: [
+              { paragraph: { paragraphStyle: { namedStyleType: 'HEADING_1' }, elements: [{ textRun: { content: 'Top level\n' } }] } },
+              { paragraph: { paragraphStyle: { namedStyleType: 'HEADING_3' }, elements: [{ textRun: { content: 'Third level\n' } }] } },
+              { paragraph: { paragraphStyle: { namedStyleType: 'NORMAL_TEXT' }, elements: [{ textRun: { content: 'Plain body\n' } }] } },
+            ],
+          },
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', format: 'markdown' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      assert.ok(text.includes('# Top level\n'), text);
+      assert.ok(text.includes('### Third level\n'), text);
+      assert.ok(text.includes('Plain body\n'), text);
+      assert.ok(!text.includes('# Plain body'), text);
+    });
+
+    it('does not emit a bare hash for an empty heading paragraph (format=markdown)', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Doc with empty heading',
+          body: {
+            content: [
+              { paragraph: { paragraphStyle: { namedStyleType: 'HEADING_2' }, elements: [{ textRun: { content: '\n' } }] } },
+            ],
+          },
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', format: 'markdown' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      assert.ok(!text.includes('## '), text);
+    });
+
+    it('leaves headings unprefixed in text format', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Doc with headings',
+          body: {
+            content: [
+              { paragraph: { paragraphStyle: { namedStyleType: 'HEADING_1' }, elements: [{ textRun: { content: 'Top level\n' } }] } },
+            ],
+          },
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', format: 'text' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      assert.ok(text.includes('Top level'), text);
+      assert.ok(!text.includes('#'), text);
+    });
+
+    it('wraps bold, italic and strikethrough runs in emphasis (format=markdown)', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Doc with emphasis',
+          body: {
+            content: [
+              { paragraph: { elements: [
+                { textRun: { content: 'plain ' } },
+                { textRun: { content: 'bold', textStyle: { bold: true } } },
+                { textRun: { content: ' and ' } },
+                { textRun: { content: 'italic', textStyle: { italic: true } } },
+                { textRun: { content: ' and ' } },
+                { textRun: { content: 'struck', textStyle: { strikethrough: true } } },
+                { textRun: { content: '\n' } },
+              ] } },
+            ],
+          },
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', format: 'markdown' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      assert.ok(text.includes('plain **bold** and *italic* and ~~struck~~'), text);
+    });
+
+    it('keeps emphasis markers tight around a run that ends the paragraph (format=markdown)', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Doc with trailing emphasis',
+          body: {
+            content: [
+              { paragraph: { elements: [
+                { textRun: { content: 'lead ' } },
+                { textRun: { content: 'bold tail\n', textStyle: { bold: true } } },
+              ] } },
+            ],
+          },
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', format: 'markdown' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      // The newline must fall outside the markers, otherwise the emphasis never closes.
+      assert.ok(text.includes('lead **bold tail**\n'), JSON.stringify(text));
+      assert.ok(!text.includes('\n**'), JSON.stringify(text));
+    });
+
+    it('leaves emphasis unmarked in text format', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Doc with emphasis',
+          body: {
+            content: [
+              { paragraph: { elements: [
+                { textRun: { content: 'bold', textStyle: { bold: true } } },
+                { textRun: { content: '\n' } },
+              ] } },
+            ],
+          },
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', format: 'text' });
+      assert.equal(res.isError, false);
+      assert.ok(!res.content[0].text!.includes('*'), res.content[0].text!);
+    });
+
+    it('renders bulleted and numbered list items with nesting (format=markdown)', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Doc with lists',
+          body: {
+            content: [
+              { paragraph: { bullet: { listId: 'l1', nestingLevel: 0 }, elements: [{ textRun: { content: 'first\n' } }] } },
+              { paragraph: { bullet: { listId: 'l1', nestingLevel: 1 }, elements: [{ textRun: { content: 'nested\n' } }] } },
+              { paragraph: { bullet: { listId: 'l2', nestingLevel: 0 }, elements: [{ textRun: { content: 'step one\n' } }] } },
+            ],
+          },
+          lists: {
+            l1: { listProperties: { nestingLevels: [{ glyphSymbol: '●' }, { glyphSymbol: '○' }] } },
+            l2: { listProperties: { nestingLevels: [{ glyphType: 'DECIMAL' }] } },
+          },
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', format: 'markdown' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      assert.ok(text.includes('- first\n'), JSON.stringify(text));
+      assert.ok(text.includes('  - nested\n'), JSON.stringify(text));
+      assert.ok(text.includes('1. step one\n'), JSON.stringify(text));
+    });
+
+    it('renders a bulleted heading as a list item, not a heading (format=markdown)', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Doc with bulleted heading',
+          body: {
+            content: [
+              { paragraph: { paragraphStyle: { namedStyleType: 'HEADING_2' }, bullet: { listId: 'l1', nestingLevel: 0 }, elements: [{ textRun: { content: 'item\n' } }] } },
+            ],
+          },
+          lists: { l1: { listProperties: { nestingLevels: [{ glyphSymbol: '●' }] } } },
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', format: 'markdown' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      assert.ok(text.includes('- item\n'), JSON.stringify(text));
+      assert.ok(!text.includes('## item'), JSON.stringify(text));
+    });
+
+    it('renders tables as pipe tables (format=markdown)', async () => {
+      const cell = (content: string) => ({ content: [{ paragraph: { elements: [{ textRun: { content } }] } }] });
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Doc with table',
+          body: {
+            content: [
+              { table: { tableRows: [
+                { tableCells: [cell('Owner'), cell('Role')] },
+                { tableCells: [cell('Eero'), cell('CEO')] },
+              ] } },
+            ],
+          },
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', format: 'markdown' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      assert.ok(text.includes('| Owner | Role |'), JSON.stringify(text));
+      assert.ok(text.includes('| --- | --- |'), JSON.stringify(text));
+      assert.ok(text.includes('| Eero | CEO |'), JSON.stringify(text));
+    });
+
+    it('escapes pipe characters inside table cells (format=markdown)', async () => {
+      const cell = (content: string) => ({ content: [{ paragraph: { elements: [{ textRun: { content } }] } }] });
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Doc with pipe',
+          body: {
+            content: [
+              { table: { tableRows: [{ tableCells: [cell('a | b'), cell('c')] }] } },
+            ],
+          },
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', format: 'markdown' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text!.includes('| a \\| b | c |'), JSON.stringify(res.content[0].text!));
+    });
+
+    it('keeps tables tab-separated in text format', async () => {
+      const cell = (content: string) => ({ content: [{ paragraph: { elements: [{ textRun: { content } }] } }] });
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Doc with table',
+          body: {
+            content: [
+              { table: { tableRows: [{ tableCells: [cell('Owner'), cell('Role')] }] } },
+            ],
+          },
+        },
+      }));
+      const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', format: 'text' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      assert.ok(text.includes('Owner\tRole\t'), JSON.stringify(text));
+      assert.ok(!text.includes('|'), JSON.stringify(text));
+    });
+
     it('renders inline images as a single-line placeholder (format=text)', async () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({
         data: {

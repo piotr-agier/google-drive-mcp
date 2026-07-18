@@ -766,6 +766,10 @@ function buildDocFormattedContent(
     strikethrough?: boolean;
     foregroundColor?: string;
     backgroundColor?: string;
+    // Only set for SUPERSCRIPT/SUBSCRIPT. The API reports NONE for ordinary
+    // text, which carries no information and would force a meta line onto
+    // every unformatted run.
+    baselineOffset?: 'SUPERSCRIPT' | 'SUBSCRIPT';
   }
 
   function resolveInlineElementText(el: any, inlineObjects?: any): string | null {
@@ -829,6 +833,9 @@ function buildDocFormattedContent(
                   const bg = rgbColorToHex(ts.backgroundColor);
                   if (fg) seg.foregroundColor = fg;
                   if (bg) seg.backgroundColor = bg;
+                  if (ts.baselineOffset === 'SUPERSCRIPT' || ts.baselineOffset === 'SUBSCRIPT') {
+                    seg.baselineOffset = ts.baselineOffset;
+                  }
                 }
               }
               segments.push(seg);
@@ -911,7 +918,7 @@ function buildDocFormattedContent(
   }
 
   function hasFormattingInfo(seg: Segment): boolean {
-    return !!(seg.fontFamily || seg.fontSize || seg.bold || seg.italic || seg.underline || seg.strikethrough || seg.foregroundColor || seg.backgroundColor);
+    return !!(seg.fontFamily || seg.fontSize || seg.bold || seg.italic || seg.underline || seg.strikethrough || seg.foregroundColor || seg.backgroundColor || seg.baselineOffset);
   }
 
   function buildMetaLine(seg: Segment): string {
@@ -924,6 +931,7 @@ function buildDocFormattedContent(
     if (seg.underline) styles.push('underline');
     if (seg.strikethrough) styles.push('strikethrough');
     if (styles.length > 0) parts.push(`style=${styles.join(',')}`);
+    if (seg.baselineOffset) parts.push(`baseline=${seg.baselineOffset.toLowerCase()}`);
     if (seg.foregroundColor) parts.push(`color=${seg.foregroundColor}`);
     if (seg.backgroundColor) parts.push(`bg=${seg.backgroundColor}`);
     return parts.join(', ');
@@ -1652,7 +1660,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "formatGoogleDocText",
-    description: "Apply text formatting (bold, italic, font, color, links) to a range or found text in a Google Doc. Alias for applyTextStyle.",
+    description: "Apply text formatting (bold, italic, font, color, links, superscript/subscript) to a range or found text in a Google Doc. Alias for applyTextStyle.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1670,6 +1678,7 @@ export const toolDefinitions: ToolDefinition[] = [
         foregroundColor: { type: "string", description: "Hex color (e.g., #FF0000)" },
         backgroundColor: { type: "string", description: "Hex background color" },
         linkUrl: { type: "string", description: "URL for hyperlink" },
+        baselineOffset: { type: "string", enum: ["SUPERSCRIPT", "SUBSCRIPT", "NONE"], description: "Vertical text offset: SUPERSCRIPT or SUBSCRIPT. Use NONE to reset text to the normal baseline." },
         tabId: { type: "string", description: "Optional. Tab ID to format within (from listDocumentTabs). If omitted, operates on the first/default tab." }
       },
       required: ["documentId"]

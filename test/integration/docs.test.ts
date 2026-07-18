@@ -1226,6 +1226,50 @@ describe('Docs tools', () => {
       assert.ok(text.includes('Normal text'), 'should still include text content');
     });
 
+    it('surfaces superscript/subscript runs on the formatted read path', async () => {
+      // Without this, text written by applyTextStyle({ baselineOffset })
+      // reads back indistinguishable from unformatted text.
+      const styledRun = (content: string, baselineOffset: string, startIndex: number, endIndex: number) => ({
+        textRun: { content, textStyle: { baselineOffset } },
+        startIndex,
+        endIndex,
+      });
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          title: 'Baseline Doc',
+          tabs: [
+            {
+              tabProperties: { title: 'Main' },
+              documentTab: {
+                body: {
+                  content: [{
+                    paragraph: {
+                      elements: [
+                        styledRun('E = mc\n', 'NONE', 1, 8),
+                        styledRun('2\n', 'SUPERSCRIPT', 8, 10),
+                        styledRun('H2O\n', 'SUBSCRIPT', 10, 14),
+                      ],
+                    },
+                  }],
+                },
+              },
+            },
+          ],
+        },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1', includeFormatting: true });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      assert.ok(text.includes('baseline=superscript'), 'should mark the superscript run');
+      assert.ok(text.includes('baseline=subscript'), 'should mark the subscript run');
+      // NONE is what the API reports for ordinary text; emitting it would force
+      // a meta line onto every unformatted run.
+      assert.ok(!text.includes('baseline=none'), 'should not mark normal-baseline runs');
+      const normalLine = text.split('\n').find((l) => l.includes('E = mc'))!;
+      assert.ok(!normalLine.includes('baseline='), 'normal run should carry no baseline marker');
+    });
+
     it('includes formatting with multi-tab', async () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({
         data: {
@@ -2557,6 +2601,29 @@ describe('Docs tools', () => {
         assert.equal(res.isError, false);
         const req = lastRequests()[0].updateTextStyle;
         assert.equal(req.textStyle.baselineOffset, 'NONE');
+        assert.ok(req.fields.split(',').includes('baselineOffset'));
+      });
+
+      it('appends baselineOffset to the field mask alongside other style options', async () => {
+        // Guards the append path: with a single style option the mask is a
+        // one-element string, so an overwriting mask builder would look correct.
+        const res = await callTool(ctx.client, 'applyTextStyle', {
+          documentId: 'doc-1', startIndex: 1, endIndex: 5, bold: true, baselineOffset: 'SUPERSCRIPT',
+        });
+        assert.equal(res.isError, false);
+        const req = lastRequests()[0].updateTextStyle;
+        assert.equal(req.textStyle.bold, true);
+        assert.equal(req.textStyle.baselineOffset, 'SUPERSCRIPT');
+        assert.deepEqual(req.fields.split(',').sort(), ['baselineOffset', 'bold']);
+      });
+
+      it('accepts baselineOffset through the formatGoogleDocText alias', async () => {
+        const res = await callTool(ctx.client, 'formatGoogleDocText', {
+          documentId: 'doc-1', startIndex: 1, endIndex: 5, baselineOffset: 'SUPERSCRIPT',
+        });
+        assert.equal(res.isError, false);
+        const req = lastRequests()[0].updateTextStyle;
+        assert.equal(req.textStyle.baselineOffset, 'SUPERSCRIPT');
         assert.ok(req.fields.split(',').includes('baselineOffset'));
       });
     });

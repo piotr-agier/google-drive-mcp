@@ -642,12 +642,12 @@ Team mode is mutually exclusive with service-account and external-token modes, n
 
 - **getGoogleDocContent** - Get document content with text indices for formatting
   - `documentId`: Document ID
-  - `includeFormatting`: Include font, style, and color info for each text span (optional, default: false)
+  - `includeFormatting`: Include font, style, color, and baseline (superscript/subscript) info for each text span (optional, default: false)
   - Inline images render as a single-line `[image: objectId=… contentUri=… sourceUri=… size=WxHpt]` token (was a bare `[image]`). Pass the `objectId` to `getGoogleDocImage`.
 
 - **getGoogleDocContentPaginated** - Paginated `getGoogleDocContent`; page ends snap to a line boundary where possible (a single line longer than `limit` is hard-cut to make forward progress)
   - `documentId`: Document ID
-  - `includeFormatting`: Include font, style, and color info for each text span (optional, default: false)
+  - `includeFormatting`: Include font, style, color, and baseline (superscript/subscript) info for each text span (optional, default: false)
   - `offset`: Character offset into the formatted output (optional, default: 0; pass the previous response's `nextOffset`)
   - `limit`: Maximum characters per page (optional, default: 50000, max: 80000)
 
@@ -713,6 +713,7 @@ Team mode is mutually exclusive with service-account and external-token modes, n
   - `foregroundColor`: Hex color, e.g., `#FF0000` (optional)
   - `backgroundColor`: Hex background color (optional)
   - `linkUrl`: URL for hyperlink (optional)
+  - `baselineOffset`: `SUPERSCRIPT`, `SUBSCRIPT`, or `NONE` to reset to the normal baseline (optional)
 
 - **applyParagraphStyle** - Apply paragraph formatting
   - `documentId`: Document ID

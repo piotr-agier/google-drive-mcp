@@ -73,6 +73,32 @@ describe('Tool Registry', () => {
     }
   });
 
+  it('alias tools advertise the same parameters as the tools they alias', () => {
+    // Alias definitions duplicate their primary's inputSchema by hand, so a
+    // parameter added to only one of the pair leaves the alias advertising a
+    // strictly smaller contract than the handler and Zod schema it shares.
+    const ALIASES: Array<[string, string]> = [
+      ['formatGoogleDocText', 'applyTextStyle'],
+      ['formatGoogleDocParagraph', 'applyParagraphStyle'],
+    ];
+    for (const [alias, primary] of ALIASES) {
+      const aliasTool = tools.find((t) => t.name === alias);
+      const primaryTool = tools.find((t) => t.name === primary);
+      assert.ok(aliasTool, `Missing alias tool: ${alias}`);
+      assert.ok(primaryTool, `Missing primary tool: ${primary}`);
+      assert.deepEqual(
+        Object.keys(aliasTool.inputSchema.properties ?? {}).sort(),
+        Object.keys(primaryTool.inputSchema.properties ?? {}).sort(),
+        `"${alias}" inputSchema has drifted from "${primary}"`,
+      );
+      assert.deepEqual(
+        [...(aliasTool.inputSchema.required ?? [])].sort(),
+        [...(primaryTool.inputSchema.required ?? [])].sort(),
+        `"${alias}" required fields have drifted from "${primary}"`,
+      );
+    }
+  });
+
   it('every registered tool has a handler (does not return "Tool not found")', async () => {
     // Call each tool with empty args — should get a validation error, NOT "Tool not found"
     for (const tool of tools) {

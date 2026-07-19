@@ -64,7 +64,7 @@ Substantial internal refactor to introduce **multi-account support**: one runnin
 - **drive:** `addPermission` no longer forces `emailAddress` for `type: "anyone"` and `type: "domain"` — the Drive API rejected the field for those principals, making both unusable. Added a `domain` parameter so domain-wide grants work, and per-type requirements are now validated up front (`emailAddress` for `user`/`group`, `domain` for `domain`, neither for `anyone`). Also added an optional `allowFileDiscovery` flag for `anyone`/`domain` grants — `false` (default) keeps a file link-only, `true` makes it discoverable in search ([#131](https://github.com/piotr-agier/google-drive-mcp/issues/131))
 - **resources:** raise the `resources/list` page size from 10 to 1000 (Drive API max) so clients that eagerly enumerate the entire Drive (e.g. Gemini CLI) no longer hang during initialization ([#111](https://github.com/piotr-agier/google-drive-mcp/issues/111), [#128](https://github.com/piotr-agier/google-drive-mcp/pull/128))
 - **docs:** honor `tabId` in `insertTable`, `editTableCell`, `insertSmartChip`, `createFootnote`, `applyTextStyle`/`formatGoogleDocText`, `applyParagraphStyle`/`formatGoogleDocParagraph`, and `createParagraphBullets` — these previously ignored `tabId` and silently edited the default tab of multi-tab documents while reporting success ([#114](https://github.com/piotr-agier/google-drive-mcp/issues/114), [#126](https://github.com/piotr-agier/google-drive-mcp/pull/126))
-- **auth:** use loopback IP `127.0.0.1` instead of `localhost` for the OAuth callback redirect URI, matching the IPv4-only callback-server bind so the redirect resolves to the bound address on dual-stack hosts ([#124](https://github.com/piotr-agier/google-drive-mcp/pull/124)). Desktop-app OAuth clients (the recommended type) are unaffected; "Web application" clients that registered a `http://localhost:<port>` redirect must re-register it as `http://127.0.0.1:<port>` or auth fails with `redirect_uri_mismatch` — see README Troubleshooting
+- **auth:** use loopback IP `127.0.0.1` instead of `localhost` for the OAuth callback redirect URI, matching the IPv4-only callback-server bind so the redirect resolves to the bound address on dual-stack hosts ([#124](https://github.com/piotr-agier/google-drive-mcp/pull/124)). Desktop-app OAuth clients (the recommended type) are unaffected; "Web application" clients that registered a `http://localhost:<port>` redirect must re-register it as `http://127.0.0.1:<port>` or auth fails with `redirect_uri_mismatch` — see [Troubleshooting](docs/troubleshooting.md)
 
 ### Performance Improvements
 
@@ -122,7 +122,7 @@ Note: downgrading to 2.2.x or earlier after running 2.3.0+ requires manually res
 
 ### Breaking Changes
 
-- The server now supports two transport modes: **stdio** (default, unchanged) and **Streamable HTTP**. CLI arguments have been restructured to accommodate this — see README for details.
+- The server now supports two transport modes: **stdio** (default, unchanged) and **Streamable HTTP**. CLI arguments have been restructured to accommodate this — see [Configuration](docs/configuration.md) for details.
 
 ### Features
 

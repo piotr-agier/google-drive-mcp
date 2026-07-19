@@ -33,7 +33,14 @@
     },
     "files": [
         "dist/",
-        "docs/",
+        "docs/authentication.md",
+        "docs/clients.md",
+        "docs/configuration.md",
+        "docs/deployment.md",
+        "docs/development.md",
+        "docs/setup.md",
+        "docs/tools.md",
+        "docs/troubleshooting.md",
         "README.md",
         "LICENSE"
     ],

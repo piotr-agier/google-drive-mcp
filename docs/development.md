@@ -53,7 +53,7 @@ Use `npm install` when intentionally changing dependencies and the lockfile.
 
 `npm run prepare` runs the build automatically during package preparation.
 
-Maintainers should follow the [MCP Registry publishing contract](registry-publishing.md) when preparing releases.
+Maintainers should follow the [MCP Registry publishing contract](https://github.com/piotr-agier/google-drive-mcp/blob/master/docs/registry-publishing.md) when preparing releases. That guide is maintainer-only and is not part of the published npm package, so the link is absolute.
 
 ## Local MCP configuration
 

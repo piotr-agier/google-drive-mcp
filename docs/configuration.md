@@ -22,10 +22,25 @@ CLI arguments take priority over their environment-variable equivalents. Authent
 | `--issuer-url <url>` | — | Public HTTPS issuer URL required by team mode; HTTP is accepted only for localhost |
 | `--no-resources[=<bool>]` | false | Disable `gdrive:///` resources while leaving tools enabled; an explicit false value re-enables resources |
 | `--api-timeout=<ms>` | `120000` | Per-attempt timeout; `0` disables it |
-| `--retry-max=<n>` | `3` | Maximum retry attempts for transient failures; `0` disables retries |
+| `--retry-max=<n>` | `3` | Maximum retry attempts on retryable errors (429, 503, 504, timeouts, and network failures); `0` disables retries |
 | `--retry-base-delay=<ms>` | `1000` | Exponential-backoff base delay, capped at 30 seconds with jitter |
 
-The timeout and retry settings currently apply to the retry-wrapped content insertion performed by `createGoogleDoc`; they are not applied to every Google API request.
+The timeout and retry settings currently apply to the retry-wrapped content insertion performed by `createGoogleDoc`; they are not applied to every Google API request. 500 and 502 are deliberately not retried: a 5xx raised after the request reached Google may mean a non-idempotent batch update was partially applied, and retrying could double-apply edits.
+
+Flags are read from the server's own command line. For a client that launches the server over stdio, append them to the `args` array after the package name:
+
+```json
+{
+  "mcpServers": {
+    "google-drive": {
+      "command": "npx",
+      "args": ["-y", "@piotr-agier/google-drive-mcp", "--api-timeout=180000", "--retry-max=5"]
+    }
+  }
+}
+```
+
+The environment-variable equivalents in [Resources, timeout, and retry](#resources-timeout-and-retry) are an alternative for clients that pass an `env` block instead of extra arguments.
 
 ## Credentials and local OAuth
 

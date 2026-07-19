@@ -113,7 +113,23 @@ Create a Calendar event with a Google Meet link and attach the project brief
 from Drive.
 ```
 
+<!--
+  Anchors for sections that lived in this README before the guides moved to docs/.
+  External deep links (directory listings, issue replies, blog posts) land on the
+  table below, which names the guide each section moved to. Do not remove.
+-->
+<a id="features"></a><a id="example-usage"></a><a id="requirements"></a>
+<a id="google-cloud-setup"></a><a id="installation"></a><a id="docker-usage"></a>
+<a id="configuration"></a><a id="runtime-configuration-cli-args-or-env-vars"></a>
+<a id="usage-with-claude-desktop"></a><a id="streamable-http-transport"></a>
+<a id="team-mode-multi-user-http-deployments"></a><a id="available-tools"></a>
+<a id="external-authentication"></a><a id="multi-account-support"></a>
+<a id="authentication-flow"></a><a id="troubleshooting"></a><a id="development"></a>
+<a id="advanced-configuration"></a><a id="contributing"></a><a id="support"></a>
+
 ## Documentation
+
+Every section that used to live in this README is now in one of these guides.
 
 | Guide | Contents |
 |---|---|

@@ -2,7 +2,7 @@
 
 ## Common issues and solutions
 
-#### "OAuth credentials not found"
+### "OAuth credentials not found"
 ```
 OAuth credentials not found. Please provide credentials using one of these methods:
 1. Config directory (recommended):
@@ -16,7 +16,7 @@ OAuth credentials not found. Please provide credentials using one of these metho
 - Place the file in `~/.config/google-drive-mcp/gcp-oauth.keys.json` (recommended), or set the environment variable
 - Ensure the file has proper read permissions
 
-#### "Authentication failed" or Browser doesn't open
+### "Authentication failed" or Browser doesn't open
 **Possible causes:**
 1. **Wrong credential type**: Must be "Desktop app", not "Web application"
 2. **Port blocked**: Ports 3000-3004 must be available (or custom range if `GOOGLE_DRIVE_MCP_AUTH_PORT` is set)
@@ -38,7 +38,7 @@ export GOOGLE_DRIVE_MCP_AUTH_PORT=3100
 npx -y @piotr-agier/google-drive-mcp auth
 ```
 
-#### "Tokens expired" or "Invalid grant"
+### "Tokens expired" or "Invalid grant"
 **For Google OAuth apps in "Testing" status:**
 - Google automatically expires refresh tokens after 7 days
 - You'll need to re-authenticate weekly until you publish your app
@@ -54,7 +54,7 @@ npx -y @piotr-agier/google-drive-mcp auth
 - Move app to "Published" status in Google Cloud Console
 - Complete OAuth verification process
 
-#### "Login Required" error even with valid tokens
+### "Login Required" error even with valid tokens
 **If you updated the OAuth scopes but still get errors:**
 - Google caches app authorizations even after removing local tokens
 - The app might be using old/limited scopes
@@ -66,7 +66,7 @@ npx -y @piotr-agier/google-drive-mcp auth
 4. Re-authenticate to grant all required scopes
 5. Verify the consent screen shows ALL scopes including full Drive access
 
-#### `search` returns 0 results and Shared Drives are invisible, despite a valid token
+### `search` returns 0 results and Shared Drives are invisible, despite a valid token
 **Symptom:** `search` returns `Found 0 files:` (even for My Drive), `listSharedDrives` shows none, and `authTestFileAccess` reports "File not found" — yet `authGetStatus` shows a valid token with full Drive scope, and the same account works via the Drive REST API directly.
 
 **Most common cause:** an environment variable is silently overriding your interactive OAuth `tokens.json`. Service-account mode (`GOOGLE_APPLICATION_CREDENTIALS`) and external-token mode (`GOOGLE_DRIVE_MCP_ACCESS_TOKEN`) take **priority** over `tokens.json` whenever they are present in the server's environment. If the process inherits one of these (common when `gcloud`, CI runners, or other Google tooling set `GOOGLE_APPLICATION_CREDENTIALS` globally), every call runs as that other identity — often an empty service account with no files and no Shared Drive membership — which returns empty results with no error.
@@ -81,7 +81,7 @@ Check your environment for `GOOGLE_APPLICATION_CREDENTIALS` and `GOOGLE_DRIVE_MC
 
 **Solution:** unset the overriding variable for the MCP server's environment (or, if you intend to use a service account, grant its email address access to the files/Shared Drives you need — and set `GOOGLE_DRIVE_MCP_SUBJECT` for domain-wide delegation if you need to act as a real Workspace user).
 
-#### "API not enabled" errors
+### "API not enabled" errors
 ```
 Error: Google Sheets API has not been used in project...
 ```
@@ -93,7 +93,7 @@ Error: Google Sheets API has not been used in project...
 4. Search and enable the missing API
 5. Wait 1-2 minutes for propagation
 
-#### "Insufficient permissions"
+### "Insufficient permissions"
 **Check scopes in your credentials:**
 - Need drive.file or drive scope
 - Need docs, sheets, slides scopes for respective services
@@ -102,7 +102,7 @@ Error: Google Sheets API has not been used in project...
 - Re-create OAuth credentials with correct scopes
 - Re-authenticate after updating credentials
 
-#### Rate Limiting (429 errors)
+### Rate Limiting (429 errors)
 **Google API Quotas:**
 - Drive API: 12,000 requests per minute
 - Docs/Sheets/Slides: 300 requests per minute
@@ -112,9 +112,9 @@ Error: Google Sheets API has not been used in project...
 - Batch operations where possible
 - Check quota usage in Google Cloud Console
 
-### Docker-Specific Issues
+## Docker-Specific Issues
 
-#### "Authentication required" in Docker
+### "Authentication required" in Docker
 **Problem:** The MCP server in Docker shows authentication errors even though you have valid tokens.
 
 **Cause:** OAuth flow requires browser access, which isn't available in Docker containers.
@@ -132,7 +132,7 @@ docker build -t google-drive-mcp .
 # The client will invoke scripts/docker-mcp.sh, which auto-replaces the stale container
 ```
 
-#### "npm ci failed" during Docker build
+### "npm ci failed" during Docker build
 **Problem:** Docker build fails with `tsc: not found` or similar errors.
 
 **Solution:**
@@ -147,7 +147,7 @@ docker build -t google-drive-mcp .
 
 The Dockerfile expects the `dist/` directory to exist from your local build.
 
-#### "Token refresh failed" in Docker
+### "Token refresh failed" in Docker
 **Problem:** Tokens can't refresh inside the container.
 
 **Solution:** Ensure the token file is mounted with write permissions:
@@ -159,7 +159,7 @@ The Dockerfile expects the `dist/` directory to exist from your local build.
 -v "$HOME/.config/google-drive-mcp/tokens.json":/config/tokens.json:ro
 ```
 
-### Getting Help
+## Getting Help
 
 1. **Check logs**: Server logs errors to stderr
 2. **Verify setup**: Run `npx -y @piotr-agier/google-drive-mcp help`

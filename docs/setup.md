@@ -59,6 +59,23 @@ This guide covers the Google Cloud project, OAuth credentials, and package insta
 - Download the JSON file
 - Rename it to `gcp-oauth.keys.json`
 
+### 5. Place the Credentials File
+
+The server looks for `gcp-oauth.keys.json` in this order and uses the first location that exists:
+
+1. The path in `GOOGLE_DRIVE_OAUTH_CREDENTIALS`, if that variable is set:
+   ```bash
+   export GOOGLE_DRIVE_OAUTH_CREDENTIALS="/path/to/gcp-oauth.keys.json"
+   ```
+2. The config directory (recommended — it works with `npx`, global installs, and local checkouts alike):
+   ```text
+   ~/.config/google-drive-mcp/gcp-oauth.keys.json
+   ```
+   `XDG_CONFIG_HOME` replaces `~/.config` when it is set.
+3. The project root, as a legacy fallback. This works for local development but is unreliable with `npx` or global installs.
+
+If none of these contain the file, the server exits with "OAuth credentials not found". See [Authentication](authentication.md#oauth-credentials-configuration) for the full credential and token model.
+
 ## Installation
 
 ### Option 1: Use with npx (Recommended)

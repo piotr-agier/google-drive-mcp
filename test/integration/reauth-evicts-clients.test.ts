@@ -92,6 +92,7 @@ describe('re-consent evicts cached clients (issue #168)', () => {
   let ctx: TestContext;
   let serverModule: any;
   let sys: AuthSystem;
+  let tmpDir: string;
   let tokenPath: string;
   let originalDriveFactory: typeof google.drive;
   let driveAuths: unknown[] = [];
@@ -102,16 +103,16 @@ describe('re-consent evicts cached clients (issue #168)', () => {
     ctx = await setupTestServer();
     serverModule = await import('../../src/index.js');
 
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'gdrive-mcp-reauth-'));
-    tokenPath = path.join(dir, 'tokens.json');
-    const credsPath = path.join(dir, 'gcp-oauth.keys.json');
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gdrive-mcp-reauth-'));
+    tokenPath = path.join(tmpDir, 'tokens.json');
+    const credsPath = path.join(tmpDir, 'gcp-oauth.keys.json');
     await fs.writeFile(
       credsPath,
       JSON.stringify({
         installed: {
           client_id: 'test-client-id.apps.googleusercontent.com',
           client_secret: 'test-client-secret',
-          redirect_uris: [`http://localhost:${AUTH_PORT}/oauth2callback`],
+          redirect_uris: [`http://127.0.0.1:${AUTH_PORT}/oauth2callback`],
         },
       }),
     );
@@ -172,6 +173,9 @@ describe('re-consent evicts cached clients (issue #168)', () => {
     // and leave the module in the state other suites expect.
     serverModule._setAuthClientForTesting({});
     await ctx.cleanup();
+    // The temp dir holds a tokens.json and a credentials file; don't leave them
+    // behind in os.tmpdir() on every run.
+    if (tmpDir) await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
   it('a completed re-consent takes effect without restarting the server', async () => {
@@ -187,7 +191,9 @@ describe('re-consent evicts cached clients (issue #168)', () => {
 
     // 2. Re-consent the same alias through the real flow.
     const { completion } = await serverModule._addAccountFlowForTesting('work');
-    const callback = await fetch(`http://localhost:${AUTH_PORT}/oauth2callback?code=x`);
+    // 127.0.0.1, not `localhost`: AuthServer binds the loopback IP explicitly so
+    // the bind and the redirect URI agree on dual-stack hosts (see auth/server.ts).
+    const callback = await fetch(`http://127.0.0.1:${AUTH_PORT}/oauth2callback?code=x`);
     assert.equal(callback.status, 200);
     const record = await completion;
 

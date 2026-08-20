@@ -10,6 +10,8 @@ This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `pageSize`: Number of results per page (optional, default 50, max 100)
   - `pageToken`: Pagination token for next page (optional)
   - `rawQuery`: Pass `query` directly to the Drive API — enables operators like `modifiedTime`, `createdTime`, `mimeType`, `name contains`, etc. (optional)
+  - `orderBy`: Sort order — `modifiedTime desc` (default), `modifiedTime`, `createdTime desc`, `createdTime`, `recency desc`, `recency`, `name`, or `name_natural`. Keys without `desc` sort ascending, so plain `modifiedTime` is oldest-first (optional)
+  - When paging with `pageToken`, repeat the same `orderBy` on every call so the ordering stays consistent across pages
 
 - **listFolder** - List contents of a folder
   - `folderId`: Folder ID (optional, defaults to root)
@@ -228,7 +230,7 @@ This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and
 - **listGoogleDocs** - List Google Documents with optional filtering
   - `query`: Search query to filter by name or content (optional)
   - `maxResults`: Maximum documents to return, 1-100 (optional, default: 20)
-  - `orderBy`: Sort order — `name`, `modifiedTime`, or `createdTime` (optional)
+  - `orderBy`: Sort order — `modifiedTime desc` (default), `modifiedTime`, `createdTime desc`, `createdTime`, `recency desc`, `recency`, `name`, or `name_natural`. Keys without `desc` sort ascending, so plain `modifiedTime` is oldest-first (optional)
 
 - **getDocumentInfo** - Get detailed metadata about a specific Google Document
   - `documentId`: Document ID
@@ -411,7 +413,7 @@ This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and
 - **listGoogleSheets** - List Google Spreadsheets with optional filtering
   - `query`: Search query to filter by name or content (optional)
   - `maxResults`: Maximum spreadsheets to return, 1-100 (optional, default: 20)
-  - `orderBy`: Sort order — `name`, `modifiedTime`, or `createdTime` (optional)
+  - `orderBy`: Sort order — `modifiedTime desc` (default), `modifiedTime`, `createdTime desc`, `createdTime`, `recency desc`, `recency`, `name`, or `name_natural`. Keys without `desc` sort ascending, so plain `modifiedTime` is oldest-first (optional)
 
 - **setColumnWidth** - Set column widths in pixels
   - `spreadsheetId`, `sheetId`: Spreadsheet and sheet IDs

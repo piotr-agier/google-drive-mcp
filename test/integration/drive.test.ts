@@ -111,6 +111,63 @@ describe('Drive tools', () => {
       assert.equal(args.q, "fullText contains 'report' and trashed = false");
     });
 
+    // --- orderBy tests (issue #167) ---
+
+    it('defaults to modifiedTime desc so results are newest-first', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: { files: [] },
+      }));
+      await callTool(ctx.client, 'search', { query: 'report' });
+      const listCalls = ctx.mocks.drive.tracker.getCalls('files.list');
+      const args = listCalls[listCalls.length - 1].args[0];
+      assert.equal(args.orderBy, 'modifiedTime desc');
+    });
+
+    it('forwards an explicit orderBy', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: { files: [] },
+      }));
+      await callTool(ctx.client, 'search', { query: 'report', orderBy: 'name' });
+      const listCalls = ctx.mocks.drive.tracker.getCalls('files.list');
+      const args = listCalls[listCalls.length - 1].args[0];
+      assert.equal(args.orderBy, 'name');
+    });
+
+    it('applies orderBy on the rawQuery path too', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: { files: [] },
+      }));
+      await callTool(ctx.client, 'search', {
+        query: "mimeType = 'application/pdf'",
+        rawQuery: true,
+        orderBy: 'createdTime desc',
+      });
+      const listCalls = ctx.mocks.drive.tracker.getCalls('files.list');
+      const args = listCalls[listCalls.length - 1].args[0];
+      assert.equal(args.orderBy, 'createdTime desc');
+    });
+
+    it('rejects an unsupported orderBy instead of passing it to Drive', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: { files: [] },
+      }));
+      const res = await callTool(ctx.client, 'search', { query: 'report', orderBy: 'bogus' });
+      assert.equal(res.isError, true);
+      assert.equal(ctx.mocks.drive.tracker.getCalls('files.list').length, 0);
+    });
+
+    it('names the effective ordering in the response', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: { files: [{ id: 'f1', name: 'Report.pdf', mimeType: 'application/pdf' }] },
+      }));
+      const res = await callTool(ctx.client, 'search', { query: 'report' });
+      assert.ok(res.content[0].text!.includes('(ordered by modifiedTime desc)'));
+
+      const named = await callTool(ctx.client, 'search', { query: 'report', orderBy: 'name' });
+      assert.ok(named.content[0].text!.includes('(ordered by name)'));
+      ctx.mocks.drive.service.files.list._resetImpl();
+    });
+
     // --- Folder path resolution tests (PR #30) ---
 
     it('resolves folder paths in search results', async () => {

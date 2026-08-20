@@ -9,7 +9,7 @@ import pdfLib from 'pdf-lib';
 const { PDFDocument } = pdfLib;
 import type { ToolDefinition, ToolContext, ToolResult } from '../types.js';
 import { errorResponse } from '../types.js';
-import { escapeDriveQuery, getMimeTypeFromFilename, isTextMime, TEXT_MIME_TYPES, ALL_DRIVES_LIST_PARAMS, PARENT_SCOPED_LIST_PARAMS } from '../utils.js';
+import { escapeDriveQuery, getMimeTypeFromFilename, isTextMime, TEXT_MIME_TYPES, ALL_DRIVES_LIST_PARAMS, PARENT_SCOPED_LIST_PARAMS, DRIVE_ORDER_BY_VALUES } from '../utils.js';
 import { downloadTextContent } from './text-content.js';
 import { downloadDriveFile, GOOGLE_WORKSPACE_EXPORT_FORMATS } from '../download-file.js';
 import { getSecureTokenPath } from '../auth/utils.js';
@@ -49,6 +49,8 @@ const SearchSchema = z.object({
   pageSize: z.number().int().min(1).max(100).optional(),
   pageToken: z.string().optional(),
   rawQuery: z.boolean().optional(),
+  orderBy: z.enum(DRIVE_ORDER_BY_VALUES).optional().default("modifiedTime desc")
+    .describe("Sort order for results."),
 });
 
 const CreateTextFileSchema = z.object({
@@ -361,7 +363,7 @@ export function computeAuthStatus(input: {
 export const toolDefinitions: ToolDefinition[] = [
   {
     name: "search",
-    description: "Search for files in Google Drive. Set rawQuery=true to pass a raw Google Drive API query supporting operators like modifiedTime, createdTime, mimeType, name contains, etc.",
+    description: "Search for files in Google Drive. Results are sorted most-recently-modified first by default; use orderBy for a different order. Set rawQuery=true to pass a raw Google Drive API query supporting operators like modifiedTime, createdTime, mimeType, name contains, etc.",
     inputSchema: {
       type: "object",
       properties: {
@@ -369,6 +371,7 @@ export const toolDefinitions: ToolDefinition[] = [
         pageSize: { type: "number", description: "Results per page (default 50, max 100)" },
         pageToken: { type: "string", description: "Token for next page of results" },
         rawQuery: { type: "boolean", description: "If true, pass query directly to Google Drive API without wrapping in fullText contains. Enables date filters, mimeType filters, etc." },
+        orderBy: { type: "string", description: "Sort order for results. Keys without 'desc' sort ascending, so 'modifiedTime' is oldest-first. When paging, repeat the same value on every pageToken call.", enum: [...DRIVE_ORDER_BY_VALUES], default: "modifiedTime desc" },
       },
       required: ["query"],
     },
@@ -785,7 +788,7 @@ export async function handleTool(
       if (!validation.success) {
         return errorResponse(validation.error.errors[0].message);
       }
-      const { query: userQuery, pageSize, pageToken, rawQuery } = validation.data;
+      const { query: userQuery, pageSize, pageToken, rawQuery, orderBy } = validation.data;
 
       let formattedQuery: string;
       if (rawQuery) {
@@ -803,6 +806,7 @@ export async function handleTool(
         pageSize: Math.min(pageSize || 50, 100),
         pageToken: pageToken,
         fields: "nextPageToken, files(id, name, mimeType, createdTime, modifiedTime, size, parents)",
+        orderBy,
         ...ALL_DRIVES_LIST_PARAMS
       });
 
@@ -844,9 +848,11 @@ export async function handleTool(
         }),
       );
 
-      ctx.log('Search results', { query: userQuery, rawQuery: !!rawQuery, resultCount: files.length });
+      ctx.log('Search results', { query: userQuery, rawQuery: !!rawQuery, orderBy, resultCount: files.length });
 
-      let response = `Found ${files.length} files:\n${fileLines.join("\n")}`;
+      // Name the ordering in the response: an unlabeled list invites the caller to
+      // pick "the most recent" by eye and get it wrong (#167).
+      let response = `Found ${files.length} files (ordered by ${orderBy}):\n${fileLines.join("\n")}`;
       if (res.data.nextPageToken) {
         response += `\n\nMore results available. Use pageToken: ${res.data.nextPageToken}`;
       }

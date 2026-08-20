@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { sheets_v4 } from 'googleapis';
 import type { ToolDefinition, ToolResult, ToolContext } from '../types.js';
 import { errorResponse } from '../types.js';
-import { parseA1Range, convertA1ToGridRange, escapeDriveQuery, ALL_DRIVES_LIST_PARAMS, type GridRange } from '../utils.js';
+import { parseA1Range, convertA1ToGridRange, escapeDriveQuery, ALL_DRIVES_LIST_PARAMS, DRIVE_ORDER_BY_VALUES, type GridRange } from '../utils.js';
 
 // ---------------------------------------------------------------------------
 // Zod Schemas
@@ -175,7 +175,7 @@ const AddNamedRangeSchema = z.object({
 const ListGoogleSheetsSchema = z.object({
   maxResults: z.number().int().min(1).max(100).optional().default(20),
   query: z.string().optional(),
-  orderBy: z.enum(["name", "modifiedTime", "createdTime"]).optional().default("modifiedTime")
+  orderBy: z.enum(DRIVE_ORDER_BY_VALUES).optional().default("modifiedTime desc")
 });
 
 const SetColumnWidthSchema = z.object({
@@ -613,7 +613,7 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         maxResults: { type: "number", description: "Maximum number of spreadsheets to return (1-100)", default: 20 },
         query: { type: "string", description: "Search query to filter spreadsheets by name or content" },
-        orderBy: { type: "string", description: "Sort order for results", enum: ["name", "modifiedTime", "createdTime"], default: "modifiedTime" }
+        orderBy: { type: "string", description: "Sort order for results. Keys without 'desc' sort ascending, so 'modifiedTime' is oldest-first.", enum: [...DRIVE_ORDER_BY_VALUES], default: "modifiedTime desc" }
       },
       required: []
     }
@@ -1531,7 +1531,7 @@ export async function handleTool(
       const response = await ctx.getDrive().files.list({
         q: queryString,
         pageSize: a.maxResults || 20,
-        orderBy: a.orderBy === 'name' ? 'name' : a.orderBy,
+        orderBy: a.orderBy,
         fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName,emailAddress))',
         ...ALL_DRIVES_LIST_PARAMS
       });
@@ -1544,7 +1544,7 @@ export async function handleTool(
         };
       }
 
-      let result = `Found ${files.length} Google Spreadsheet(s):\n\n`;
+      let result = `Found ${files.length} Google Spreadsheet(s) (ordered by ${a.orderBy}):\n\n`;
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         const modifiedDate = file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Unknown';

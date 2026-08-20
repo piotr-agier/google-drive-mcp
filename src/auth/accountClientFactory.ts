@@ -54,7 +54,8 @@ export class AccountClientFactory {
     return client;
   }
 
-  /** Drop a cached client (e.g. after `remove`). */
+  /** Drop a cached client (e.g. after `remove`, or a re-consent that
+   *  supersedes the grant it was built from). */
   evict(alias: string): void {
     this.clients.delete(alias);
   }

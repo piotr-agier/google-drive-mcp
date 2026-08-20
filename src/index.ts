@@ -166,6 +166,18 @@ async function getAuthClientFor(account: AccountRecord): Promise<any> {
   return sys.factory.getClient(account.alias);
 }
 
+/**
+ * Drop every client cached for `alias` — the factory's OAuth2Client plus the
+ * Drive and Calendar services built on it. Call whenever the alias's grant
+ * changes (removal, or a re-consent that supersedes the old tokens) so the next
+ * call rebuilds from the current record instead of a revoked one.
+ */
+function evictAccountClients(alias: string): void {
+  requireAuthSystem().factory.evict(alias);
+  _driveByAlias.delete(alias);
+  _calendarByAlias.delete(alias);
+}
+
 // -----------------------------------------------------------------------------
 // Account lifecycle API (consumed by `manage_accounts` handler via ctx)
 // -----------------------------------------------------------------------------
@@ -256,6 +268,11 @@ async function addAccountFlow(alias: string, openBrowser = true): Promise<AddAcc
           pendingIdentity,
         };
         await sys.store.upsert(record);
+        // A re-consent supersedes the grant every cached client for this alias
+        // was built from (issue #168): without this the factory keeps handing
+        // out the old — possibly revoked — OAuth2Client, and the cached Drive
+        // and Calendar services stay bound to it, until the server restarts.
+        evictAccountClients(alias);
         // Make it the default if it's the first account.
         if (!sys.store.getDefault()) {
           await sys.store.setDefault(alias);
@@ -306,9 +323,7 @@ async function removeAccountFlow(alias: string): Promise<void> {
     throw new Error(`No account with alias "${alias}".`);
   }
   await sys.store.remove(alias);
-  sys.factory.evict(alias);
-  _driveByAlias.delete(alias);
-  _calendarByAlias.delete(alias);
+  evictAccountClients(alias);
 }
 
 async function setDefaultAccountFlow(alias: string | null): Promise<void> {
@@ -1584,6 +1599,35 @@ export function _setAuthClientForTesting(client: any) {
  */
 export function _getAuthSystemForTesting(): AuthSystem | null {
   return authSystem;
+}
+
+/**
+ * Install (or clear) an arbitrary AuthSystem for testing, and drop every cached
+ * Drive/Calendar service so the next call rebuilds through the new system.
+ *
+ * `_setAuthClientForTesting` always builds a `mode: 'test'` system, which makes
+ * the account-lifecycle flows unreachable (they short-circuit in
+ * `requireLocalOAuthMode`). This hook lets a test stand up a real local-OAuth
+ * system over a temporary `tokens.json` and drive `add`/`remove` end to end.
+ */
+export function _setAuthSystemForTesting(sys: AuthSystem | null): void {
+  authSystem = sys;
+  _driveByAlias.clear();
+  _calendarByAlias.clear();
+}
+
+/**
+ * Run the real `manage_accounts add` flow for testing.
+ *
+ * `openBrowser` defaults to false here (the tool handler passes true): a test
+ * must never have `AuthServer.start` launch a browser — it drives the OAuth
+ * callback with an HTTP request instead.
+ */
+export function _addAccountFlowForTesting(
+  alias: string,
+  openBrowser = false,
+): Promise<AddAccountResult> {
+  return addAccountFlow(alias, openBrowser);
 }
 
 /**

@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **auth:** re-authenticating an existing account with `manage_accounts add <alias>` now takes effect immediately instead of requiring a server restart. The refreshed grant was persisted correctly, but the OAuth client cached for that alias — and the Drive/Calendar services built on it — were left in place, so every subsequent call kept using the superseded (often revoked) grant and failed with "authorization was revoked or has expired". A completed re-consent now evicts those cached clients, the way removing an account already did ([#168](https://github.com/piotr-agier/google-drive-mcp/issues/168))
 - **docs:** `formatGoogleDocText` now advertises `baselineOffset` in its input schema. The alias shares a handler and validation schema with `applyTextStyle`, so the parameter already worked at runtime, but it was missing from the advertised tool definition — clients that build arguments from (or validate against) the published schema could not reach superscript/subscript through the alias
 
 ## [2.5.1](https://github.com/piotr-agier/google-drive-mcp/compare/v2.5.0...v2.5.1) (2026-07-17)

@@ -175,7 +175,7 @@ One admin tool drives the whole lifecycle. It ignores the `account` parameter an
 | Action | `account_id` | What it does |
 |---|---|---|
 | `list` | — | Returns all connected accounts with alias, email, `sub`, scopes, expiry, and which is the default. Never returns tokens. |
-| `add` | required (alias) | Starts an OAuth flow in your browser with `prompt=consent select_account` and `access_type=offline`, so Google shows an account picker and always returns a refresh token. On success, the new record is written to `tokens.json`. If it's the first account, it also becomes the default. |
+| `add` | required (alias) | Starts an OAuth flow in your browser with `prompt=consent select_account` and `access_type=offline`, so Google shows an account picker and always returns a refresh token. On success, the new record is written to `tokens.json`. If it's the first account, it also becomes the default. Re-running `add` for an existing alias re-consents that account in place (to broaden scopes or recover a revoked grant); the refreshed grant takes effect on the next call, with no server restart. |
 | `remove` | required (alias) | Deletes the account's credentials from `tokens.json` and clears it from the default if applicable. The token is **not** revoked server-side — see [Revoking OAuth access](#revoking-oauth-access). |
 | `set_default` | required (alias, or `"null"` to clear) | Picks which account is used when a tool call omits `account`. |
 

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import JSZip from 'jszip';
 import type { ToolDefinition, ToolContext, ToolResult } from '../types.js';
 import { errorResponse } from '../types.js';
-import { escapeDriveQuery, isTextMime, ALL_DRIVES_LIST_PARAMS } from '../utils.js';
+import { escapeDriveQuery, isTextMime, ALL_DRIVES_LIST_PARAMS, DRIVE_ORDER_BY_VALUES } from '../utils.js';
 import { downloadTextContent, writeTextContent } from './text-content.js';
 import { uploadImageToDrive } from '../utils/driveImageUpload.js';
 import { withRetry } from '../utils/retry.js';
@@ -1759,7 +1759,7 @@ const InsertLocalImageSchema = z.object({
 const ListGoogleDocsSchema = z.object({
   maxResults: z.number().int().min(1).max(100).optional().default(20).describe("Maximum number of documents to return (1-100)."),
   query: z.string().optional().describe("Search query to filter documents by name or content."),
-  orderBy: z.enum(["name", "modifiedTime", "createdTime"]).optional().default("modifiedTime").describe("Sort order for results.")
+  orderBy: z.enum(DRIVE_ORDER_BY_VALUES).optional().default("modifiedTime desc").describe("Sort order for results.")
 });
 
 const GetDocumentInfoSchema = z.object({
@@ -2234,7 +2234,7 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         maxResults: { type: "integer", description: "Maximum number of documents to return (1-100)." },
         query: { type: "string", description: "Search query to filter documents by name or content." },
-        orderBy: { type: "string", enum: ["name", "modifiedTime", "createdTime"], description: "Sort order for results." }
+        orderBy: { type: "string", enum: [...DRIVE_ORDER_BY_VALUES], description: "Sort order for results. Keys without 'desc' sort ascending, so 'modifiedTime' is oldest-first.", default: "modifiedTime desc" }
       },
       required: []
     }
@@ -3936,7 +3936,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const response = await ctx.getDrive().files.list({
         q: queryString,
         pageSize: a.maxResults,
-        orderBy: a.orderBy === 'name' ? 'name' : a.orderBy,
+        orderBy: a.orderBy,
         fields: 'files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress))',
         ...ALL_DRIVES_LIST_PARAMS
       });
@@ -3947,7 +3947,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         return { content: [{ type: "text", text: "No Google Docs found matching your criteria." }], isError: false };
       }
 
-      let result = `Found ${files.length} Google Document(s):\n\n`;
+      let result = `Found ${files.length} Google Document(s) (ordered by ${a.orderBy}):\n\n`;
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         const modifiedDate = file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Unknown';

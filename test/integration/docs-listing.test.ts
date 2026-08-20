@@ -39,6 +39,18 @@ describe('Docs listing tools', () => {
       ctx.mocks.drive.service.files.list._resetImpl();
     });
 
+    it('defaults to modifiedTime desc, not oldest-first (issue #167)', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({ data: { files: [] } }));
+      await callTool(ctx.client, 'listGoogleDocs', {});
+      const listCalls = ctx.mocks.drive.tracker.getCalls('files.list');
+      assert.equal(listCalls[listCalls.length - 1].args[0].orderBy, 'modifiedTime desc');
+
+      await callTool(ctx.client, 'listGoogleDocs', { orderBy: 'name' });
+      const afterExplicit = ctx.mocks.drive.tracker.getCalls('files.list');
+      assert.equal(afterExplicit[afterExplicit.length - 1].args[0].orderBy, 'name');
+      ctx.mocks.drive.service.files.list._resetImpl();
+    });
+
     it('no results', async () => {
       ctx.mocks.drive.service.files.list._setImpl(async () => ({ data: { files: [] } }));
       const res = await callTool(ctx.client, 'listGoogleDocs', {});

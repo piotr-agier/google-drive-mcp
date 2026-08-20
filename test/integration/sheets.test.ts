@@ -499,6 +499,18 @@ describe('Sheets tools', () => {
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text!.includes('Budget'));
     });
+
+    it('defaults to modifiedTime desc, not oldest-first (issue #167)', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({ data: { files: [] } }));
+      await callTool(ctx.client, 'listGoogleSheets', {});
+      const listCalls = ctx.mocks.drive.tracker.getCalls('files.list');
+      assert.equal(listCalls[listCalls.length - 1].args[0].orderBy, 'modifiedTime desc');
+
+      await callTool(ctx.client, 'listGoogleSheets', { orderBy: 'name' });
+      const afterExplicit = ctx.mocks.drive.tracker.getCalls('files.list');
+      assert.equal(afterExplicit[afterExplicit.length - 1].args[0].orderBy, 'name');
+      ctx.mocks.drive.service.files.list._resetImpl();
+    });
   });
 
   // --- copyFile ---

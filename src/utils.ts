@@ -33,6 +33,27 @@ export const ALL_DRIVES_LIST_PARAMS = {
   ...PARENT_SCOPED_LIST_PARAMS,
 } as const;
 
+/**
+ * Sort keys accepted by the `files.list` `orderBy` param, ascending and descending.
+ * A deliberately small subset of the keys Drive documents, so a caller (usually an
+ * LLM) picks a valid value first try. Drive sorts every key ascending unless the
+ * `desc` modifier is present — `modifiedTime` alone means *oldest* first (#167).
+ *
+ * `name` sorts 1, 12, 2, 22 where `name_natural` sorts 1, 2, 12, 22; `recency` is
+ * Drive's composite of created/modified/viewed. Drive warns against `createdTime`
+ * on very large collections — prefer `modifiedTime desc` there.
+ */
+export const DRIVE_ORDER_BY_VALUES = [
+  'modifiedTime desc',
+  'modifiedTime',
+  'createdTime desc',
+  'createdTime',
+  'recency desc',
+  'recency',
+  'name',
+  'name_natural',
+] as const;
+
 // ---------------------------------------------------------------------------
 // Calendar helpers
 // ---------------------------------------------------------------------------

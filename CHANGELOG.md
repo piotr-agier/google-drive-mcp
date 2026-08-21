@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.6.0](https://github.com/piotr-agier/google-drive-mcp/compare/v2.5.1...v2.6.0) (2026-08-21)
+
+Makes Drive listings **ordered and self-describing**. `search` gains an `orderBy` and sorts most-recently-modified first by default instead of returning Drive's arbitrary order, `listGoogleDocs`/`listGoogleSheets` stop defaulting to *oldest* first, and all three name their effective ordering in the response — so a caller is told the list is sorted rather than left to work it out by comparing timestamps by eye. Also adds superscript/subscript (`baselineOffset`) to the Docs text-styling tools, on both the write and the formatted-read path. Additive — a new optional parameter on existing tools plus corrected default orderings, with no removed or renamed tools/parameters.
+
 ### Features
 
 - **drive:** `search` now sorts results and accepts an `orderBy` parameter. Results default to `modifiedTime desc` (most recently modified first) instead of Drive's unspecified default order, and the response header names the effective ordering (`Found N files (ordered by modifiedTime desc):`). Previously an unsorted, unlabeled result set left the caller to pick "the most recent" by comparing timestamps across up to 100 rows by eye — behind an LLM client that silently produced wrong answers, citing months-old files as the newest. `orderBy` accepts `modifiedTime desc`, `modifiedTime`, `createdTime desc`, `createdTime`, `recency desc`, `recency`, `name`, and `name_natural`; keys without `desc` sort ascending. When more results are available the response repeats the effective `orderBy` alongside the `pageToken`, so a follow-up page keeps the ordering instead of falling back to the default ([#167](https://github.com/piotr-agier/google-drive-mcp/issues/167))

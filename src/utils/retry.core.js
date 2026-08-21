@@ -11,7 +11,16 @@
 // non-idempotent, and a 5xx after the request reached the server may mean it
 // was partially applied — retrying could double-apply edits.
 const RETRYABLE_STATUS = new Set([429, 503, 504]);
-const RETRYABLE_CODES = new Set(['ETIMEDOUT', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN']);
+// UND_ERR_CONNECT_TIMEOUT and UND_ERR_SOCKET are undici's (native fetch)
+// analogues of ETIMEDOUT-before-connect and ECONNRESET — same hazard profile.
+const RETRYABLE_CODES = new Set([
+  'ETIMEDOUT',
+  'ECONNRESET',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_SOCKET',
+]);
 const MAX_DELAY_MS = 30_000;
 
 export class TimeoutError extends Error {
@@ -31,12 +40,22 @@ function httpStatus(err) {
   return typeof s === 'number' ? s : undefined;
 }
 
+// gaxios 7 wraps native-fetch transport failures as GaxiosError(code:
+// undefined) -> cause: TypeError('fetch failed') -> cause: the undici error
+// carrying the real code, so the flat err.code check alone would miss every
+// transport error. The walk is depth-bounded to survive cyclic cause chains.
+function hasRetryableCode(err) {
+  for (let e = err, depth = 0; e && depth < 5; e = e.cause, depth++) {
+    if (typeof e.code === 'string' && RETRYABLE_CODES.has(e.code)) return true;
+  }
+  return false;
+}
+
 function isRetryable(err) {
   if (!err) return false;
   const status = httpStatus(err);
   if (status !== undefined && RETRYABLE_STATUS.has(status)) return true;
-  if (typeof err.code === 'string' && RETRYABLE_CODES.has(err.code)) return true;
-  return false;
+  return hasRetryableCode(err);
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

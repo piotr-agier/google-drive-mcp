@@ -395,8 +395,13 @@ describe('Team mode — bearer-guarded per-user dispatch', () => {
     client.setCredentials({ ...client.credentials, expiry_date: Date.now() - 60_000 });
     (client as unknown as { refreshAccessToken: () => Promise<never> }).refreshAccessToken =
       async () => {
-        const err = new Error('invalid_grant') as Error & { response?: { data?: { error?: string } } };
-        err.response = { data: { error: 'invalid_grant' } };
+        // gaxios-7-realistic shape: top-level `status` plus the parsed body.
+        const err = new Error('invalid_grant') as Error & {
+          status?: number;
+          response?: { status?: number; data?: { error?: string } };
+        };
+        err.status = 400;
+        err.response = { status: 400, data: { error: 'invalid_grant' } };
         throw err;
       };
 

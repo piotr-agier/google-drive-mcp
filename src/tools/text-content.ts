@@ -1,4 +1,5 @@
 import type { drive_v3 } from 'googleapis';
+import { toNodeReadable } from '../utils/streams.js';
 
 // ---------------------------------------------------------------------------
 // Shared read/write helpers for raw text/* files in Drive.
@@ -23,7 +24,7 @@ export async function downloadTextContent(
 
   const chunks: Buffer[] = [];
   await new Promise<void>((resolve, reject) => {
-    (mediaResponse.data as NodeJS.ReadableStream)
+    toNodeReadable(mediaResponse.data)
       .on('data', (chunk: Buffer) => chunks.push(chunk))
       .on('end', () => resolve())
       .on('error', (err: Error) => reject(err));

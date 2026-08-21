@@ -11,6 +11,7 @@ import type { ToolDefinition, ToolContext, ToolResult } from '../types.js';
 import { errorResponse } from '../types.js';
 import { escapeDriveQuery, getMimeTypeFromFilename, isTextMime, TEXT_MIME_TYPES, ALL_DRIVES_LIST_PARAMS, PARENT_SCOPED_LIST_PARAMS, DRIVE_ORDER_BY_VALUES } from '../utils.js';
 import { downloadTextContent } from './text-content.js';
+import { toNodeReadable } from '../utils/streams.js';
 import { downloadDriveFile, GOOGLE_WORKSPACE_EXPORT_FORMATS } from '../download-file.js';
 import { getSecureTokenPath } from '../auth/utils.js';
 import { SCOPE_ALIASES, SCOPE_PRESETS, resolveOAuthScopes, splitScopes } from '../auth/scopes.js';
@@ -1934,14 +1935,14 @@ export async function handleTool(
 
           // Fetch revision content from the export link using authenticated request
           const exportResponse = await ctx.authClient.request({ url: exportLinks[selectedMime], responseType: 'stream' });
-          revisionBody = exportResponse.data;
+          revisionBody = toNodeReadable(exportResponse.data);
         } else {
           // For binary files, download the revision content directly
           const revision = await ctx.getDrive().revisions.get(
             { fileId: data.fileId, revisionId: data.revisionId, alt: 'media' },
             { responseType: 'stream' },
           );
-          revisionBody = revision.data;
+          revisionBody = toNodeReadable(revision.data);
           uploadMimeType = fileMimeType || 'application/octet-stream';
         }
 

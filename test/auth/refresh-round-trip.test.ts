@@ -236,3 +236,43 @@ test('factory surfaces invalid_grant as an actionable reconnect error (finding 5
     await cleanup();
   }
 });
+
+test('factory detects invalid_grant in the gaxios-7 error shape', async () => {
+  const { tokenPath, cleanup } = await setupTmpCredentials();
+  try {
+    const store = new AccountStore({ filePath: tokenPath, mode: 'local-oauth' });
+    await store.reload();
+    await store.upsert(makeRecord({ expiryDate: Date.now() + 3600_000 }));
+
+    const factory = new AccountClientFactory(store);
+    const client = await factory.getClient('work');
+
+    client.setCredentials({ ...client.credentials, expiry_date: Date.now() - 60_000 });
+    (client as unknown as { refreshAccessToken: () => Promise<never> }).refreshAccessToken =
+      async () => {
+        // gaxios 7 sets a top-level numeric `status` and still parses the
+        // OAuth error body into response.data.
+        const err = new Error('Request failed with status code 400') as Error & {
+          status?: number;
+          response?: { status?: number; data?: { error?: string; error_description?: string } };
+        };
+        err.status = 400;
+        err.response = {
+          status: 400,
+          data: { error: 'invalid_grant', error_description: 'Token has been expired or revoked.' },
+        };
+        throw err;
+      };
+
+    await assert.rejects(
+      () => factory.getClient('work'),
+      (err: Error) => {
+        assert.match(err.message, /revoked or has expired/);
+        assert.match(err.message, /manage_accounts add work/);
+        return true;
+      },
+    );
+  } finally {
+    await cleanup();
+  }
+});

@@ -37,6 +37,40 @@ function makeGaxiosError(): Error {
   return err;
 }
 
+/** A gaxios-7-shaped error: top-level numeric `status`, deep-copied config,
+ * and a native-fetch cause chain that also carries the request payload. */
+function makeGaxiosV7Error(): Error {
+  const undiciErr = Object.assign(new Error('socket hang up'), {
+    code: 'UND_ERR_SOCKET',
+    payload: `refresh_token=${SECRET_REFRESH_TOKEN}&client_secret=${SECRET_CLIENT_SECRET}`,
+  });
+  const fetchErr = new TypeError('fetch failed');
+  (fetchErr as Error & { cause?: unknown }).cause = undiciErr;
+  const err = new Error('Request failed with status code 500') as Error & {
+    status?: number;
+    config?: { url?: string; body?: string };
+    response?: { status?: number; data?: { error?: string; error_description?: string } };
+    cause?: unknown;
+  };
+  err.status = 500;
+  err.config = {
+    url: 'https://oauth2.googleapis.com/token',
+    body: `refresh_token=${SECRET_REFRESH_TOKEN}&client_secret=${SECRET_CLIENT_SECRET}&grant_type=refresh_token`,
+  };
+  err.response = { status: 500, data: { error: 'internal_failure' } };
+  err.cause = fetchErr;
+  return err;
+}
+
+test('describeErrorForLog drops the gaxios-7 config and cause chain', () => {
+  const rendered = describeErrorForLog(makeGaxiosV7Error());
+  assert.ok(!rendered.includes(SECRET_REFRESH_TOKEN));
+  assert.ok(!rendered.includes(SECRET_CLIENT_SECRET));
+  assert.match(rendered, /Request failed with status code 500/);
+  assert.match(rendered, /status=500/);
+  assert.match(rendered, /error=internal_failure/);
+});
+
 test('describeErrorForLog keeps safe fields and drops the gaxios request config', () => {
   const rendered = describeErrorForLog(makeGaxiosError());
   assert.ok(!rendered.includes(SECRET_REFRESH_TOKEN));

@@ -61,13 +61,18 @@
         "lint:types": "tsc --noEmit",
         "lint:eslint": "eslint src/"
     },
+    "engines": {
+        "node": ">=18"
+    },
+    "overrides": {
+        "google-auth-library": "$google-auth-library"
+    },
     "dependencies": {
-        "@google-cloud/local-auth": "^3.0.1",
         "@modelcontextprotocol/sdk": "^1.24.0",
         "@types/express": "^5.0.3",
         "express": "^5.1.0",
-        "google-auth-library": "^9.15.0",
-        "googleapis": "^144.0.0",
+        "google-auth-library": "^10.2.0",
+        "googleapis": "^173.0.0",
         "jszip": "^3.10.1",
         "open": "^10.2.0",
         "pdf-lib": "^1.17.1",

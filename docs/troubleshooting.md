@@ -67,7 +67,7 @@ npx -y @piotr-agier/google-drive-mcp auth
 5. Verify the consent screen shows ALL scopes including full Drive access
 
 ### `search` returns 0 results and Shared Drives are invisible, despite a valid token
-**Symptom:** `search` returns `Found 0 files:` (even for My Drive), `listSharedDrives` shows none, and `authTestFileAccess` reports "File not found" — yet `authGetStatus` shows a valid token with full Drive scope, and the same account works via the Drive REST API directly.
+**Symptom:** `search` returns `Found 0 files (ordered by modifiedTime desc):` (even for My Drive), `listSharedDrives` shows none, and `authTestFileAccess` reports "File not found" — yet `authGetStatus` shows a valid token with full Drive scope, and the same account works via the Drive REST API directly.
 
 **Most common cause:** an environment variable is silently overriding your interactive OAuth `tokens.json`. Service-account mode (`GOOGLE_APPLICATION_CREDENTIALS`) and external-token mode (`GOOGLE_DRIVE_MCP_ACCESS_TOKEN`) take **priority** over `tokens.json` whenever they are present in the server's environment. If the process inherits one of these (common when `gcloud`, CI runners, or other Google tooling set `GOOGLE_APPLICATION_CREDENTIALS` globally), every call runs as that other identity — often an empty service account with no files and no Shared Drive membership — which returns empty results with no error.
 

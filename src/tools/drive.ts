@@ -854,7 +854,12 @@ export async function handleTool(
       // pick "the most recent" by eye and get it wrong (#167).
       let response = `Found ${files.length} files (ordered by ${orderBy}):\n${fileLines.join("\n")}`;
       if (res.data.nextPageToken) {
+        // Keep the token alone on its line — trailing text after an unquoted token
+        // invites the caller to carry it into the token value.
         response += `\n\nMore results available. Use pageToken: ${res.data.nextPageToken}`;
+        // orderBy has a default, so a follow-up call carrying only the token would
+        // silently fall back to `modifiedTime desc` and re-sort page 2 (#167).
+        response += `\nPass orderBy: ${orderBy} again to keep this ordering.`;
       }
 
       return {

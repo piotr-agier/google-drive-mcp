@@ -10,8 +10,7 @@ This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `pageSize`: Number of results per page (optional, default 50, max 100)
   - `pageToken`: Pagination token for next page (optional)
   - `rawQuery`: Pass `query` directly to the Drive API — enables operators like `modifiedTime`, `createdTime`, `mimeType`, `name contains`, etc. (optional)
-  - `orderBy`: Sort order — `modifiedTime desc` (default), `modifiedTime`, `createdTime desc`, `createdTime`, `recency desc`, `recency`, `name`, or `name_natural`. Keys without `desc` sort ascending, so plain `modifiedTime` is oldest-first (optional)
-  - When paging with `pageToken`, repeat the same `orderBy` on every call so the ordering stays consistent across pages
+  - `orderBy`: Sort order — `modifiedTime desc` (default), `modifiedTime`, `createdTime desc`, `createdTime`, `recency desc`, `recency`, `name`, or `name_natural`. Keys without `desc` sort ascending, so plain `modifiedTime` is oldest-first. When paging with `pageToken`, pass the same `orderBy` on every call so the ordering stays consistent across pages — the response repeats the effective value alongside the token (optional)
 
 - **listFolder** - List contents of a folder
   - `folderId`: Folder ID (optional, defaults to root)

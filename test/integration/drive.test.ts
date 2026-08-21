@@ -168,6 +168,22 @@ describe('Drive tools', () => {
       ctx.mocks.drive.service.files.list._resetImpl();
     });
 
+    it('repeats orderBy in the pagination hint so the next page keeps the ordering', async () => {
+      ctx.mocks.drive.service.files.list._setImpl(async () => ({
+        data: {
+          files: [{ id: 'f1', name: 'Report.pdf', mimeType: 'application/pdf' }],
+          nextPageToken: 'tok-2',
+        },
+      }));
+      const res = await callTool(ctx.client, 'search', { query: 'report', orderBy: 'name' });
+      const text = res.content[0].text!;
+      // orderBy defaults to `modifiedTime desc`, so a follow-up call carrying only
+      // the token would re-sort page 2. The token also has to end its own line.
+      assert.ok(text.includes('Use pageToken: tok-2\n'));
+      assert.ok(text.includes('Pass orderBy: name again'));
+      ctx.mocks.drive.service.files.list._resetImpl();
+    });
+
     // --- Folder path resolution tests (PR #30) ---
 
     it('resolves folder paths in search results', async () => {

@@ -88,6 +88,19 @@ function log(message: string, data?: any) {
   console.error(logMessage);
 }
 
+/** ctx.log for team mode — always attributes the log to the acting user by
+ * merging `userId` into the data payload. Non-plain-object payloads (Error,
+ * array, string) are wrapped so the userId is never lost. */
+function logWithUser(userId: string): (message: string, data?: any) => void {
+  return (message: string, data?: any) => {
+    if (data && typeof data === 'object' && !Array.isArray(data) && !(data instanceof Error)) {
+      log(message, { ...data, userId });
+    } else {
+      log(message, { data: data === undefined ? undefined : data, userId });
+    }
+  };
+}
+
 const runtimeConfig = loadRuntimeConfig();
 log('Runtime config:', runtimeConfig);
 
@@ -546,18 +559,20 @@ async function buildToolContext(
     noAccount();
   }
 
+  const ctxLogger = account ? logWithUser(account.alias) : log;
   return {
     authClient,
     google,
     getDrive: () => drive ?? noAccount(),
     getCalendar: () => calendar ?? noAccount(),
-    log,
+    log: ctxLogger,
     resolvePath: (pathStr) => (drive ? resolvePath(pathStr, drive) : noAccount()),
     resolveFolderId: (input) => (drive ? resolveFolderId(input, drive) : noAccount()),
     checkFileExists: (name, parentFolderId) =>
       drive ? checkFileExists(name, parentFolderId, drive) : noAccount(),
     validateTextFileExtension,
     runtimeConfig,
+    userId: account?.alias,
 
     // Multi-account surface
     sessionId,
@@ -600,7 +615,7 @@ async function handleTeamToolCall(
 ): Promise<ToolResult> {
   const runtime = teamRuntime!;
   const sub = extra?.authInfo?.extra?.sub;
-  log('Handling tool request (team)', { tool: toolName });
+  log('Handling tool request (team)', { tool: toolName, sub });
   try {
     if (typeof sub !== 'string' || sub.length === 0) {
       // requireBearerAuth guarantees an identity on every /mcp request;
@@ -690,12 +705,13 @@ async function buildTeamToolContext(sessionId: string, sub: string): Promise<Too
     google,
     getDrive: () => drive,
     getCalendar: () => calendar,
-    log,
+    log: logWithUser(sub),
     resolvePath: (pathStr) => resolvePath(pathStr, drive),
     resolveFolderId: (input) => resolveFolderId(input, drive),
     checkFileExists: (name, parentFolderId) => checkFileExists(name, parentFolderId, drive),
     validateTextFileExtension,
     runtimeConfig,
+    userId: sub,
 
     sessionId,
     resolveAccount: async () => {
@@ -1325,7 +1341,7 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
     sessionTimers.set(sid, setTimeout(async () => {
       const session = sessions.get(sid);
       if (session) {
-        log(`Session idle timeout: ${sid}`);
+        log(`Session idle timeout: ${sid}`, session.sub ? { sub: session.sub } : undefined);
         await session.transport.close();
         await session.server.close();
         sessions.delete(sid);
@@ -1386,10 +1402,11 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
       transport.onclose = () => {
         const sid = transport.sessionId;
         if (sid) {
+          const closedSub = sessions.get(sid)?.sub;
           clearSessionTimer(sid);
           sessions.delete(sid);
           if (authSystem) authSystem.sessions.delete(sid);
-          log(`Session closed: ${sid}`);
+          log(`Session closed: ${sid}`, closedSub ? { sub: closedSub } : undefined);
         }
       };
 
@@ -1397,14 +1414,15 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
 
       const sid = transport.sessionId;
       if (sid) {
+        const sessionSub = teamAuth ? (req.auth?.extra?.sub as string | undefined) : undefined;
         sessions.set(sid, {
           transport,
           server: sessionServer,
-          sub: teamAuth ? (req.auth?.extra?.sub as string | undefined) : undefined,
+          sub: sessionSub,
         });
         resetSessionTimer(sid);
         if (authSystem) authSystem.sessions.getOrCreate(sid);
-        log(`New session created: ${sid}`);
+        log(`New session created: ${sid}`, sessionSub ? { sub: sessionSub } : undefined);
       }
     } catch (error) {
       log('Error handling POST /mcp', { error: (error as Error).message });

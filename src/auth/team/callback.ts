@@ -99,7 +99,7 @@ export function makeGoogleCallbackHandler(deps: GoogleCallbackDeps): RequestHand
     if (deps.config.allowedDomains.length > 0) {
       const hd = identity.hd?.toLowerCase();
       if (!hd || !deps.config.allowedDomains.includes(hd)) {
-        log(`Rejected sign-in from outside the allowed domains: ${identity.email}`);
+        log(`Rejected sign-in from outside the allowed domains: ${identity.email} (sub: ${identity.sub})`);
         // Revoke the freshly-issued grant only for a brand-new sub. For an
         // already-stored member, revoking at Google removes their whole
         // user+client grant — destroying the working refresh token we already
@@ -110,7 +110,7 @@ export function makeGoogleCallbackHandler(deps: GoogleCallbackDeps): RequestHand
           try {
             await deps.idp.revokeGrant(tokens.refresh_token ?? tokens.access_token!);
           } catch (err) {
-            log(`Failed to revoke rejected sign-in grant: ${describeErrorForLog(err)}`);
+            log(`Failed to revoke rejected sign-in grant (sub: ${identity.sub}): ${describeErrorForLog(err)}`);
           }
         }
         redirectToClient(res, pending.redirectUri, {
@@ -126,7 +126,7 @@ export function makeGoogleCallbackHandler(deps: GoogleCallbackDeps): RequestHand
     if (!refreshToken) {
       // prompt=consent + access_type=offline should always yield one; without
       // it the user would break within the hour.
-      log(`Google returned no refresh token for ${identity.email}; aborting sign-in.`);
+      log(`Google returned no refresh token for ${identity.email} (sub: ${identity.sub}); aborting sign-in.`);
       redirectToClient(res, pending.redirectUri, {
         error: 'server_error',
         error_description: 'Google did not issue offline credentials. Try again.',
@@ -154,7 +154,7 @@ export function makeGoogleCallbackHandler(deps: GoogleCallbackDeps): RequestHand
       await deps.store.upsertUser(user);
     } catch (err) {
       if (err instanceof TeamStoreCapacityError) {
-        log(`Rejected sign-in for ${identity.email}: ${err.message}`);
+        log(`Rejected sign-in for ${identity.email} (sub: ${identity.sub}): ${err.message}`);
         await deps.idp.revokeGrant(tokens.refresh_token ?? tokens.access_token ?? '');
         renderTeamFullPage(res);
         return;
@@ -162,7 +162,7 @@ export function makeGoogleCallbackHandler(deps: GoogleCallbackDeps): RequestHand
       throw err;
     }
     deps.onUserAuthorized?.(identity.sub);
-    log(`Authorized team member ${identity.email}`);
+    log(`Authorized team member ${identity.email} (sub: ${identity.sub})`);
 
     const authorizationCode = mintAuthorizationCode();
     const now = Date.now();

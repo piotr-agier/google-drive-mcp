@@ -1,8 +1,20 @@
 # Tool reference
 
-This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
+This server exposes 119 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
 
 ## Available Tools
+
+### Raw batchUpdate passthrough
+
+The escape hatch for anything the wrappers don't model — mirrors the design of Google's own managed MCP servers. All three apply their request array atomically (every request validates first; all apply or none do). Guardrails: per-call cap via `GOOGLE_DRIVE_MCP_BATCH_MAX` (default 200) and an optional request-type allowlist via `GOOGLE_DRIVE_MCP_BATCH_ALLOWLIST` (comma-separated type names).
+
+- **docsBatchUpdate** - Native `documents.batchUpdate` request array. Best practice: read once, build requests against those indexes, sort descending by index, pass `ifRevisionId` (optimistic lock), submit once
+  - `documentId`, `requests` (array of one-key request objects), `ifRevisionId` (optional)
+- **sheetsBatchUpdate** - Native `spreadsheets.batchUpdate` request array (charts, borders, conditional formats, cell updates, …)
+  - `spreadsheetId`, `requests`
+- **slidesBatchUpdate** - Native `presentations.batchUpdate` request array (z-order, replaceImage, slide visibility, table borders, …)
+  - `presentationId`, `requests`, `ifRevisionId` (optional)
+
 
 ### Search and Navigation
 - **search** - Search for files across Google Drive

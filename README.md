@@ -6,7 +6,7 @@ Connect an MCP client to Google Drive, Docs, Sheets, Slides, and Calendar throug
 
 ## Why this server
 
-- **Drive-first workflows:** 116 tools cover file management, Shared Drives, permissions, revisions, rich Docs editing, Sheets formatting, Slides authoring, and Calendar events.
+- **Drive-first workflows:** 119 tools cover file management, Shared Drives, permissions, revisions, rich Docs editing, Sheets formatting, Slides authoring, and Calendar events.
 - **Local or hosted:** use stdio for a personal desktop client, Streamable HTTP for a hosted integration, or OAuth-protected team mode for a shared service.
 - **Identity control:** local OAuth supports multiple Google accounts and per-tool account selection; service accounts and externally managed OAuth tokens are also supported.
 - **Agent-friendly access:** tools expose targeted operations, while the optional `gdrive:///` resource interface supports direct reading and discovery.

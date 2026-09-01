@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { batchGuardConfigFromEnv, summarizeBatchReplies, summarizeRequestTypes, validateBatchRequests } from './batchPassthrough.js';
 import { v4 as uuidv4 } from 'uuid';
 import type { slides_v1 } from 'googleapis';
 import type { ToolDefinition, ToolResult, ToolContext } from '../types.js';
@@ -249,7 +250,27 @@ async function insertImageIntoSlide(
 // Tool Definitions
 // ---------------------------------------------------------------------------
 
+
+const SlidesBatchUpdateSchema = z.object({
+  presentationId: z.string().min(1, "Presentation ID is required"),
+  requests: z.array(z.record(z.unknown())).min(1),
+  ifRevisionId: z.string().optional(),
+});
+
 export const toolDefinitions: ToolDefinition[] = [
+  {
+    name: "slidesBatchUpdate",
+    description: "Raw presentations.batchUpdate passthrough: apply an array of native Slides API request objects (any documented type — updatePageElementsZOrder, replaceImage, updateSlideProperties incl. isSkipped, updateTableBorderProperties, groupObjects, …) in ONE atomic call: all requests validate first, and either all apply or none do.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        presentationId: { type: "string", description: "The presentation ID" },
+        requests: { type: "array", description: "Native Slides API batchUpdate request objects, each with exactly one request-type key (see the presentations.batchUpdate reference)", items: { type: "object" } },
+        ifRevisionId: { type: "string", description: "Optional optimistic lock: the presentation revisionId your requests were computed against — the whole batch fails cleanly if it changed since" }
+      },
+      required: ["presentationId", "requests"]
+    }
+  },
   {
     name: "createGoogleSlides",
     description: "Create a new Google Slides presentation",
@@ -649,6 +670,30 @@ export async function handleTool(
   ctx: ToolContext
 ): Promise<ToolResult | null> {
   switch (toolName) {
+    case "slidesBatchUpdate": {
+      const validation = SlidesBatchUpdateSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+      const guardError = validateBatchRequests(a.requests, batchGuardConfigFromEnv());
+      if (guardError) return errorResponse(guardError);
+      const slides = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
+      const response = await slides.presentations.batchUpdate({
+        presentationId: a.presentationId,
+        requestBody: {
+          requests: a.requests as any[],
+          ...(a.ifRevisionId ? { writeControl: { requiredRevisionId: a.ifRevisionId } } : {}),
+        },
+      });
+      const replies = response.data.replies ?? [];
+      return {
+        content: [{
+          type: 'text',
+          text: `slidesBatchUpdate applied ${a.requests.length} request(s) (${summarizeRequestTypes(a.requests as Array<Record<string, unknown>>)}) atomically. Replies: ${summarizeBatchReplies(replies)}.`,
+        }],
+        isError: false,
+      };
+    }
+
 
     case "createGoogleSlides": {
       const validation = CreateGoogleSlidesSchema.safeParse(args);

@@ -100,6 +100,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
   // so it needs a drive-family write scope, not the docs scope.
   createDocFromHTML: write(DRIVE_WRITE_SCOPES),
   updateGoogleDoc: write(DOCS_WRITE_SCOPES),
+  docsBatchUpdate: write(DOCS_WRITE_SCOPES),
   insertText: write(DOCS_WRITE_SCOPES),
   deleteRange: write(DOCS_WRITE_SCOPES),
   applyTextStyle: write(DOCS_WRITE_SCOPES),
@@ -128,6 +129,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
 
   createGoogleSheet: write(SHEETS_WRITE_SCOPES),
   updateGoogleSheet: write(SHEETS_WRITE_SCOPES),
+  sheetsBatchUpdate: write(SHEETS_WRITE_SCOPES),
   formatGoogleSheetCells: write(SHEETS_WRITE_SCOPES),
   formatGoogleSheetText: write(SHEETS_WRITE_SCOPES),
   formatGoogleSheetNumbers: write(SHEETS_WRITE_SCOPES),
@@ -157,6 +159,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
 
   createGoogleSlides: write(SLIDES_WRITE_SCOPES),
   updateGoogleSlides: write(SLIDES_WRITE_SCOPES),
+  slidesBatchUpdate: write(SLIDES_WRITE_SCOPES),
   formatGoogleSlidesText: write(SLIDES_WRITE_SCOPES),
   formatGoogleSlidesParagraph: write(SLIDES_WRITE_SCOPES),
   styleGoogleSlidesShape: write(SLIDES_WRITE_SCOPES),

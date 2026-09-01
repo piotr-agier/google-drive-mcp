@@ -7,6 +7,7 @@ import { escapeDriveQuery, isTextMime, ALL_DRIVES_LIST_PARAMS, DRIVE_ORDER_BY_VA
 import { downloadTextContent, writeTextContent } from './text-content.js';
 import { uploadImageToDrive } from '../utils/driveImageUpload.js';
 import { withRetry } from '../utils/retry.js';
+import { batchGuardConfigFromEnv, summarizeBatchReplies, summarizeRequestTypes, validateBatchRequests } from './batchPassthrough.js';
 
 // ---------------------------------------------------------------------------
 // Helper functions
@@ -1775,6 +1776,21 @@ const FindAndReplaceInDocSchema = z.object({
   tabId: z.string().optional(),
 });
 
+
+const DocsBatchUpdateSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  requests: z.array(z.record(z.unknown())).min(1),
+  ifRevisionId: z.string().optional(),
+});
+// Optimistic lock: thread WriteControl.requiredRevisionId into a batchUpdate
+// body so the write fails cleanly if the document changed since the caller
+// read it (the revisionId comes from readGoogleDoc / getDocumentInfo).
+// Field incident: an automated edit raced a concurrent human edit on a live
+// client doc and clobbered it — this is the guard.
+function writeControlFor(ifRevisionId?: string): { writeControl?: { requiredRevisionId: string } } {
+  return ifRevisionId ? { writeControl: { requiredRevisionId: ifRevisionId } } : {};
+}
+
 const AddDocumentTabSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
   title: z.string().min(1, "Tab title is required"),
@@ -1813,6 +1829,19 @@ const CreateFootnoteSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const toolDefinitions: ToolDefinition[] = [
+  {
+    name: "docsBatchUpdate",
+    description: "Raw documents.batchUpdate passthrough: apply an array of native Docs API request objects (any documented type — updateParagraphStyle incl. borders, updateTableCellStyle, updateTableColumnProperties, updateTableRowStyle, createHeader/createFooter, insertSectionBreak, updateSectionStyle, updateNamedStyle, updateDocumentStyle, pinTableHeaderRows, …) in ONE atomic call: all requests validate first, and either all apply or none do. Method: read once (readGoogleDoc reports the revisionId), build every request against those indexes, sort DESCENDING by index so earlier edits never shift later targets, pass ifRevisionId, submit once, verify once.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentId: { type: "string", description: "The document ID" },
+        requests: { type: "array", description: "Native Docs API batchUpdate request objects, each with exactly one request-type key (see the documents.batchUpdate reference)", items: { type: "object" } },
+        ifRevisionId: { type: "string", description: "Strongly recommended optimistic lock: the revisionId your indexes were computed against — the whole batch fails cleanly if the document changed since that read" }
+      },
+      required: ["documentId", "requests"]
+    }
+  },
   {
     name: "createGoogleDoc",
     description: "Create a new Google Doc",
@@ -2324,6 +2353,27 @@ export const toolDefinitions: ToolDefinition[] = [
 
 export async function handleTool(toolName: string, args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult | null> {
   switch (toolName) {
+    case "docsBatchUpdate": {
+      const validation = DocsBatchUpdateSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+      const guardError = validateBatchRequests(a.requests, batchGuardConfigFromEnv());
+      if (guardError) return errorResponse(guardError);
+      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+      const response = await docs.documents.batchUpdate({
+        documentId: a.documentId,
+        requestBody: { requests: a.requests as any[], ...writeControlFor(a.ifRevisionId) },
+      });
+      const replies = response.data.replies ?? [];
+      return {
+        content: [{
+          type: 'text',
+          text: `docsBatchUpdate applied ${a.requests.length} request(s) (${summarizeRequestTypes(a.requests as Array<Record<string, unknown>>)}) atomically. Replies: ${summarizeBatchReplies(replies)}.`,
+        }],
+        isError: false,
+      };
+    }
+
 
     // =========================================================================
     // CREATE / UPDATE GOOGLE DOC

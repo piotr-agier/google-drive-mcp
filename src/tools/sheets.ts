@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { batchGuardConfigFromEnv, summarizeBatchReplies, summarizeRequestTypes, validateBatchRequests } from './batchPassthrough.js';
 import type { sheets_v4 } from 'googleapis';
 import type { ToolDefinition, ToolResult, ToolContext } from '../types.js';
 import { errorResponse } from '../types.js';
@@ -220,7 +221,25 @@ const HideShowDimensionSchema = z.object({
 // Tool Definitions
 // ---------------------------------------------------------------------------
 
+
+const SheetsBatchUpdateSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  requests: z.array(z.record(z.unknown())).min(1),
+});
+
 export const toolDefinitions: ToolDefinition[] = [
+  {
+    name: "sheetsBatchUpdate",
+    description: "Raw spreadsheets.batchUpdate passthrough: apply an array of native Sheets API request objects (any documented type — updateCells, repeatCell, updateBorders, addChart, updateConditionalFormatRule, addBanding, mergeCells, updateDimensionProperties, …) in ONE atomic call: all requests validate first, and either all apply or none do.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "The spreadsheet ID" },
+        requests: { type: "array", description: "Native Sheets API batchUpdate request objects, each with exactly one request-type key (see the spreadsheets.batchUpdate reference)", items: { type: "object" } }
+      },
+      required: ["spreadsheetId", "requests"]
+    }
+  },
   {
     name: "createGoogleSheet",
     description: "Create a new Google Sheet. By default uses RAW mode which stores values as-is. Set valueInputOption to 'USER_ENTERED' only when you need formulas to be evaluated.",
@@ -763,6 +782,27 @@ export async function handleTool(
   ctx: ToolContext
 ): Promise<ToolResult | null> {
   switch (toolName) {
+    case "sheetsBatchUpdate": {
+      const validation = SheetsBatchUpdateSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+      const guardError = validateBatchRequests(a.requests, batchGuardConfigFromEnv());
+      if (guardError) return errorResponse(guardError);
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      const response = await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: a.spreadsheetId,
+        requestBody: { requests: a.requests as any[] },
+      });
+      const replies = response.data.replies ?? [];
+      return {
+        content: [{
+          type: 'text',
+          text: `sheetsBatchUpdate applied ${a.requests.length} request(s) (${summarizeRequestTypes(a.requests as Array<Record<string, unknown>>)}) atomically. Replies: ${summarizeBatchReplies(replies)}.`,
+        }],
+        isError: false,
+      };
+    }
+
     case "createGoogleSheet": {
       const validation = CreateGoogleSheetSchema.safeParse(args);
       if (!validation.success) {

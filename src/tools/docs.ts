@@ -7,6 +7,7 @@ import { escapeDriveQuery, isTextMime, ALL_DRIVES_LIST_PARAMS, DRIVE_ORDER_BY_VA
 import { downloadTextContent, writeTextContent } from './text-content.js';
 import { uploadImageToDrive } from '../utils/driveImageUpload.js';
 import { withRetry } from '../utils/retry.js';
+import { collectDocPlainText, countOccurrences, diagnoseZeroMatch } from './findDiagnostics.js';
 
 // ---------------------------------------------------------------------------
 // Helper functions
@@ -1773,6 +1774,7 @@ const FindAndReplaceInDocSchema = z.object({
   matchCase: z.boolean().optional().default(false),
   dryRun: z.boolean().optional().default(false),
   tabId: z.string().optional(),
+  expectedCount: z.number().int().min(1).optional(),
 });
 
 const AddDocumentTabSchema = z.object({
@@ -2040,7 +2042,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "findAndReplaceInDoc",
-    description: "Find and replace text across a Google Document. Dry-run mode counts matches from paragraph text only (may differ from actual replacements which cover tables, headers, footers, etc.). For multi-tab docs, specify tabId to scope replacements to a single tab.",
+    description: "Find and replace text across a Google Document. Dry-run mode counts matches exactly across body, tables, headers, footers, and footnotes. On zero matches the response explains the likeliest lookalike cause (non-breaking spaces, curly quotes, HTML entities, case). For multi-tab docs, specify tabId to scope replacements to a single tab.",
     inputSchema: {
       type: "object",
       properties: {
@@ -2048,8 +2050,9 @@ export const toolDefinitions: ToolDefinition[] = [
         findText: { type: "string", description: "Text to find" },
         replaceText: { type: "string", description: "Replacement text" },
         matchCase: { type: "boolean", description: "Case-sensitive match (default: false)" },
-        dryRun: { type: "boolean", description: "Only count approximate matches from paragraph text, do not modify document (default: false). Ignores tabId — always scans the full document body." },
-        tabId: { type: "string", description: "Optional. Tab ID to scope replacements to (from listDocumentTabs). If omitted, replaces across all tabs." }
+        dryRun: { type: "boolean", description: "Only count matches, do not modify the document (default: false). Respects tabId scoping." },
+        tabId: { type: "string", description: "Optional. Tab ID to scope replacements to (from listDocumentTabs). If omitted, replaces across all tabs." },
+        expectedCount: { type: "number", description: "Optional safety guard: the exact number of occurrences you expect to replace. Counted before writing; on a mismatch the call aborts without modifying the document (catches substring collisions and stale assumptions)." }
       },
       required: ["documentId", "findText", "replaceText"]
     }
@@ -3320,24 +3323,37 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
 
       if (a.dryRun) {
-        const doc = await docs.documents.get({ documentId: a.documentId });
-        let text = '';
-        const content = doc.data.body?.content || [];
-        for (const el of content) {
-          if (el.paragraph?.elements) {
-            for (const elem of el.paragraph.elements) {
-              if (elem.textRun?.content) text += elem.textRun.content;
-            }
-          }
+        const doc = await docs.documents.get({ documentId: a.documentId, includeTabsContent: true });
+        const text = collectDocPlainText(doc.data, a.tabId);
+        const count = countOccurrences(text, a.findText, a.matchCase);
+        let message = `Dry run: found ${count} occurrence(s) of "${a.findText}"${a.tabId ? ` in tab ${a.tabId}` : ''} (counted across body, tables, headers, footers, and footnotes).`;
+        if (count === 0) {
+          const hint = diagnoseZeroMatch(text, a.findText, a.matchCase);
+          if (hint) message += `\nLikely cause: ${hint}.`;
         }
-        const escaped = a.findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const flags = a.matchCase ? 'g' : 'gi';
-        const matches = text.match(new RegExp(escaped, flags));
-        const count = matches ? matches.length : 0;
         return {
-          content: [{ type: 'text', text: `Dry run (paragraph text only, approximate): found ${count} occurrence(s) of "${a.findText}". Note: actual replacement covers the full document including tables, headers, and footers.` }],
+          content: [{ type: 'text', text: message }],
           isError: false,
         };
+      }
+
+      // expectedCount is a pre-write guard: count exactly first, refuse to
+      // write on a mismatch (substring collisions become a refused call, not a
+      // revert). The count walks the same text surface replaceAllText targets.
+      if (a.expectedCount !== undefined) {
+        const doc = await docs.documents.get({ documentId: a.documentId, includeTabsContent: true });
+        const text = collectDocPlainText(doc.data, a.tabId);
+        const preCount = countOccurrences(text, a.findText, a.matchCase);
+        if (preCount !== a.expectedCount) {
+          let message = `Aborted without writing: expectedCount=${a.expectedCount} but found ${preCount} occurrence(s) of "${a.findText}"${a.tabId ? ` in tab ${a.tabId}` : ''}.`;
+          if (preCount === 0) {
+            const hint = diagnoseZeroMatch(text, a.findText, a.matchCase);
+            if (hint) message += `\nLikely cause: ${hint}.`;
+          } else if (preCount > a.expectedCount) {
+            message += ' The extra matches may be substring collisions elsewhere in the document — use a longer, unique findText.';
+          }
+          return { content: [{ type: 'text', text: message }], isError: true };
+        }
       }
 
       const replaceAllText: {
@@ -3358,8 +3374,22 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       });
 
       const occurrences = response.data.replies?.[0]?.replaceAllText?.occurrencesChanged ?? 0;
+      let message = `Replaced ${occurrences} occurrence(s) of "${a.findText}"${a.tabId ? ` in tab ${a.tabId}` : ''}.`;
+      if (occurrences === 0) {
+        // A zero-match silent no-op has repeatedly hidden lookalike-character
+        // problems; spend one read explaining why nothing matched.
+        try {
+          const doc = await docs.documents.get({ documentId: a.documentId, includeTabsContent: true });
+          const hint = diagnoseZeroMatch(collectDocPlainText(doc.data, a.tabId), a.findText, a.matchCase);
+          if (hint) message += `\nLikely cause: ${hint}.`;
+        } catch {
+          // diagnosis is best-effort; the zero count already stands on its own
+        }
+      } else if (a.expectedCount !== undefined && occurrences !== a.expectedCount) {
+        message += `\nWARNING: ${a.expectedCount} matches were verified immediately before writing but ${occurrences} were changed — the document was edited concurrently. Re-read before further edits.`;
+      }
       return {
-        content: [{ type: 'text', text: `Replaced ${occurrences} occurrence(s) of "${a.findText}"${a.tabId ? ` in tab ${a.tabId}` : ''}.` }],
+        content: [{ type: 'text', text: message }],
         isError: false,
       };
     }

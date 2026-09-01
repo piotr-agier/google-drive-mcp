@@ -328,7 +328,7 @@ This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `documentId`: Document ID
   - `commentId`: Comment ID
 
-- **addComment** - Add a comment anchored to a specific text range
+- **addComment** - Add a comment anchored to a text range (by `startIndex`+`endIndex` or by `textToFind`+`matchInstance`). Creates a real anchored thread via the Docs API's `insertComment` (Developer Preview) on enrolled projects; otherwise falls back to an unanchored Drive comment in the doc's comment panel and reports which path was used
   - `documentId`: Document ID
   - `startIndex`: Start index (1-based)
   - `endIndex`: End index (exclusive)

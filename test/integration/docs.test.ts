@@ -124,6 +124,10 @@ describe('Docs tools', () => {
     // per-block override (e.g. insertText/deleteRange forcing a Google-Docs
     // mimeType) does not leak into later tests and make the suite order-dependent.
     ctx.mocks.drive.service.files.get._resetImpl();
+    // Same for documents.get/batchUpdate — addComment's fallback test makes
+    // batchUpdate throw, which must not leak into later happy paths.
+    ctx.mocks.docs.service.documents.get._resetImpl();
+    ctx.mocks.docs.service.documents.batchUpdate._resetImpl();
   });
 
   // --- createGoogleDoc ---
@@ -1583,7 +1587,7 @@ describe('Docs tools', () => {
 
   // --- addComment ---
   describe('addComment', () => {
-    it('happy path', async () => {
+    it('happy path: anchored via Docs-native insertComment', async () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({
         data: {
           documentId: 'doc-1', title: 'My Doc',
@@ -1594,7 +1598,43 @@ describe('Docs tools', () => {
         documentId: 'doc-1', startIndex: 1, endIndex: 5, commentText: 'Great!',
       });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text!.includes('Comment added'));
+      assert.ok(res.content[0].text!.includes('Anchored comment created'));
+      const batchCalls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
+      assert.equal(batchCalls.length, 1);
+      assert.ok('insertComment' in batchCalls[0]?.args?.[0]?.requestBody?.requests?.[0]);
+    });
+
+    it('targets by textToFind and anchors the requested instance', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'My Doc',
+          body: { content: [{ paragraph: { elements: [{ textRun: { content: 'target and target again\n' }, startIndex: 1, endIndex: 25 }] } }] },
+        },
+      }));
+      const res = await callTool(ctx.client, 'addComment', {
+        documentId: 'doc-1', textToFind: 'target', matchInstance: 2, commentText: 'second one',
+      });
+      assert.equal(res.isError, false);
+      const call = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate').at(-1);
+      assert.deepEqual(call?.args?.[0]?.requestBody?.requests?.[0]?.insertComment?.range, { startIndex: 12, endIndex: 18 });
+    });
+
+    it('falls back to an unanchored Drive comment when the preview request type is rejected', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'My Doc',
+          body: { content: [{ paragraph: { elements: [{ textRun: { content: 'Hello World\n' }, startIndex: 1, endIndex: 13 }] } }] },
+        },
+      }));
+      ctx.mocks.docs.service.documents.batchUpdate._setImpl(async () => {
+        throw new Error('Invalid JSON payload received. Unknown name "insertComment" at requests[0]');
+      });
+      const res = await callTool(ctx.client, 'addComment', {
+        documentId: 'doc-1', startIndex: 1, endIndex: 5, commentText: 'Great!',
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text!.includes('Unanchored comment created'));
+      assert.ok(res.content[0].text!.includes("isn't enrolled"));
     });
 
     it('validation: endIndex must be > startIndex', async () => {

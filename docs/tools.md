@@ -164,7 +164,7 @@ This server exposes 121 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `html`: HTML content
   - `parentFolderId`: Parent folder ID (optional)
 
-- **updateGoogleDoc** - Replace all content in a Google Doc
+- **updateGoogleDoc** - Replace all content in a Google Doc. Accepts `ifRevisionId` (with tabId the replacement is one atomic batch; without tabId it is two calls and the lock guards only the delete)
   - `documentId`: Document ID
   - `content`: New content
 
@@ -214,7 +214,7 @@ This server exposes 121 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `tabId`: Tab ID
   - `title`: New tab title
 
-- **insertSmartChip** - Insert a person smart chip (mention) at a document index. Only person chips are supported by the Docs API; date and file chips are read-only.
+- **insertSmartChip** - Insert a person smart chip (mention) at a document index. Only person chips are supported by the Docs API; date and file chips are read-only. Accepts `ifRevisionId` (optimistic lock)
   - `documentId`: Document ID
   - `index`: Insertion index (1-based)
   - `chipType`: `person` (only supported type)
@@ -223,7 +223,7 @@ This server exposes 121 MCP tools across Google Drive, Docs, Sheets, Slides, and
 - **readSmartChips** - Read smart chip-like elements (person mentions, rich links, date chips) from the default tab of a document. Only the default tab is scanned; other tabs are not included.
   - `documentId`: Document ID
 
-- **createFootnote** - Create a footnote in a Google Doc. Footnotes cannot be inserted inside equations, headers, footers, or other footnotes.
+- **createFootnote** - Create a footnote in a Google Doc. Footnotes cannot be inserted inside equations, headers, footers, or other footnotes. Accepts `ifRevisionId` (optimistic lock on the creating call)
   - `documentId`: Document ID
   - `index`: 1-based character index where the footnote reference should be inserted (optional — provide this or `endOfSegment`)
   - `endOfSegment`: If true, insert footnote at the end of the document body (optional — provide this or `index`)
@@ -248,7 +248,7 @@ This server exposes 121 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - Target (use one): `startIndex` (1-based, inclusive) + `endIndex` (exclusive) OR `textToFind`+`matchInstance` (Google Docs only; exact, case-sensitive match). A match ending at the document's final paragraph break is trimmed to keep that break
 
 #### Text and Paragraph Styling
-- **applyTextStyle** - Apply text formatting (bold, italic, color, etc.) to a range or found text
+- **applyTextStyle** - Apply text formatting (bold, italic, color, etc.) to a range or found text. Accepts `ifRevisionId` (optimistic lock)
   - `documentId`: Document ID
   - Target (use one): `startIndex`+`endIndex` OR `textToFind`+`matchInstance`
   - `bold`, `italic`, `underline`, `strikethrough`: Text styling (optional)
@@ -278,7 +278,7 @@ This server exposes 121 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - Same parameters as `applyParagraphStyle`
 
 #### Bullet Points and Lists
-- **createParagraphBullets** - Add or remove bullet points / numbered lists on paragraphs
+- **createParagraphBullets** - Add or remove bullet points / numbered lists on paragraphs. Accepts `ifRevisionId` (optimistic lock)
   - `documentId`: Document ID
   - Target (use one): `startIndex`+`endIndex` OR `textToFind`+`matchInstance`
   - `bulletPreset`: Bullet style preset (optional, default: `BULLET_DISC_CIRCLE_SQUARE`). Available presets:
@@ -295,13 +295,13 @@ This server exposes 121 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `expectedCount`: Safety guard — the exact number of occurrences you expect. Counted before writing; a mismatch aborts without modifying the document (optional). Costs one extra document read per call, and a zero-match result costs one more to diagnose the likeliest cause
 
 #### Tables and Images
-- **insertTable** - Insert a new table at a given index
+- **insertTable** - Insert a new table at a given index. Accepts `ifRevisionId` (optimistic lock)
   - `documentId`: Document ID
   - `rows`: Number of rows
   - `columns`: Number of columns
   - `index`: Position to insert at (1-based)
 
-- **editTableCell** - Edit content and/or style of a specific table cell
+- **editTableCell** - Edit content and/or style of a specific table cell. Accepts `ifRevisionId` (optimistic lock)
   - `documentId`: Document ID
   - `tableStartIndex`: Starting index of the table element
   - `rowIndex`: Row index (0-based)

@@ -334,4 +334,142 @@ describe('Slides tools', () => {
       assert.equal(res.isError, true);
     });
   });
+
+  // --- setSlideVisibility ---
+  describe('setSlideVisibility', () => {
+    it('hides multiple slides in one atomic batch', async () => {
+      const res = await callTool(ctx.client, 'setSlideVisibility', {
+        presentationId: 'pres-1', slideObjectIds: ['s1', 's2'], skipped: true,
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text!.includes('Hid 2 slide(s)'));
+
+      const calls = ctx.mocks.slides.tracker.getCalls('presentations.batchUpdate');
+      const requests = calls[calls.length - 1].args[0].requestBody.requests;
+      assert.equal(requests.length, 2);
+      assert.deepEqual(requests[0].updateSlideProperties, {
+        objectId: 's1', slideProperties: { isSkipped: true }, fields: 'isSkipped',
+      });
+    });
+
+    it('unhides with skipped: false', async () => {
+      const res = await callTool(ctx.client, 'setSlideVisibility', {
+        presentationId: 'pres-1', slideObjectIds: ['s1'], skipped: false,
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text!.includes('Unhid 1 slide(s)'));
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'setSlideVisibility', { presentationId: 'pres-1', slideObjectIds: [] });
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- replaceSlideImage ---
+  describe('replaceSlideImage', () => {
+    it('replaces by URL with the default fit method', async () => {
+      const res = await callTool(ctx.client, 'replaceSlideImage', {
+        presentationId: 'pres-1', imageObjectId: 'img-1', imageUrl: 'https://example.com/new.png',
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text!.includes('layering, position, size, and crop preserved'));
+
+      const calls = ctx.mocks.slides.tracker.getCalls('presentations.batchUpdate');
+      const requests = calls[calls.length - 1].args[0].requestBody.requests;
+      assert.deepEqual(requests[0].replaceImage, {
+        imageObjectId: 'img-1', url: 'https://example.com/new.png', imageReplaceMethod: 'CENTER_INSIDE',
+      });
+    });
+
+    it('refuses both or neither image source', async () => {
+      const neither = await callTool(ctx.client, 'replaceSlideImage', { presentationId: 'p', imageObjectId: 'i' });
+      assert.equal(neither.isError, true);
+      const both = await callTool(ctx.client, 'replaceSlideImage', {
+        presentationId: 'p', imageObjectId: 'i', imageUrl: 'https://x.com/a.png', localImagePath: '/tmp/a.png',
+      });
+      assert.equal(both.isError, true);
+    });
+  });
+
+  // --- setElementZOrder ---
+  describe('setElementZOrder', () => {
+    it('forwards the operation and element ids', async () => {
+      const res = await callTool(ctx.client, 'setElementZOrder', {
+        presentationId: 'pres-1', pageElementObjectIds: ['el-1', 'el-2'], operation: 'SEND_TO_BACK',
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text!.includes('SEND_TO_BACK'));
+
+      const calls = ctx.mocks.slides.tracker.getCalls('presentations.batchUpdate');
+      const requests = calls[calls.length - 1].args[0].requestBody.requests;
+      assert.deepEqual(requests[0].updatePageElementsZOrder, {
+        pageElementObjectIds: ['el-1', 'el-2'], operation: 'SEND_TO_BACK',
+      });
+    });
+
+    it('validation error on unknown operation', async () => {
+      const res = await callTool(ctx.client, 'setElementZOrder', {
+        presentationId: 'pres-1', pageElementObjectIds: ['el-1'], operation: 'FLIP',
+      });
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- setElementText ---
+  describe('setElementText', () => {
+    it('deletes existing text then inserts, in one atomic batch', async () => {
+      ctx.mocks.slides.service.presentations.get._setImpl(async () => ({
+        data: {
+          slides: [{
+            pageElements: [
+              { objectId: 'shape-1', shape: { text: { textElements: [{ textRun: { content: 'old copy\n' } }] } } },
+            ],
+          }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'setElementText', {
+        presentationId: 'pres-1', objectId: 'shape-1', text: 'new copy',
+      });
+      assert.equal(res.isError, false);
+
+      const calls = ctx.mocks.slides.tracker.getCalls('presentations.batchUpdate');
+      const requests = calls[calls.length - 1].args[0].requestBody.requests;
+      assert.equal(requests.length, 2);
+      assert.deepEqual(requests[0].deleteText, { objectId: 'shape-1', textRange: { type: 'ALL' } });
+      assert.deepEqual(requests[1].insertText, { objectId: 'shape-1', insertionIndex: 0, text: 'new copy' });
+    });
+
+    it('skips deleteText on an empty shape and finds elements inside groups', async () => {
+      ctx.mocks.slides.service.presentations.get._setImpl(async () => ({
+        data: {
+          slides: [{
+            pageElements: [
+              { objectId: 'group-1', elementGroup: { children: [{ objectId: 'shape-2', shape: {} }] } },
+            ],
+          }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'setElementText', {
+        presentationId: 'pres-1', objectId: 'shape-2', text: 'fresh',
+      });
+      assert.equal(res.isError, false);
+
+      const calls = ctx.mocks.slides.tracker.getCalls('presentations.batchUpdate');
+      const requests = calls[calls.length - 1].args[0].requestBody.requests;
+      assert.equal(requests.length, 1);
+      assert.ok(requests[0].insertText);
+    });
+
+    it('errors when the element does not exist', async () => {
+      ctx.mocks.slides.service.presentations.get._setImpl(async () => ({
+        data: { slides: [{ pageElements: [] }] },
+      }));
+      const res = await callTool(ctx.client, 'setElementText', {
+        presentationId: 'pres-1', objectId: 'ghost', text: 'x',
+      });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text!.includes('not found'));
+    });
+  });
 });

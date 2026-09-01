@@ -70,6 +70,7 @@ Supported scope aliases are `drive`, `drive.file`, `drive.readonly`, `documents`
 | `GOOGLE_DRIVE_MCP_API_TIMEOUT` | `120000` | Fallback for `--api-timeout` |
 | `GOOGLE_DRIVE_MCP_RETRY_MAX` | `3` | Fallback for `--retry-max` |
 | `GOOGLE_DRIVE_MCP_RETRY_BASE_DELAY` | `1000` | Fallback for `--retry-base-delay` |
+| `GOOGLE_DRIVE_MCP_SESSION_IDLE_TIMEOUT_MS` | `1800000` (30 min) | HTTP transport only: idle time before a session is evicted. Raise for long-lived single-user connectors whose clients never re-initialize a dead session |
 
 ## HTTP transport
 

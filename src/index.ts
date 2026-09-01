@@ -1256,7 +1256,16 @@ interface HttpSession {
  * Create an Express app with MCP Streamable HTTP routes.
  * Shared by production (startHttpTransport) and tests.
  */
-const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+// Default 30 minutes; override via GOOGLE_DRIVE_MCP_SESSION_IDLE_TIMEOUT_MS
+// (milliseconds). Long-lived single-user connectors (e.g. a claude.ai custom
+// connector left idle between chat turns) otherwise get their session evicted
+// and every subsequent call 400s until the client reconnects, because MCP
+// clients do not re-issue `initialize` on a dead session id.
+const SESSION_IDLE_TIMEOUT_MS = (() => {
+  const raw = process.env.GOOGLE_DRIVE_MCP_SESSION_IDLE_TIMEOUT_MS;
+  const parsed = raw ? parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 30 * 60 * 1000;
+})();
 
 interface CreateHttpAppOptions {
   sessionIdleTimeoutMs?: number;

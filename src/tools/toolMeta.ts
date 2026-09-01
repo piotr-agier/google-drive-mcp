@@ -84,6 +84,8 @@ export const TOOL_META: Record<string, ToolMeta> = {
 
   // ---- Docs ----
   readGoogleDoc: read(DOCS_READ_SCOPES),
+  documentStyleSummary: read(DOCS_READ_SCOPES),
+  describeRange: read(DOCS_READ_SCOPES),
   readGoogleDocPaginated: read(DOCS_READ_SCOPES),
   listDocumentTabs: read(DOCS_READ_SCOPES),
   listComments: read(DRIVE_READ_SCOPES),

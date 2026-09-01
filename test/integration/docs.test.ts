@@ -1613,6 +1613,101 @@ describe('Docs tools', () => {
       const res = await callTool(ctx.client, 'findAndReplaceInDoc', {});
       assert.equal(res.isError, true);
     });
+
+    it('expectedCount mismatch aborts without writing', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'My Doc',
+          body: { content: [{ paragraph: { elements: [{ textRun: { content: 'Hello Hello World\n' } }] } }] },
+        },
+      }));
+      const before = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate').length;
+
+      const res = await callTool(ctx.client, 'findAndReplaceInDoc', {
+        documentId: 'doc-1', findText: 'Hello', replaceText: 'Hi', expectedCount: 1,
+      });
+
+      assert.equal(res.isError, true);
+      assert.match(res.content[0].text!, /Aborted without writing.*expectedCount=1.*found 2/s);
+      assert.equal(
+        ctx.mocks.docs.tracker.getCalls('documents.batchUpdate').length, before,
+        'a failed guard must not reach batchUpdate',
+      );
+    });
+
+    it('expectedCount overshoot names substring collisions as the likely cause', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'My Doc',
+          body: { content: [{ paragraph: { elements: [{ textRun: { content: 'cat catalog cathode\n' } }] } }] },
+        },
+      }));
+      const res = await callTool(ctx.client, 'findAndReplaceInDoc', {
+        documentId: 'doc-1', findText: 'cat', replaceText: 'dog', expectedCount: 1,
+      });
+
+      assert.equal(res.isError, true);
+      assert.match(res.content[0].text!, /substring collisions/);
+      assert.match(res.content[0].text!, /longer, unique findText/);
+    });
+
+    it('warns when fewer occurrences change than were verified pre-write', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'My Doc',
+          body: { content: [{ paragraph: { elements: [{ textRun: { content: 'Hello Hello\n' } }] } }] },
+        },
+      }));
+      // The guard sees 2, but the document is edited between the count and the
+      // write, so the API reports only 1 changed.
+      ctx.mocks.docs.service.documents.batchUpdate._setImpl(async () => ({
+        data: { replies: [{ replaceAllText: { occurrencesChanged: 1 } }] },
+      }));
+
+      const res = await callTool(ctx.client, 'findAndReplaceInDoc', {
+        documentId: 'doc-1', findText: 'Hello', replaceText: 'Hi', expectedCount: 2,
+      });
+
+      assert.equal(res.isError, false);
+      assert.match(res.content[0].text!, /WARNING: 2 matches were verified/);
+      assert.match(res.content[0].text!, /edited concurrently/);
+    });
+
+    it('a newline-bearing replaceText compiles to delete+insert, not replaceAllText', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'My Doc', revisionId: 'rev-9',
+          body: {
+            content: [{
+              paragraph: { elements: [{ startIndex: 1, textRun: { content: 'Hello World\n' } }] },
+            }],
+          },
+        },
+      }));
+
+      const res = await callTool(ctx.client, 'findAndReplaceInDoc', {
+        documentId: 'doc-1', findText: 'World', replaceText: 'line one\nline two',
+      });
+
+      assert.equal(res.isError, false);
+      assert.match(res.content[0].text!, /Replaced 1 occurrence/);
+
+      const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
+      const requests = calls[calls.length - 1]?.args?.[0]?.requestBody?.requests;
+      assert.equal(requests.length, 2, 'one deleteContentRange plus one insertText');
+      assert.equal(requests[0].replaceAllText, undefined, 'replaceAllText mangles newlines');
+      assert.deepEqual(requests[0].deleteContentRange.range, { startIndex: 7, endIndex: 12 });
+      assert.equal(requests[1].insertText.location.index, 7);
+      assert.equal(requests[1].insertText.text, 'line one\nline two');
+    });
+
+    it('refuses a multi-line findText rather than silently mismatching', async () => {
+      const res = await callTool(ctx.client, 'findAndReplaceInDoc', {
+        documentId: 'doc-1', findText: 'a\nb', replaceText: 'x\ny',
+      });
+      assert.equal(res.isError, true);
+      assert.match(res.content[0].text!, /Multi-line findText is not supported/);
+    });
   });
 
   // --- listComments ---

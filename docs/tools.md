@@ -235,15 +235,14 @@ This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `documentId`: Document ID
 
 #### Surgical Editing
-- **insertText** - Insert text at a specific index (doesn't replace entire doc)
+- **insertText** - Insert text at an index or relative to found text (doesn't replace entire doc)
   - `documentId`: Document ID
   - `text`: Text to insert
-  - `index`: Position to insert at (1-based)
+  - Target (use one): `index` (1-based position) OR `textToFind`+`matchInstance` with `position` (`before`/`after`, default `after`; Google Docs only)
 
-- **deleteRange** - Delete content between start and end indices
+- **deleteRange** - Delete an index range or found text
   - `documentId`: Document ID
-  - `startIndex`: Start index (1-based, inclusive)
-  - `endIndex`: End index (exclusive)
+  - Target (use one): `startIndex` (1-based, inclusive) + `endIndex` (exclusive) OR `textToFind`+`matchInstance` (Google Docs only)
 
 #### Text and Paragraph Styling
 - **applyTextStyle** - Apply text formatting (bold, italic, color, etc.) to a range or found text

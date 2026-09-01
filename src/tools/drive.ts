@@ -1600,6 +1600,45 @@ export async function handleTool(
       });
 
       const principal = response.data.emailAddress || response.data.domain || data.emailAddress || data.domain || data.type;
+      // Drive can apply a different role than requested (e.g. upsert semantics
+      // when the principal already holds a permission on the file). Never
+      // report the requested role as fact — verify what came back, correct it
+      // once, and fail loudly if the mismatch survives.
+      if (response.data.role && response.data.role !== data.role) {
+        try {
+          const corrected = await ctx.getDrive().permissions.update({
+            fileId: data.fileId,
+            permissionId: response.data.id!,
+            requestBody: { role: data.role },
+            fields: 'id,role',
+            supportsAllDrives: true,
+          });
+          if (corrected.data.role === data.role) {
+            return {
+              content: [{
+                type: 'text',
+                text: `Permission added for ${principal}: Drive initially applied '${response.data.role}' instead of the requested '${data.role}' (likely an existing-permission upsert); corrected to '${corrected.data.role}'. Permission id: ${response.data.id}`,
+              }],
+              isError: false,
+            };
+          }
+          return {
+            content: [{
+              type: 'text',
+              text: `Permission MISMATCH for ${principal}: requested '${data.role}' but Drive holds '${corrected.data.role}' even after a corrective update. Verify with listPermissions and fix manually. Permission id: ${response.data.id}`,
+            }],
+            isError: true,
+          };
+        } catch (e: unknown) {
+          return {
+            content: [{
+              type: 'text',
+              text: `Permission MISMATCH for ${principal}: requested '${data.role}' but Drive applied '${response.data.role}', and the corrective update failed: ${e instanceof Error ? e.message : String(e)}. Verify with listPermissions.`,
+            }],
+            isError: true,
+          };
+        }
+      }
       return { content: [{ type: 'text', text: `Permission added: ${response.data.id} (${response.data.role}) for ${principal}` }], isError: false };
     }
 
@@ -1616,6 +1655,15 @@ export async function handleTool(
         supportsAllDrives: true,
       });
 
+      if (response.data.role !== data.role) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Permission update MISMATCH: requested '${data.role}' for ${response.data.id} but Drive reports '${response.data.role}'. Verify with listPermissions.`,
+          }],
+          isError: true,
+        };
+      }
       return { content: [{ type: 'text', text: `Permission updated: ${response.data.id} => ${response.data.role}` }], isError: false };
     }
 

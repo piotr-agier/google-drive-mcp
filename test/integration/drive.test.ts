@@ -537,6 +537,64 @@ describe('Drive tools', () => {
       assert.equal('emailAddress' in body, false);
     });
 
+    it('addPermission verifies the applied role: upsert mismatch is corrected once and reported honestly', async () => {
+      // Drive's upsert semantics: the principal already holds writer, so a
+      // reader request comes back role=writer.
+      ctx.mocks.drive.service.permissions.create._setImpl(async () => ({
+        data: { id: 'perm-9', role: 'writer', emailAddress: 'user@example.com', type: 'user' },
+      }));
+      ctx.mocks.drive.service.permissions.update._setImpl(async () => ({
+        data: { id: 'perm-9', role: 'reader' },
+      }));
+      try {
+        const res = await callTool(ctx.client, 'addPermission', {
+          fileId: 'file-1', emailAddress: 'user@example.com', role: 'reader', type: 'user',
+        });
+        assert.equal(res.isError, false);
+        assert.ok(res.content[0].text!.includes("initially applied 'writer'"), res.content[0].text);
+        assert.ok(res.content[0].text!.includes("corrected to 'reader'"));
+        const updateCalls = ctx.mocks.drive.tracker.getCalls('permissions.update');
+        assert.equal(updateCalls[updateCalls.length - 1].args[0].requestBody.role, 'reader');
+      } finally {
+        ctx.mocks.drive.service.permissions.create._resetImpl();
+        ctx.mocks.drive.service.permissions.update._resetImpl();
+      }
+    });
+
+    it('addPermission reports a surviving mismatch as an error, never as success', async () => {
+      ctx.mocks.drive.service.permissions.create._setImpl(async () => ({
+        data: { id: 'perm-9', role: 'writer', emailAddress: 'user@example.com', type: 'user' },
+      }));
+      ctx.mocks.drive.service.permissions.update._setImpl(async () => ({
+        data: { id: 'perm-9', role: 'writer' },
+      }));
+      try {
+        const res = await callTool(ctx.client, 'addPermission', {
+          fileId: 'file-1', emailAddress: 'user@example.com', role: 'reader', type: 'user',
+        });
+        assert.equal(res.isError, true);
+        assert.ok(res.content[0].text!.includes('MISMATCH'));
+      } finally {
+        ctx.mocks.drive.service.permissions.create._resetImpl();
+        ctx.mocks.drive.service.permissions.update._resetImpl();
+      }
+    });
+
+    it('updatePermission verifies the response role', async () => {
+      ctx.mocks.drive.service.permissions.update._setImpl(async () => ({
+        data: { id: 'perm-1', role: 'writer' },
+      }));
+      try {
+        const res = await callTool(ctx.client, 'updatePermission', {
+          fileId: 'file-1', permissionId: 'perm-1', role: 'commenter',
+        });
+        assert.equal(res.isError, true);
+        assert.ok(res.content[0].text!.includes('MISMATCH'));
+      } finally {
+        ctx.mocks.drive.service.permissions.update._resetImpl();
+      }
+    });
+
     it('addPermission type "user" without emailAddress is rejected before any API call', async () => {
       const res = await callTool(ctx.client, 'addPermission', {
         fileId: 'file-1', type: 'user', role: 'reader',

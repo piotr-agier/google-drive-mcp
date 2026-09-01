@@ -901,6 +901,177 @@ function buildUpdateParagraphStyleRequest(
   };
 }
 
+// ---------------------------------------------------------------------------
+// styleDocTable – compile table styling params into updateTableCellStyle /
+// updateTableColumnProperties / updateTableRowStyle requests (one atomic batch)
+// ---------------------------------------------------------------------------
+
+function borderFieldName(edge: string): string {
+  return `border${edge.charAt(0).toUpperCase()}${edge.slice(1)}`;
+}
+
+// Optimistic lock: thread WriteControl.requiredRevisionId into a batchUpdate
+// body so the write fails cleanly if the document changed since the caller
+// read the indices it targets.
+function writeControlFor(ifRevisionId?: string): { writeControl?: { requiredRevisionId: string } } {
+  return ifRevisionId ? { writeControl: { requiredRevisionId: ifRevisionId } } : {};
+}
+
+const TABLE_BORDER_EDGES = ['top', 'bottom', 'left', 'right'] as const;
+type TableBorderEdge = (typeof TABLE_BORDER_EDGES)[number];
+
+export interface TableCellBorderInput {
+  color?: string;
+  width?: number;
+  dashStyle?: 'SOLID' | 'DOT' | 'DASH';
+}
+
+function buildTableCellBorder(input: TableCellBorderInput): any {
+  const rgbColor = hexToRgbColor(input.color ?? '#000000');
+  if (!rgbColor) throw new Error(`Invalid border hex color: ${input.color}`);
+  return {
+    color: { color: { rgbColor } },
+    width: { magnitude: input.width ?? 1, unit: 'PT' },
+    dashStyle: input.dashStyle ?? 'SOLID',
+  };
+}
+
+export interface StyleDocTableArgs {
+  tableStartIndex: number;
+  tabId?: string;
+  rowIndex?: number;
+  columnIndex?: number;
+  rowSpan?: number;
+  columnSpan?: number;
+  backgroundColor?: string;
+  removeBackground?: boolean;
+  contentAlignment?: 'TOP' | 'MIDDLE' | 'BOTTOM';
+  padding?: number;
+  borderTop?: TableCellBorderInput;
+  borderBottom?: TableCellBorderInput;
+  borderLeft?: TableCellBorderInput;
+  borderRight?: TableCellBorderInput;
+  removeBorders?: Array<TableBorderEdge | 'all'>;
+  columnIndices?: number[];
+  columnWidth?: number;
+  rowIndices?: number[];
+  minRowHeight?: number;
+}
+
+export function buildStyleDocTableRequests(a: StyleDocTableArgs): { requests: any[]; applied: string[] } {
+  const requests: any[] = [];
+  const applied: string[] = [];
+  const tableStartLocation = withTab({ index: a.tableStartIndex }, a.tabId);
+
+  // ---- updateTableCellStyle -----------------------------------------------
+  const tableCellStyle: any = {};
+  const cellFields: string[] = [];
+
+  if (a.removeBackground) {
+    if (a.backgroundColor !== undefined) throw new Error('Cannot both set and remove backgroundColor in one call');
+    cellFields.push('backgroundColor');
+    applied.push('background cleared');
+  } else if (a.backgroundColor !== undefined) {
+    const rgbColor = hexToRgbColor(a.backgroundColor);
+    if (!rgbColor) throw new Error(`Invalid background hex color: ${a.backgroundColor}`);
+    tableCellStyle.backgroundColor = { color: { rgbColor } };
+    cellFields.push('backgroundColor');
+    applied.push(`background ${a.backgroundColor}`);
+  }
+
+  if (a.contentAlignment !== undefined) {
+    tableCellStyle.contentAlignment = a.contentAlignment;
+    cellFields.push('contentAlignment');
+    applied.push(`contentAlignment ${a.contentAlignment}`);
+  }
+
+  if (a.padding !== undefined) {
+    for (const edge of ['paddingTop', 'paddingBottom', 'paddingLeft', 'paddingRight']) {
+      tableCellStyle[edge] = { magnitude: a.padding, unit: 'PT' };
+      cellFields.push(edge);
+    }
+    applied.push(`padding ${a.padding}pt`);
+  }
+
+  // Unlike paragraph borders, a cleared table border is expressed as an
+  // explicit width-0 border (the Docs UI's "0 pt" unbox), not a FieldMask
+  // reset — cells always carry a border object.
+  const removals = new Set<TableBorderEdge>(
+    (a.removeBorders ?? []).flatMap((edge) => (edge === 'all' ? TABLE_BORDER_EDGES : [edge]))
+  );
+  for (const edge of TABLE_BORDER_EDGES) {
+    const field = borderFieldName(edge);
+    const input = a[field as 'borderTop'];
+    if (removals.has(edge)) {
+      if (input !== undefined) throw new Error(`Cannot both set and remove the ${edge} border in one call`);
+      tableCellStyle[field] = buildTableCellBorder({ width: 0 });
+      cellFields.push(field);
+    } else if (input !== undefined) {
+      tableCellStyle[field] = buildTableCellBorder(input);
+      cellFields.push(field);
+    }
+  }
+  if (removals.size > 0) applied.push(`borders cleared (${[...removals].join(', ')})`);
+  const setEdges = TABLE_BORDER_EDGES.filter((e) => a[borderFieldName(e) as 'borderTop'] !== undefined);
+  if (setEdges.length > 0) applied.push(`borders set (${setEdges.join(', ')})`);
+
+  if (cellFields.length > 0) {
+    const isSubset = a.rowIndex !== undefined || a.columnIndex !== undefined;
+    if (isSubset && (a.rowIndex === undefined || a.columnIndex === undefined)) {
+      throw new Error('Cell subset targeting needs both rowIndex and columnIndex (spans optional)');
+    }
+    const target = isSubset
+      ? {
+          tableRange: {
+            tableCellLocation: { tableStartLocation, rowIndex: a.rowIndex, columnIndex: a.columnIndex },
+            rowSpan: a.rowSpan ?? 1,
+            columnSpan: a.columnSpan ?? 1,
+          },
+        }
+      : { tableStartLocation };
+    requests.push({
+      updateTableCellStyle: { ...target, tableCellStyle, fields: cellFields.join(',') },
+    });
+  } else if (a.rowSpan !== undefined || a.columnSpan !== undefined || a.rowIndex !== undefined || a.columnIndex !== undefined) {
+    // Cell targeting scopes only cell styles; columns/rows target via
+    // columnIndices/rowIndices. Refuse rather than silently ignore.
+    throw new Error('rowIndex/columnIndex/rowSpan/columnSpan target cell styles only — pass a cell style param, or use columnIndices/rowIndices for column and row updates');
+  }
+
+  // ---- updateTableColumnProperties ----------------------------------------
+  if (a.columnWidth !== undefined) {
+    if (a.columnWidth < 5) throw new Error('columnWidth must be at least 5 points');
+    requests.push({
+      updateTableColumnProperties: {
+        tableStartLocation,
+        columnIndices: a.columnIndices ?? [],
+        tableColumnProperties: { widthType: 'FIXED_WIDTH', width: { magnitude: a.columnWidth, unit: 'PT' } },
+        fields: 'width,widthType',
+      },
+    });
+    applied.push(`column width ${a.columnWidth}pt (${a.columnIndices?.length ? `columns ${a.columnIndices.join(', ')}` : 'all columns'})`);
+  } else if (a.columnIndices !== undefined) {
+    throw new Error('columnIndices given without columnWidth');
+  }
+
+  // ---- updateTableRowStyle ------------------------------------------------
+  if (a.minRowHeight !== undefined) {
+    requests.push({
+      updateTableRowStyle: {
+        tableStartLocation,
+        rowIndices: a.rowIndices ?? [],
+        tableRowStyle: { minRowHeight: { magnitude: a.minRowHeight, unit: 'PT' } },
+        fields: 'minRowHeight',
+      },
+    });
+    applied.push(`min row height ${a.minRowHeight}pt (${a.rowIndices?.length ? `rows ${a.rowIndices.join(', ')}` : 'all rows'})`);
+  } else if (a.rowIndices !== undefined) {
+    throw new Error('rowIndices given without minRowHeight');
+  }
+
+  return { requests, applied };
+}
+
 // Insert an inline image from a URL
 async function insertInlineImageHelper(
   ctx: ToolContext,
@@ -1738,6 +1909,36 @@ const EditTableCellSchema = z.object({
   tabId: z.string().optional()
 });
 
+const TableCellBorderParamSchema = z.object({
+  color: z.string().optional(),
+  width: z.number().min(0).optional(),
+  dashStyle: z.enum(['SOLID', 'DOT', 'DASH']).optional(),
+});
+
+const StyleDocTableSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  tableStartIndex: z.number().int().min(1, "Table start index is required"),
+  rowIndex: z.number().int().min(0).optional(),
+  columnIndex: z.number().int().min(0).optional(),
+  rowSpan: z.number().int().min(1).optional(),
+  columnSpan: z.number().int().min(1).optional(),
+  backgroundColor: z.string().optional(),
+  removeBackground: z.boolean().optional(),
+  contentAlignment: z.enum(['TOP', 'MIDDLE', 'BOTTOM']).optional(),
+  padding: z.number().min(0).optional(),
+  borderTop: TableCellBorderParamSchema.optional(),
+  borderBottom: TableCellBorderParamSchema.optional(),
+  borderLeft: TableCellBorderParamSchema.optional(),
+  borderRight: TableCellBorderParamSchema.optional(),
+  removeBorders: z.array(z.enum(['top', 'bottom', 'left', 'right', 'all'])).optional(),
+  columnIndices: z.array(z.number().int().min(0)).optional(),
+  columnWidth: z.number().optional(),
+  rowIndices: z.array(z.number().int().min(0)).optional(),
+  minRowHeight: z.number().min(0).optional(),
+  tabId: z.string().optional(),
+  ifRevisionId: z.string().optional(),
+});
+
 const InsertImageFromUrlSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
   imageUrl: z.string().url("Must be a valid URL"),
@@ -1811,6 +2012,20 @@ const CreateFootnoteSchema = z.object({
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
+
+// Table cell borders have no per-border padding (cell padding is separate).
+function tableCellBorderProperty(edgeDescription: string) {
+  return {
+    type: "object",
+    description: `${edgeDescription} Omitted subfields default to a rendering border: color #000000, width 1pt, SOLID.`,
+    properties: {
+      color: { type: "string", description: "Hex color (e.g., #FF0000; default #000000)" },
+      width: { type: "number", description: "Line width in points (default: 1; 0 = invisible)" },
+      dashStyle: { type: "string", enum: ["SOLID", "DOT", "DASH"], description: "Line style (default: SOLID)" }
+    }
+  };
+}
+
 
 export const toolDefinitions: ToolDefinition[] = [
   {
@@ -2192,6 +2407,37 @@ export const toolDefinitions: ToolDefinition[] = [
         tabId: { type: "string", description: "Optional. Tab ID containing the table (from listDocumentTabs). If omitted, operates on the first/default tab." }
       },
       required: ["documentId", "tableStartIndex", "rowIndex", "columnIndex"]
+    }
+  },
+  {
+    name: "styleDocTable",
+    description: "Style a Docs table in one atomic call: cell borders/background/padding/content alignment (whole table via tableStartLocation, or a cell range subset), fixed column widths, and minimum row heights. Get the real tableStartIndex from documentStyleSummary or describeRange — never compute it from text offsets. removeBorders: [\"all\"] unboxes the table (width-0 borders). The API resolves shared edges by applying border updates right-to-left then bottom-to-top.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentId: { type: "string", description: "The document ID" },
+        tableStartIndex: { type: "number", description: "Start index of the TABLE element (from documentStyleSummary or describeRange)" },
+        rowIndex: { type: "number", description: "Optional cell-subset targeting: first row (0-based); needs columnIndex too" },
+        columnIndex: { type: "number", description: "Optional cell-subset targeting: first column (0-based); needs rowIndex too" },
+        rowSpan: { type: "number", description: "Rows in the targeted cell range (default: 1)" },
+        columnSpan: { type: "number", description: "Columns in the targeted cell range (default: 1)" },
+        backgroundColor: { type: "string", description: "Cell background color as hex (e.g., #F1F3F4)" },
+        removeBackground: { type: "boolean", description: "Clear the cell background color" },
+        contentAlignment: { type: "string", enum: ["TOP", "MIDDLE", "BOTTOM"], description: "Vertical content alignment within cells" },
+        padding: { type: "number", description: "Cell padding on all four edges, in points" },
+        borderTop: tableCellBorderProperty("Cell top border."),
+        borderBottom: tableCellBorderProperty("Cell bottom border."),
+        borderLeft: tableCellBorderProperty("Cell left border."),
+        borderRight: tableCellBorderProperty("Cell right border."),
+        removeBorders: { type: "array", items: { type: "string", enum: ["top", "bottom", "left", "right", "all"] }, description: "Border edges to clear via width-0 borders. [\"all\"] over the whole table = unbox it in one call" },
+        columnIndices: { type: "array", items: { type: "number" }, description: "Columns (0-based) for columnWidth; omit for all columns" },
+        columnWidth: { type: "number", description: "Fixed column width in points (minimum 5)" },
+        rowIndices: { type: "array", items: { type: "number" }, description: "Rows (0-based) for minRowHeight; omit for all rows" },
+        minRowHeight: { type: "number", description: "Minimum row height in points" },
+        tabId: { type: "string", description: "Optional. Tab ID containing the table (from listDocumentTabs). If omitted, operates on the first/default tab." },
+        ifRevisionId: { type: "string", description: "Optional optimistic lock: fail if the document changed since this revisionId was read" }
+      },
+      required: ["documentId", "tableStartIndex"]
     }
   },
   {
@@ -3863,6 +4109,38 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
 
       return {
         content: [{ type: "text", text: `Successfully edited cell at row ${a.rowIndex}, column ${a.columnIndex}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
+        isError: false
+      };
+    }
+
+    case "styleDocTable": {
+      const validation = StyleDocTableSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const a = validation.data;
+
+      let built: { requests: any[]; applied: string[] };
+      try {
+        built = buildStyleDocTableRequests(a);
+      } catch (err) {
+        return errorResponse(err instanceof Error ? err.message : String(err));
+      }
+      if (built.requests.length === 0) {
+        return errorResponse("No table style options provided");
+      }
+
+      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+      await docs.documents.batchUpdate({
+        documentId: a.documentId,
+        requestBody: {
+          requests: built.requests,
+          ...writeControlFor(a.ifRevisionId),
+        }
+      });
+
+      return {
+        content: [{ type: "text", text: `Styled table at index ${a.tableStartIndex}${a.tabId ? ` in tab ${a.tabId}` : ''}: ${built.applied.join('; ')}` }],
         isError: false
       };
     }

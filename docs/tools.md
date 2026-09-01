@@ -1,6 +1,6 @@
 # Tool reference
 
-This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
+This server exposes 121 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
 
 ## Available Tools
 
@@ -303,6 +303,19 @@ This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `textContent`: New text content (optional)
   - `bold`, `italic`, `fontSize`, `alignment`: Cell styling (optional)
 
+- **styleDocTable** - Style a Docs table in one atomic call (cell borders, background, padding, content alignment, column widths, row heights)
+  - `documentId`: Document ID
+  - `tableStartIndex`: Start index of the TABLE element — get it from `documentStyleSummary` or `describeRange`, never compute it from text offsets
+  - Cell subset targeting (optional; default whole table): `rowIndex`+`columnIndex` (0-based) with `rowSpan`/`columnSpan` (default 1)
+  - `backgroundColor`: Cell background as hex; `removeBackground`: clear it (optional)
+  - `contentAlignment`: `TOP`, `MIDDLE`, or `BOTTOM` (optional)
+  - `padding`: Cell padding on all four edges, in points (optional)
+  - `borderTop`, `borderBottom`, `borderLeft`, `borderRight`: Cell borders, each `{ color?, width?, dashStyle? }` (optional)
+  - `removeBorders`: Edges to clear via width-0 borders (`top`, `bottom`, `left`, `right`, or `all`) — `["all"]` unboxes the table in one call (optional)
+  - `columnWidth`: Fixed column width in points (min 5), scoped by `columnIndices` (0-based; omit for all columns) (optional)
+  - `minRowHeight`: Minimum row height in points, scoped by `rowIndices` (0-based; omit for all rows) (optional)
+  - `ifRevisionId`: Optimistic lock — fail if the document changed since this revision (optional)
+
 - **insertImageFromUrl** - Insert an inline image from a publicly accessible URL
   - `documentId`: Document ID
   - `imageUrl`: Publicly accessible URL to the image
@@ -589,6 +602,25 @@ This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `presentationId`, `pageObjectId`: Presentation and slide IDs
   - `imageUrl`: Public image URL
   - `x`, `y`, `width`, `height`: Position and size in EMU (optional)
+
+- **setSlideVisibility** - Show or hide (skip) slides in one atomic call
+  - `presentationId`: Presentation ID
+  - `slideObjectIds`: Slide object IDs to change
+  - `skipped`: `true` = hide (skip), `false` = show
+
+- **replaceSlideImage** - Replace an existing image in place, preserving layering, position, size, and crop
+  - `presentationId`, `imageObjectId`: Presentation and image element IDs
+  - Source (use one): `imageUrl` (public URL) OR `localImagePath` (uploaded to Drive briefly, then cleaned up)
+  - `replaceMethod`: `CENTER_INSIDE` (default) or `CENTER_CROP` (optional)
+
+- **setElementZOrder** - Change element stacking order (`BRING_TO_FRONT`, `BRING_FORWARD`, `SEND_BACKWARD`, `SEND_TO_BACK`)
+  - `presentationId`: Presentation ID
+  - `pageElementObjectIds`: Element object IDs (all on the same page)
+  - `operation`: Z-order operation
+
+- **setElementText** - Replace the entire text of one shape/text box by objectId (element-scoped; cannot hit other slides, masters, or layouts)
+  - `presentationId`, `objectId`: Presentation and element IDs
+  - `text`: New text content (empty string clears the element)
 
 - **insertSlidesLocalImage** - Upload a local image to Drive and insert it into a slide
   - `presentationId`, `pageObjectId`: Presentation and slide IDs

@@ -7,6 +7,7 @@ import { escapeDriveQuery, isTextMime, ALL_DRIVES_LIST_PARAMS, DRIVE_ORDER_BY_VA
 import { downloadTextContent, writeTextContent } from './text-content.js';
 import { uploadImageToDrive } from '../utils/driveImageUpload.js';
 import { withRetry } from '../utils/retry.js';
+import { describeRangeStyles, paragraphMetaBits, summarizeDocumentStyles } from './styleProjection.js';
 
 // ---------------------------------------------------------------------------
 // Helper functions
@@ -1064,7 +1065,7 @@ export interface DocxContextResult {
  * Build formatted content with indices from a Google Doc document data object.
  * Returns the formatted string and total character length.
  */
-function buildDocFormattedContent(
+export function buildDocFormattedContent(
   docData: any,
   withFormatting: boolean
 ): { formattedContent: string; totalLength: number } {
@@ -1076,6 +1077,9 @@ function buildDocFormattedContent(
     // rules) whose rendered text length is unrelated to their real doc span, so
     // the displayed edit range must use [startIndex, endIndex), not text length.
     atomic?: boolean;
+    // Paragraph-level style annotation: a one-line rendering of the
+    // paragraph's non-default styles over its real span; carries no content.
+    paraMeta?: boolean;
     fontFamily?: string;
     fontSize?: number;
     bold?: boolean;
@@ -1107,6 +1111,17 @@ function buildDocFormattedContent(
     function processContent(content: any[]) {
       for (const element of content) {
         if (element.paragraph?.elements) {
+          if (withFormatting && element.startIndex != null && element.endIndex != null) {
+            const bits = paragraphMetaBits(element.paragraph);
+            if (bits.length) {
+              segments.push({
+                text: `\u00b6 ${bits.join(', ')}`,
+                startIndex: element.startIndex,
+                endIndex: element.endIndex,
+                paraMeta: true,
+              });
+            }
+          }
           for (const textElement of element.paragraph.elements) {
             if (textElement.textRun?.content && textElement.startIndex != null && textElement.endIndex != null) {
               const seg: Segment = {
@@ -1174,6 +1189,11 @@ function buildDocFormattedContent(
     for (const segment of segments) {
       const hasMeta = withFormatting && hasFormattingInfo(segment);
       const meta = hasMeta ? buildMetaLine(segment) : null;
+      // Paragraph style annotations: one line over the paragraph's real span.
+      if (segment.paraMeta) {
+        result += `[${segment.startIndex}-${segment.endIndex}] ${segment.text}\n`;
+        continue;
+      }
       // Atomic inline replacements occupy exactly [startIndex, endIndex) in the
       // doc regardless of how long their placeholder text is. Emit that real
       // range on one line so index-based edits target the object, not the text
@@ -1775,6 +1795,21 @@ const FindAndReplaceInDocSchema = z.object({
   tabId: z.string().optional(),
 });
 
+
+const DocumentStyleSummarySchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+});
+
+const DescribeRangeSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  startIndex: z.number().int().min(1).optional(),
+  endIndex: z.number().int().min(1).optional(),
+  textToFind: z.string().min(1).optional(),
+  matchInstance: z.number().int().min(1).optional().default(1),
+}).refine((d) => d.startIndex != null || d.textToFind != null, {
+  message: "Provide startIndex (optionally endIndex) or textToFind",
+});
+
 const AddDocumentTabSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
   title: z.string().min(1, "Tab title is required"),
@@ -1813,6 +1848,32 @@ const CreateFootnoteSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const toolDefinitions: ToolDefinition[] = [
+  {
+    name: "documentStyleSummary",
+    description: "Compact style inventory of a whole document in a few hundred tokens: fonts with their size ladders, named-style counts, text colors, bordered/shaded paragraph locations, table inventory with real index ranges, and the heading outline. The cheap first read before any formatting work — replaces pulling the full document JSON to answer style questions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentId: { type: "string", description: "The document ID" }
+      },
+      required: ["documentId"]
+    }
+  },
+  {
+    name: "describeRange",
+    description: "Style probe for one spot: paragraph styles (named style, alignment, borders, shading, indents incl. indentFirstLine, spacing, bullets) and text runs (font, size, bold/italic, colors, links) overlapping a range — targeted by startIndex(+endIndex) or textToFind(+matchInstance). Returns real doc indices for every paragraph and run, plus the revisionId for optimistic locking. A few hundred tokens instead of a full JSON read.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentId: { type: "string", description: "The document ID" },
+        startIndex: { type: "number", description: "Start index (1-based; or use textToFind)" },
+        endIndex: { type: "number", description: "End index (exclusive; defaults to startIndex+1)" },
+        textToFind: { type: "string", description: "Describe the styling at this exact text (case-sensitive)" },
+        matchInstance: { type: "number", description: "Which occurrence of textToFind (1-based, default 1)" }
+      },
+      required: ["documentId"]
+    }
+  },
   {
     name: "createGoogleDoc",
     description: "Create a new Google Doc",
@@ -2324,6 +2385,48 @@ export const toolDefinitions: ToolDefinition[] = [
 
 export async function handleTool(toolName: string, args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult | null> {
   switch (toolName) {
+    case "documentStyleSummary": {
+      const validation = DocumentStyleSummarySchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+      const doc = await docs.documents.get({ documentId: a.documentId, includeTabsContent: true });
+      const summary = summarizeDocumentStyles(doc.data);
+      return {
+        content: [{ type: 'text', text: `Style summary for "${doc.data.title}" (revisionId: ${doc.data.revisionId}):\n${summary}` }],
+        isError: false,
+      };
+    }
+
+    case "describeRange": {
+      const validation = DescribeRangeSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+      const doc = await docs.documents.get({ documentId: a.documentId, includeTabsContent: true });
+      let startIndex: number;
+      let endIndex: number;
+      if (a.textToFind) {
+        const range = await findTextRange(ctx, a.documentId, a.textToFind, a.matchInstance);
+        if (range && 'error' in range) {
+          return errorResponse(range.error);
+        }
+        if (!range) {
+          return errorResponse(`textToFind "${a.textToFind}" not found in document.`);
+        }
+        startIndex = range.startIndex;
+        endIndex = range.endIndex;
+      } else {
+        startIndex = a.startIndex!;
+        endIndex = a.endIndex ?? startIndex + 1;
+      }
+      const described = describeRangeStyles(doc.data, startIndex, endIndex);
+      return {
+        content: [{ type: 'text', text: `revisionId: ${doc.data.revisionId}\ntarget range: [${startIndex}-${endIndex})\n${described}` }],
+        isError: false,
+      };
+    }
+
 
     // =========================================================================
     // CREATE / UPDATE GOOGLE DOC

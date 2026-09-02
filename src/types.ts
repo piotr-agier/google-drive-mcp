@@ -40,7 +40,9 @@ export interface ToolContext {
 
   /** Stable user identity for the currently acting principal. Team mode sets
    * this to the bearer's Google `sub`. Single-user mode leaves it undefined
-   * (one local account, no per-user ID). Intended for log attribution. */
+   * (one local account, no per-user ID). Intended for log attribution; the
+   * human-readable email is stamped onto payloads by `ctx.log` itself rather
+   * than stored here. */
   userId?: string;
 
   // Multi-account surface (Phase 1: present on context but not yet consumed by tool

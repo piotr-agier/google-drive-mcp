@@ -89,14 +89,20 @@ function log(message: string, data?: any) {
 }
 
 /** ctx.log for team mode — always attributes the log to the acting user by
- * merging `userId` into the data payload. Non-plain-object payloads (Error,
- * array, string) are wrapped so the userId is never lost. */
-function logWithUser(userId: string): (message: string, data?: any) => void {
+ * merging `userId` (the Google sub) and, when known, `email` into the data
+ * payload. Non-plain-object payloads (array, string, number) are wrapped so
+ * the attribution is never lost. Errors are rendered via describeErrorForLog:
+ * JSON.stringify(new Error(...)) is `{}` (message lost), and a raw gaxios
+ * error's enumerable request config can carry token material. */
+function logWithUser(userId: string, email?: string): (message: string, data?: any) => void {
+  const who = email ? { userId, email } : { userId };
   return (message: string, data?: any) => {
-    if (data && typeof data === 'object' && !Array.isArray(data) && !(data instanceof Error)) {
-      log(message, { ...data, userId });
+    if (data instanceof Error) {
+      log(message, { error: describeErrorForLog(data), ...who });
+    } else if (data && typeof data === 'object' && !Array.isArray(data)) {
+      log(message, { ...data, ...who });
     } else {
-      log(message, { data: data === undefined ? undefined : data, userId });
+      log(message, { data, ...who });
     }
   };
 }
@@ -559,20 +565,18 @@ async function buildToolContext(
     noAccount();
   }
 
-  const ctxLogger = account ? logWithUser(account.alias) : log;
   return {
     authClient,
     google,
     getDrive: () => drive ?? noAccount(),
     getCalendar: () => calendar ?? noAccount(),
-    log: ctxLogger,
+    log,
     resolvePath: (pathStr) => (drive ? resolvePath(pathStr, drive) : noAccount()),
     resolveFolderId: (input) => (drive ? resolveFolderId(input, drive) : noAccount()),
     checkFileExists: (name, parentFolderId) =>
       drive ? checkFileExists(name, parentFolderId, drive) : noAccount(),
     validateTextFileExtension,
     runtimeConfig,
-    userId: account?.alias,
 
     // Multi-account surface
     sessionId,
@@ -615,7 +619,9 @@ async function handleTeamToolCall(
 ): Promise<ToolResult> {
   const runtime = teamRuntime!;
   const sub = extra?.authInfo?.extra?.sub;
-  log('Handling tool request (team)', { tool: toolName, sub });
+  const rawEmail = extra?.authInfo?.extra?.email;
+  const email = typeof rawEmail === 'string' ? rawEmail : undefined;
+  log('Handling tool request (team)', { tool: toolName, sub, email });
   try {
     if (typeof sub !== 'string' || sub.length === 0) {
       // requireBearerAuth guarantees an identity on every /mcp request;
@@ -673,14 +679,14 @@ async function handleTeamToolCall(
     }
 
     const sessionId = extra?.sessionId ?? STDIO_SESSION_ID;
-    const ctx = await buildTeamToolContext(sessionId, sub);
+    const ctx = await buildTeamToolContext(sessionId, sub, email);
     for (const mod of domainModules) {
       const result = await mod.handleTool(toolName, rawArgs, ctx);
       if (result !== null) return result;
     }
     return errorResponse('Tool not found');
   } catch (error) {
-    log('Error in team tool request handler', { error: (error as Error).message });
+    log('Error in team tool request handler', { error: (error as Error).message, sub, email });
     return errorResponse((error as Error).message);
   }
 }
@@ -690,7 +696,11 @@ async function handleTeamToolCall(
  * per-sub TeamClientFactory, and the multi-account surface is stubbed to fail
  * loudly — in team mode there is exactly one identity per request.
  */
-async function buildTeamToolContext(sessionId: string, sub: string): Promise<ToolContext> {
+async function buildTeamToolContext(
+  sessionId: string,
+  sub: string,
+  email?: string,
+): Promise<ToolContext> {
   const runtime = teamRuntime!;
   const drive = await runtime.clientFactory.getDrive(sub);
   const calendar = await runtime.clientFactory.getCalendar(sub);
@@ -705,7 +715,7 @@ async function buildTeamToolContext(sessionId: string, sub: string): Promise<Too
     google,
     getDrive: () => drive,
     getCalendar: () => calendar,
-    log: logWithUser(sub),
+    log: logWithUser(sub, email),
     resolvePath: (pathStr) => resolvePath(pathStr, drive),
     resolveFolderId: (input) => resolveFolderId(input, drive),
     checkFileExists: (name, parentFolderId) => checkFileExists(name, parentFolderId, drive),
@@ -1266,6 +1276,9 @@ interface HttpSession {
   /** Team mode: the Google sub the session was initialized by. Every later
    * request must present a bearer for the same user (session hijack guard). */
   sub?: string;
+  /** Team mode: that user's email at session creation. Log attribution only —
+   * authorization always binds to `sub`. */
+  email?: string;
 }
 
 /**
@@ -1341,7 +1354,10 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
     sessionTimers.set(sid, setTimeout(async () => {
       const session = sessions.get(sid);
       if (session) {
-        log(`Session idle timeout: ${sid}`, session.sub ? { sub: session.sub } : undefined);
+        log(
+          `Session idle timeout: ${sid}`,
+          session.sub ? { sub: session.sub, email: session.email } : undefined,
+        );
         await session.transport.close();
         await session.server.close();
         sessions.delete(sid);
@@ -1402,11 +1418,14 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
       transport.onclose = () => {
         const sid = transport.sessionId;
         if (sid) {
-          const closedSub = sessions.get(sid)?.sub;
+          const closed = sessions.get(sid);
           clearSessionTimer(sid);
           sessions.delete(sid);
           if (authSystem) authSystem.sessions.delete(sid);
-          log(`Session closed: ${sid}`, closedSub ? { sub: closedSub } : undefined);
+          log(
+            `Session closed: ${sid}`,
+            closed?.sub ? { sub: closed.sub, email: closed.email } : undefined,
+          );
         }
       };
 
@@ -1415,14 +1434,19 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
       const sid = transport.sessionId;
       if (sid) {
         const sessionSub = teamAuth ? (req.auth?.extra?.sub as string | undefined) : undefined;
+        const sessionEmail = teamAuth ? (req.auth?.extra?.email as string | undefined) : undefined;
         sessions.set(sid, {
           transport,
           server: sessionServer,
           sub: sessionSub,
+          email: sessionEmail,
         });
         resetSessionTimer(sid);
         if (authSystem) authSystem.sessions.getOrCreate(sid);
-        log(`New session created: ${sid}`, sessionSub ? { sub: sessionSub } : undefined);
+        log(
+          `New session created: ${sid}`,
+          sessionSub ? { sub: sessionSub, email: sessionEmail } : undefined,
+        );
       }
     } catch (error) {
       log('Error handling POST /mcp', { error: (error as Error).message });

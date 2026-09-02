@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.7.0](https://github.com/piotr-agier/google-drive-mcp/compare/v2.6.0...v2.7.0) (2026-09-02)
+
+Makes team-mode logs **attributable to a person**. Every team-mode log line — dispatch, session lifecycle, sign-in callback, and per-user tool logs — now carries the acting member's Google `sub` and email, so an audit trail can be read without joining opaque identifiers against the team store. Also hardens the per-user logger's error payloads against `JSON.stringify` mangling an `Error` into `{}` and against serializing a gaxios error's raw request config. Additive — no tool, parameter, or configuration changes, and single-user deployments log exactly as before.
+
 ### Features
 
 - **team:** log lines now name the acting user. Team-mode dispatch, session lifecycle (created / idle timeout / closed), sign-in callback, and per-user tool logs carry the member's Google `sub` and email, so an audit can tell who did what without joining an opaque `sub` against the team store. Error payloads passed to the per-user logger are rendered through the existing redaction helper instead of `JSON.stringify` (which turns an `Error` into `{}` and would serialize a gaxios error's raw request config). Single-user logs are unchanged ([#177](https://github.com/piotr-agier/google-drive-mcp/pull/177))

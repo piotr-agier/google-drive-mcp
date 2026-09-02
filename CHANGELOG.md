@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Features
+
+- **team:** log lines now name the acting user. Team-mode dispatch, session lifecycle (created / idle timeout / closed), sign-in callback, and per-user tool logs carry the member's Google `sub` and email, so an audit can tell who did what without joining an opaque `sub` against the team store. Error payloads passed to the per-user logger are rendered through the existing redaction helper instead of `JSON.stringify` (which turns an `Error` into `{}` and would serialize a gaxios error's raw request config). Single-user logs are unchanged ([#177](https://github.com/piotr-agier/google-drive-mcp/pull/177))
+
 ## [2.6.0](https://github.com/piotr-agier/google-drive-mcp/compare/v2.5.0...v2.6.0) (2026-08-21)
 
 Makes Drive listings **ordered and self-describing**. `search` gains an `orderBy` and sorts most-recently-modified first by default instead of returning Drive's arbitrary order, `listGoogleDocs`/`listGoogleSheets` stop defaulting to *oldest* first, and all three name their effective ordering in the response — so a caller is told the list is sorted rather than left to work it out by comparing timestamps by eye. Also adds superscript/subscript (`baselineOffset`) to the Docs text-styling tools, on both the write and the formatted-read path. Additive — a new optional parameter on existing tools plus corrected default orderings, with no removed or renamed tools/parameters. Also carries the MCP Registry publication work prepared as 2.5.1 but never released, which reaches npm for the first time here.

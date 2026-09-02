@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { after, before, describe, it } from 'node:test';
+import { after, before, describe, it, mock } from 'node:test';
 import { createHash, randomBytes } from 'node:crypto';
 import type { Server as HttpServer } from 'node:http';
 import { google } from 'googleapis';
@@ -285,6 +285,35 @@ describe('Team mode — bearer-guarded per-user dispatch', () => {
     // Cached per sub: a second call builds no new drive client.
     await (await mcpPost(alice, aliceSid, toolsCall('search', { query: 'again' }, 3))).text();
     assert.equal(driveAuths.length, 2);
+  });
+
+  it('attributes dispatch and session logs to the acting user (sub + email)', async () => {
+    const bearer = await signIn({ sub: 'sub-carol', email: 'carol@corp.example', scope: DRIVE_SCOPE });
+    // log() writes through console.error; capture it around a session + call.
+    const errMock = mock.method(console, 'error', () => {});
+    try {
+      const sid = await initSession(bearer);
+      await (await mcpPost(bearer, sid, toolsCall('search', { query: 'audit' }))).text();
+      const lines = errMock.mock.calls.map((c) => c.arguments.join(' '));
+
+      const created = lines.find((l) => l.includes('New session created'));
+      assert.ok(created, 'session creation is logged');
+      assert.ok(
+        created!.includes('"sub":"sub-carol"') && created!.includes('"email":"carol@corp.example"'),
+        `session line names the user (got: ${created})`,
+      );
+
+      const dispatch = lines.find(
+        (l) => l.includes('Handling tool request (team)') && l.includes('"tool":"search"'),
+      );
+      assert.ok(dispatch, 'team dispatch is logged');
+      assert.ok(
+        dispatch!.includes('"sub":"sub-carol"') && dispatch!.includes('"email":"carol@corp.example"'),
+        `dispatch line names the user (got: ${dispatch})`,
+      );
+    } finally {
+      errMock.mock.restore();
+    }
   });
 
   it('rejects the account argument and manage_accounts outright', async () => {

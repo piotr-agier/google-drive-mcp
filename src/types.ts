@@ -38,6 +38,11 @@ export interface ToolContext {
   validateTextFileExtension: (name: string) => void;
   runtimeConfig: RuntimeConfig;
 
+  /** Stable user identity for the currently acting principal. Team mode sets
+   * this to the bearer's Google `sub`. Single-user mode leaves it undefined
+   * (one local account, no per-user ID). Intended for log attribution. */
+  userId?: string;
+
   // Multi-account surface (Phase 1: present on context but not yet consumed by tool
   // handlers — resolver always targets the sole default account).
   sessionId: string;

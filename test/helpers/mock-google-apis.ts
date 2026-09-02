@@ -52,7 +52,7 @@ function stub(tracker: CallTracker, name: string, defaultReturn: any = {}) {
     tracker.record(name, args);
     await drainMediaBody(args);
     if (impl) return impl(...args);
-    return { data: typeof defaultReturn === 'function' ? defaultReturn() : defaultReturn };
+    return { data: typeof defaultReturn === 'function' ? defaultReturn(...args) : defaultReturn };
   };
   fn._setImpl = (f: (...a: any[]) => any) => {
     impl = f;
@@ -96,9 +96,16 @@ export function createDriveMock() {
     create: stub(tracker, 'replies.create', { id: 'reply-1', content: 'reply text' }),
   };
   const permissions = {
-    create: stub(tracker, 'permissions.create', { id: 'perm-1', role: 'reader', emailAddress: 'user@example.com', type: 'user' }),
+    // Echo the requested role and type: the handlers verify the applied role against
+    // the request, so a fixed default would make every non-'reader' request look
+    // like a Drive-side mismatch. Tests that want a mismatch override with _setImpl.
+    create: stub(tracker, 'permissions.create', (req?: any) => ({
+      id: 'perm-1', role: req?.requestBody?.role ?? 'reader', emailAddress: 'user@example.com', type: req?.requestBody?.type ?? 'user',
+    })),
     list: stub(tracker, 'permissions.list', { permissions: [{ id: 'perm-1', role: 'reader', emailAddress: 'user@example.com', type: 'user' }] }),
-    update: stub(tracker, 'permissions.update', { id: 'perm-1', role: 'commenter', emailAddress: 'user@example.com', type: 'user' }),
+    update: stub(tracker, 'permissions.update', (req?: any) => ({
+      id: req?.permissionId ?? 'perm-1', role: req?.requestBody?.role ?? 'commenter', emailAddress: 'user@example.com', type: 'user',
+    })),
     delete: stub(tracker, 'permissions.delete', {}),
     get: stub(tracker, 'permissions.get', { id: 'perm-1', role: 'reader', emailAddress: 'user@example.com', type: 'user' }),
   };

@@ -69,7 +69,7 @@ This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and
 - **listPermissions** - List current sharing permissions on a file/folder
   - `fileId`: File or folder ID
 
-- **addPermission** - Add a new permission to a file/folder
+- **addPermission** - Add a new permission to a file/folder. If the principal already holds a permission, Drive updates it instead of creating a second one, and the requested role is applied even when it is a downgrade
   - `fileId`: File or folder ID
   - `type`: Permission target type (`user`, `group`, `domain`, `anyone`)
   - `role`: Permission role (`reader`, `commenter`, `writer`, `fileOrganizer`, `organizer`, `owner`)
@@ -88,7 +88,7 @@ This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `permissionId`: Permission ID (optional if `emailAddress` is provided)
   - `emailAddress`: Email to find permission by (optional fallback)
 
-- **shareFile** - Share file with a user email (idempotent helper)
+- **shareFile** - Share file with a user email (idempotent helper). An existing permission for that user is updated to the requested role, even when it is a downgrade, instead of creating a duplicate
   - `fileId`: File or folder ID
   - `emailAddress`: Recipient email
   - `role`: Role (`reader`, `commenter`, `writer`)

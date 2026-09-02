@@ -547,7 +547,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "addPermission",
-    description: "Add a sharing permission to a file. Provide emailAddress for type 'user'/'group', domain for type 'domain', and neither for 'anyone'.",
+    description: "Add a sharing permission to a file. If the principal already holds a permission on the file, Drive updates that permission instead of creating a second one, and the requested role is applied even when it is a downgrade (asking for 'reader' for an existing 'writer' leaves them as 'reader'). Provide emailAddress for type 'user'/'group', domain for type 'domain', and neither for 'anyone'.",
     inputSchema: {
       type: "object",
       properties: {
@@ -591,7 +591,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "shareFile",
-    description: "Convenience wrapper to share a file with a user email",
+    description: "Convenience wrapper to share a file with a user email. If the user already holds a permission on the file, that permission's role is set to the requested one (even when it is a downgrade) instead of creating a duplicate.",
     inputSchema: {
       type: "object",
       properties: {
@@ -775,6 +775,59 @@ export const toolDefinitions: ToolDefinition[] = [
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Permission writes
+// ---------------------------------------------------------------------------
+// Drive can apply a different role than the one requested: `permissions.create`
+// upserts onto a permission the principal already holds, and the resulting role
+// is not always the requested one. Every permission write below compares the
+// role Drive returned against the request and never reports the request as
+// the result.
+
+function describeRole(role: string | null | undefined): string {
+  return role ? `'${role}'` : 'no role';
+}
+
+type PermissionRoleOutcome =
+  | { ok: true; role: string; corrected: false }
+  | { ok: true; role: string; corrected: true; initiallyApplied: string | null }
+  | { ok: false; detail: string };
+
+/**
+ * Reconcile the role Drive applied on a `permissions.create` with the role
+ * requested. On a mismatch, issue one corrective `permissions.update` and
+ * report what happened: success with the role Drive first applied (so the
+ * caller learns an existing permission was changed, including a downgrade),
+ * or a failure describing what Drive holds now.
+ */
+async function reconcileCreatedPermissionRole(
+  drive: drive_v3.Drive,
+  fileId: string,
+  created: drive_v3.Schema$Permission,
+  requestedRole: string,
+): Promise<PermissionRoleOutcome> {
+  if (created.role === requestedRole) return { ok: true, role: requestedRole, corrected: false };
+  const applied = describeRole(created.role);
+  if (!created.id) {
+    return { ok: false, detail: `requested '${requestedRole}' but Drive applied ${applied} and returned no permission id to correct` };
+  }
+  try {
+    const corrected = await drive.permissions.update({
+      fileId,
+      permissionId: created.id,
+      requestBody: { role: requestedRole },
+      fields: 'id,role',
+      supportsAllDrives: true,
+    });
+    if (corrected.data.role === requestedRole) {
+      return { ok: true, role: requestedRole, corrected: true, initiallyApplied: created.role ?? null };
+    }
+    return { ok: false, detail: `requested '${requestedRole}' but Drive holds ${describeRole(corrected.data.role)} even after a corrective update` };
+  } catch (e: unknown) {
+    return { ok: false, detail: `requested '${requestedRole}' but Drive applied ${applied}, and the corrective update failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
 
 export async function handleTool(
   toolName: string,
@@ -1600,46 +1653,27 @@ export async function handleTool(
       });
 
       const principal = response.data.emailAddress || response.data.domain || data.emailAddress || data.domain || data.type;
-      // Drive can apply a different role than requested (e.g. upsert semantics
-      // when the principal already holds a permission on the file). Never
-      // report the requested role as fact — verify what came back, correct it
-      // once, and fail loudly if the mismatch survives.
-      if (response.data.role && response.data.role !== data.role) {
-        try {
-          const corrected = await ctx.getDrive().permissions.update({
-            fileId: data.fileId,
-            permissionId: response.data.id!,
-            requestBody: { role: data.role },
-            fields: 'id,role',
-            supportsAllDrives: true,
-          });
-          if (corrected.data.role === data.role) {
-            return {
-              content: [{
-                type: 'text',
-                text: `Permission added for ${principal}: Drive initially applied '${response.data.role}' instead of the requested '${data.role}' (likely an existing-permission upsert); corrected to '${corrected.data.role}'. Permission id: ${response.data.id}`,
-              }],
-              isError: false,
-            };
-          }
-          return {
-            content: [{
-              type: 'text',
-              text: `Permission MISMATCH for ${principal}: requested '${data.role}' but Drive holds '${corrected.data.role}' even after a corrective update. Verify with listPermissions and fix manually. Permission id: ${response.data.id}`,
-            }],
-            isError: true,
-          };
-        } catch (e: unknown) {
-          return {
-            content: [{
-              type: 'text',
-              text: `Permission MISMATCH for ${principal}: requested '${data.role}' but Drive applied '${response.data.role}', and the corrective update failed: ${e instanceof Error ? e.message : String(e)}. Verify with listPermissions.`,
-            }],
-            isError: true,
-          };
-        }
+      const permissionId = response.data.id ?? 'unknown';
+      const outcome = await reconcileCreatedPermissionRole(ctx.getDrive(), data.fileId, response.data, data.role);
+      if (!outcome.ok) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Permission MISMATCH for ${principal}: ${outcome.detail}. Verify with listPermissions and fix manually. Permission id: ${permissionId}`,
+          }],
+          isError: true,
+        };
       }
-      return { content: [{ type: 'text', text: `Permission added: ${response.data.id} (${response.data.role}) for ${principal}` }], isError: false };
+      if (outcome.corrected) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Permission added for ${principal}: Drive initially applied ${describeRole(outcome.initiallyApplied)} instead of the requested '${data.role}' (most likely because ${principal} already held a permission on this file); that permission's role was changed to '${outcome.role}'. Permission id: ${permissionId}`,
+          }],
+          isError: false,
+        };
+      }
+      return { content: [{ type: 'text', text: `Permission added: ${permissionId} (${outcome.role}) for ${principal}` }], isError: false };
     }
 
     case "updatePermission": {
@@ -1659,7 +1693,7 @@ export async function handleTool(
         return {
           content: [{
             type: 'text',
-            text: `Permission update MISMATCH: requested '${data.role}' for ${response.data.id} but Drive reports '${response.data.role}'. Verify with listPermissions.`,
+            text: `Permission update MISMATCH: requested '${data.role}' for ${response.data.id ?? data.permissionId} but Drive reports ${describeRole(response.data.role)}. Verify with listPermissions.`,
           }],
           isError: true,
         };
@@ -1733,6 +1767,16 @@ export async function handleTool(
           supportsAllDrives: true,
         });
 
+        if (updated.data.role !== data.role) {
+          return {
+            content: [{
+              type: 'text',
+              text: `Permission update MISMATCH for ${updated.data.emailAddress || data.emailAddress}: requested '${data.role}' but Drive reports ${describeRole(updated.data.role)}. Verify with listPermissions. Permission ID: ${existingPerm.id}`,
+            }],
+            isError: true,
+          };
+        }
+
         return {
           content: [{ type: 'text', text: `Updated existing permission for ${updated.data.emailAddress || data.emailAddress} to ${updated.data.role}. Permission ID: ${updated.data.id}` }],
           isError: false,
@@ -1752,8 +1796,29 @@ export async function handleTool(
         supportsAllDrives: true,
       });
 
+      const recipient = response.data.emailAddress || data.emailAddress;
+      const permissionId = response.data.id ?? 'unknown';
+      const outcome = await reconcileCreatedPermissionRole(ctx.getDrive(), data.fileId, response.data, data.role);
+      if (!outcome.ok) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Permission MISMATCH for ${recipient}: ${outcome.detail}. Verify with listPermissions and fix manually. Permission ID: ${permissionId}`,
+          }],
+          isError: true,
+        };
+      }
+      if (outcome.corrected) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Shared file with ${recipient} as ${outcome.role}: Drive initially applied ${describeRole(outcome.initiallyApplied)} instead of the requested '${data.role}' (most likely because ${recipient} already held a permission on this file); that permission's role was changed to '${outcome.role}'. Permission ID: ${permissionId}`,
+          }],
+          isError: false,
+        };
+      }
       return {
-        content: [{ type: 'text', text: `Shared file with ${response.data.emailAddress || data.emailAddress} as ${response.data.role}. Permission ID: ${response.data.id}` }],
+        content: [{ type: 'text', text: `Shared file with ${recipient} as ${outcome.role}. Permission ID: ${permissionId}` }],
         isError: false,
       };
     }

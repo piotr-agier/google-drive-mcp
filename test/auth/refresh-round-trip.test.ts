@@ -6,7 +6,7 @@ import * as path from 'node:path';
 
 import { AccountStore } from '../../src/auth/accountStore.js';
 import { AccountClientFactory } from '../../src/auth/accountClientFactory.js';
-import type { AccountRecord } from '../../src/auth/types.js';
+import type { AccountRecord, TokenFileV2 } from '../../src/auth/types.js';
 
 // ---------------------------------------------------------------------------
 // Token-refresh round-trip.
@@ -81,15 +81,31 @@ function makeRecord(overrides: Partial<AccountRecord> = {}): AccountRecord {
   };
 }
 
-/** Wait until `predicate()` returns truthy or `timeoutMs` elapses. Generous
- * default: under full-suite parallel load, 2s was routinely exceeded. */
-async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
+/** Wait until `predicate()` returns truthy or `timeoutMs` elapses. Several
+ * callers poll the on-disk token file, which AccountClientFactory's `'tokens'`
+ * listener writes asynchronously and fire-and-forget (see persistRefreshedTokens
+ * in accountClientFactory.ts); the generous default accounts for real disk I/O
+ * latency under a loaded machine, not for any in-memory visibility delay. */
+async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs = 10_000,
+): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await new Promise((r) => setTimeout(r, 5));
   }
   throw new Error(`waitFor timed out after ${timeoutMs}ms`);
+}
+
+/** Read and parse the token file, tolerating "not written yet". */
+async function readTokenFile(tokenPath: string): Promise<TokenFileV2 | undefined> {
+  try {
+    return JSON.parse(await fs.readFile(tokenPath, 'utf-8')) as TokenFileV2;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw err;
+  }
 }
 
 test('factory persists new access_token from a "tokens" event into AccountStore', async () => {
@@ -112,7 +128,10 @@ test('factory persists new access_token from a "tokens" event into AccountStore'
       // No refresh_token — must NOT clobber the existing one.
     });
 
-    await waitFor(() => store.get('work')?.accessToken === newAccess);
+    await waitFor(async () => {
+      const onDisk = await readTokenFile(tokenPath);
+      return onDisk?.accounts?.work?.accessToken === newAccess;
+    });
 
     const updated = store.get('work')!;
     assert.equal(updated.accessToken, newAccess);
@@ -121,9 +140,9 @@ test('factory persists new access_token from a "tokens" event into AccountStore'
     assert.notEqual(updated.lastRefreshedAt, makeRecord().lastRefreshedAt);
 
     // File on disk reflects the change too.
-    const onDisk = JSON.parse(await fs.readFile(tokenPath, 'utf-8'));
-    assert.equal(onDisk.accounts.work.accessToken, newAccess);
-    assert.equal(onDisk.accounts.work.refreshToken, 'persistent-refresh');
+    const onDisk = await readTokenFile(tokenPath);
+    assert.equal(onDisk?.accounts.work?.accessToken, newAccess);
+    assert.equal(onDisk?.accounts.work?.refreshToken, 'persistent-refresh');
   } finally {
     await cleanup();
   }
@@ -145,8 +164,16 @@ test('factory accepts a rotated refresh_token when Google does send one', async 
       expiry_date: Date.now() + 3600_000,
     });
 
-    await waitFor(() => store.get('work')?.refreshToken === 'rotated-refresh');
+    await waitFor(async () => {
+      const onDisk = await readTokenFile(tokenPath);
+      return onDisk?.accounts?.work?.refreshToken === 'rotated-refresh';
+    });
     assert.equal(store.get('work')!.accessToken, 'rotated-access');
+
+    // File on disk reflects the rotated token too.
+    const onDisk = await readTokenFile(tokenPath);
+    assert.equal(onDisk?.accounts.work?.accessToken, 'rotated-access');
+    assert.equal(onDisk?.accounts.work?.refreshToken, 'rotated-refresh');
   } finally {
     await cleanup();
   }

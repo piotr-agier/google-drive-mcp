@@ -328,11 +328,16 @@ This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `documentId`: Document ID
   - `commentId`: Comment ID
 
-- **addComment** - Add a comment anchored to a specific text range
+- **addComment** - Add a comment quoting a text range
   - `documentId`: Document ID
-  - `startIndex`: Start index (1-based)
-  - `endIndex`: End index (exclusive)
+  - `startIndex`: Start index (1-based; or use `textToFind`)
+  - `endIndex`: End index (exclusive; or use `textToFind`)
+  - `textToFind`: Quote this exact text instead of using indices (case-sensitive)
+  - `matchInstance`: Which occurrence of `textToFind` to quote (1-based, default 1)
+  - `tabId`: Tab ID for multi-tab documents (defaults to the document body)
   - `commentText`: The comment content
+  - Provide either `startIndex`+`endIndex` or `textToFind`
+  - The comment appears in the document's comment panel and records the quoted passage. Google Docs does not support margin-anchored comments through any public API: the Docs API exposes no comment surface, and the Drive `anchor` field is [ignored by the Workspace editors](https://developers.google.com/workspace/drive/api/guides/manage-comments), which "treat these comments as un-anchored comments". Comments created here are therefore unanchored by design
 
 - **replyToComment** - Add a reply to an existing comment
   - `documentId`: Document ID

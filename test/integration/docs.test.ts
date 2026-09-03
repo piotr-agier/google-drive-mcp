@@ -124,6 +124,9 @@ describe('Docs tools', () => {
     // per-block override (e.g. insertText/deleteRange forcing a Google-Docs
     // mimeType) does not leak into later tests and make the suite order-dependent.
     ctx.mocks.drive.service.files.get._resetImpl();
+    // Same for docs.documents.get: several blocks install per-test document
+    // fixtures, which must not leak into later blocks.
+    ctx.mocks.docs.service.documents.get._resetImpl();
   });
 
   // --- createGoogleDoc ---
@@ -1583,23 +1586,110 @@ describe('Docs tools', () => {
 
   // --- addComment ---
   describe('addComment', () => {
-    it('happy path', async () => {
-      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
-        data: {
-          documentId: 'doc-1', title: 'My Doc',
-          body: { content: [{ paragraph: { elements: [{ textRun: { content: 'Hello World\n' }, startIndex: 1, endIndex: 13 }] } }] },
-        },
-      }));
+    const flatDoc = () => ({
+      documentId: 'doc-1', title: 'My Doc',
+      body: { content: [{ paragraph: { elements: [{ textRun: { content: 'Hello World\n' }, startIndex: 1, endIndex: 13 }] } }] },
+    });
+
+    it('happy path: quotes the range and sends NO anchor', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: flatDoc() }));
       const res = await callTool(ctx.client, 'addComment', {
-        documentId: 'doc-1', startIndex: 1, endIndex: 5, commentText: 'Great!',
+        documentId: 'doc-1', startIndex: 1, endIndex: 6, commentText: 'Great!',
       });
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text!.includes('Comment added'));
+
+      const body = ctx.mocks.drive.tracker.getCalls('comments.create').at(-1)?.args?.[0]?.requestBody;
+      assert.equal(body.quotedFileContent.value, 'Hello');
+      assert.equal(body.quotedFileContent.mimeType, 'text/plain');
+      // The anchor Docs cannot resolve is what made the editor render these
+      // threads as "Original content was deleted". It must not come back.
+      assert.ok(!('anchor' in body), 'addComment must not send an anchor');
+    });
+
+    it('targets by textToFind and quotes the requested instance', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'My Doc',
+          body: { content: [{ paragraph: { elements: [{ textRun: { content: 'target and target again\n' }, startIndex: 1, endIndex: 25 }] } }] },
+        },
+      }));
+      const res = await callTool(ctx.client, 'addComment', {
+        documentId: 'doc-1', textToFind: 'target', matchInstance: 2, commentText: 'second one',
+      });
+      assert.equal(res.isError, false);
+      const body = ctx.mocks.drive.tracker.getCalls('comments.create').at(-1)?.args?.[0]?.requestBody;
+      assert.equal(body.quotedFileContent.value, 'target');
+      assert.ok(res.content[0].text!.includes('[12-18]'));
+    });
+
+    it('quotes text inside a table', async () => {
+      // The previous implementation scanned only top-level body paragraphs, so
+      // a range inside a table quoted '' and the comment lost its passage.
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'My Doc',
+          body: {
+            content: [{
+              table: {
+                tableRows: [{
+                  tableCells: [{
+                    content: [{ paragraph: { elements: [{ textRun: { content: 'CellText\n' }, startIndex: 5, endIndex: 14 }] } }],
+                  }],
+                }],
+              },
+            }],
+          },
+        },
+      }));
+      const res = await callTool(ctx.client, 'addComment', {
+        documentId: 'doc-1', startIndex: 5, endIndex: 9, commentText: 'about this cell',
+      });
+      assert.equal(res.isError, false);
+      const body = ctx.mocks.drive.tracker.getCalls('comments.create').at(-1)?.args?.[0]?.requestBody;
+      assert.equal(body.quotedFileContent.value, 'Cell');
+    });
+
+    it('quotes from the requested tab in a multi-tab document', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: mockDocs.multiTab() }));
+      const res = await callTool(ctx.client, 'addComment', {
+        documentId: 'doc-1', tabId: 'tab-2', startIndex: 1, endIndex: 7, commentText: 'on tab 2',
+      });
+      assert.equal(res.isError, false);
+      const body = ctx.mocks.drive.tracker.getCalls('comments.create').at(-1)?.args?.[0]?.requestBody;
+      // Index spaces are per-tab: [1-7) is 'Second' in tab-2, 'First ' in tab-1.
+      assert.equal(body.quotedFileContent.value, 'Second');
+    });
+
+    it('rejects a range that covers no text instead of commenting on nothing', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: flatDoc() }));
+      const res = await callTool(ctx.client, 'addComment', {
+        documentId: 'doc-1', startIndex: 500, endIndex: 520, commentText: 'nowhere',
+      });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text!.includes('covers no text'));
+      assert.equal(ctx.mocks.drive.tracker.getCalls('comments.create').length, 0);
+    });
+
+    it('reports when textToFind is absent', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: flatDoc() }));
+      const res = await callTool(ctx.client, 'addComment', {
+        documentId: 'doc-1', textToFind: 'nonexistent', commentText: 'x',
+      });
+      assert.equal(res.isError, true);
+      assert.equal(ctx.mocks.drive.tracker.getCalls('comments.create').length, 0);
     });
 
     it('validation: endIndex must be > startIndex', async () => {
       const res = await callTool(ctx.client, 'addComment', {
         documentId: 'doc-1', startIndex: 5, endIndex: 2, commentText: 'test',
+      });
+      assert.equal(res.isError, true);
+    });
+
+    it('validation: requires indices or textToFind', async () => {
+      const res = await callTool(ctx.client, 'addComment', {
+        documentId: 'doc-1', commentText: 'no target',
       });
       assert.equal(res.isError, true);
     });

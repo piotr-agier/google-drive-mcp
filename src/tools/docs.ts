@@ -1703,10 +1703,16 @@ const GetCommentSchema = z.object({
 
 const AddCommentSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
-  startIndex: z.number().int().min(1, "Start index must be at least 1"),
-  endIndex: z.number().int().min(1, "End index must be at least 1"),
+  startIndex: z.number().int().min(1, "Start index must be at least 1").optional(),
+  endIndex: z.number().int().min(1, "End index must be at least 1").optional(),
+  textToFind: z.string().min(1).optional(),
+  matchInstance: z.number().int().min(1).default(1),
+  tabId: z.string().optional(),
   commentText: z.string().min(1, "Comment text is required")
-});
+}).refine(
+  (d) => (d.startIndex != null && d.endIndex != null) || d.textToFind != null,
+  { message: "Provide either startIndex+endIndex or textToFind" },
+);
 
 const ReplyToCommentSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
@@ -2085,16 +2091,19 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "addComment",
-    description: "Add a comment anchored to a specific text range. Note: Due to Google API limitations, programmatic comments appear in 'All Comments' but may not be visibly anchored in the document UI.",
+    description: "Add a comment quoting a text range, targeted by startIndex+endIndex or by textToFind. The comment appears in the document's comment panel and records the quoted passage. Google Docs does not support margin-anchored comments through any public API, so the comment is unanchored by design; this is a platform limit, not a failure.",
     inputSchema: {
       type: "object",
       properties: {
         documentId: { type: "string", description: "The document ID" },
-        startIndex: { type: "number", description: "Start index (1-based)" },
-        endIndex: { type: "number", description: "End index (exclusive)" },
+        startIndex: { type: "number", description: "Start index (1-based; or use textToFind)" },
+        endIndex: { type: "number", description: "End index (exclusive; or use textToFind)" },
+        textToFind: { type: "string", description: "Quote this exact text instead of using indices (case-sensitive)" },
+        matchInstance: { type: "number", description: "Which occurrence of textToFind to quote (1-based, default 1)" },
+        tabId: { type: "string", description: "Tab ID for multi-tab documents (defaults to the document body)" },
         commentText: { type: "string", description: "The comment content" }
       },
-      required: ["documentId", "startIndex", "endIndex", "commentText"]
+      required: ["documentId", "commentText"]
     }
   },
   {
@@ -3600,35 +3609,69 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
       const a = validation.data;
 
-      if (a.endIndex <= a.startIndex) {
-        return errorResponse("endIndex must be greater than startIndex");
+      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+
+      // Resolve the targeted body ONCE. Index spaces are per-tab, so the range
+      // lookup and the quote extraction must read the same content -- reading
+      // different bodies would quote text from the wrong tab.
+      let content: any[];
+      if (a.tabId) {
+        const resolved = await getTabBodyContent(ctx, a.documentId, a.tabId);
+        if (resolved.error) {
+          return errorResponse(resolved.error);
+        }
+        content = resolved.content!;
+      } else {
+        const doc = await docs.documents.get({ documentId: a.documentId });
+        content = doc.data.body?.content || [];
       }
 
-      // Get the document to extract quoted text
-      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-      const doc = await docs.documents.get({ documentId: a.documentId });
-
-      // Extract quoted text from the range
-      let quotedText = '';
-      const content = doc.data.body?.content || [];
-      for (const element of content) {
-        if (element.paragraph?.elements) {
-          for (const textElement of element.paragraph.elements) {
-            if (textElement.textRun) {
-              const elementStart = textElement.startIndex || 0;
-              const elementEnd = textElement.endIndex || 0;
-
-              if (elementEnd > a.startIndex && elementStart < a.endIndex) {
-                const text = textElement.textRun.content || '';
-                const startOffset = Math.max(0, a.startIndex - elementStart);
-                const endOffset = Math.min(text.length, a.endIndex - elementStart);
-                quotedText += text.substring(startOffset, endOffset);
-              }
-            }
-          }
+      let startIndex: number;
+      let endIndex: number;
+      if (a.textToFind) {
+        const range = await findTextRange(
+          ctx, a.documentId, a.textToFind, a.matchInstance, a.tabId, content);
+        if (range && 'error' in range) {
+          return errorResponse(range.error);
+        }
+        if (!range) {
+          return errorResponse(`textToFind "${a.textToFind}" not found in document.`);
+        }
+        startIndex = range.startIndex;
+        endIndex = range.endIndex;
+      } else {
+        startIndex = a.startIndex!;
+        endIndex = a.endIndex!;
+        if (endIndex <= startIndex) {
+          return errorResponse("endIndex must be greater than startIndex");
         }
       }
 
+      // buildFlatTextFromDoc walks paragraphs and nested tables. The previous
+      // scan looked only at top-level body paragraphs, so any range inside a
+      // table quoted '' and left the comment with no recoverable position.
+      const { flatText, offsetMap } = buildFlatTextFromDoc({ body: { content } });
+      let quotedText = '';
+      for (let i = 0; i < offsetMap.length; i++) {
+        if (offsetMap[i] >= startIndex && offsetMap[i] < endIndex) {
+          quotedText += flatText[i];
+        }
+      }
+      if (!quotedText) {
+        return errorResponse(
+          `Range [${startIndex}-${endIndex}] covers no text in the document.`);
+      }
+
+      // Deliberately NO anchor. Google Docs cannot be given an anchored comment
+      // through any public API: the Docs API has no comment surface at all, and
+      // Drive's `anchor` field is ignored by the Workspace editors, which
+      // "treat these comments as un-anchored comments" per
+      // https://developers.google.com/workspace/drive/api/guides/manage-comments
+      // Sending an anchor Docs cannot resolve is worse than sending none: the
+      // editor renders the thread under "Original content was deleted", so the
+      // comment reads as if the passage it refers to had been removed.
+      // quotedFileContent is what ties the comment to its passage, and is what
+      // listComments matches on to report character positions.
       const response = await ctx.getDrive().comments.create({
         fileId: a.documentId,
         fields: 'id,content,quotedFileContent,author,createdTime',
@@ -3636,26 +3679,14 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           content: a.commentText,
           quotedFileContent: {
             value: quotedText,
-            mimeType: 'text/html'
-          },
-          // Reverse-engineered anchor format for positioning comments.
-          // Not part of the public Drive API -- may break if Google changes internals.
-          // See: https://stackoverflow.com/questions/51789168
-          anchor: JSON.stringify({
-            r: a.documentId,
-            a: [{
-              txt: {
-                o: a.startIndex - 1,  // Drive API uses 0-based indexing
-                l: a.endIndex - a.startIndex,
-                ml: a.endIndex - a.startIndex
-              }
-            }]
-          })
+            mimeType: 'text/plain'
+          }
         }
       });
 
+      const snippet = quotedText.length > 60 ? `${quotedText.slice(0, 60)}...` : quotedText;
       return {
-        content: [{ type: "text", text: `Comment added successfully. Comment ID: ${response.data.id}` }],
+        content: [{ type: "text", text: `Comment added (id ${response.data.id}) quoting "${snippet}" at [${startIndex}-${endIndex}]. Google Docs shows API-created comments in the comment panel without a margin anchor.` }],
         isError: false
       };
     }

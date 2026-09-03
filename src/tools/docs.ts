@@ -7,6 +7,7 @@ import { escapeDriveQuery, isTextMime, ALL_DRIVES_LIST_PARAMS, DRIVE_ORDER_BY_VA
 import { downloadTextContent, writeTextContent } from './text-content.js';
 import { uploadImageToDrive } from '../utils/driveImageUpload.js';
 import { withRetry } from '../utils/retry.js';
+import { getResponseHeader } from '../utils/streams.js';
 
 // ---------------------------------------------------------------------------
 // Helper functions
@@ -2702,7 +2703,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         );
       }
 
-      const rawContentType = (resp.headers?.['content-type'] as string | undefined) || 'application/octet-stream';
+      const rawContentType = getResponseHeader(resp.headers, 'content-type') || 'application/octet-stream';
       const mimeType = rawContentType.split(';')[0].trim();
       const dataBase64 = buffer.toString('base64');
 

@@ -7,36 +7,36 @@
 //   underlying AccountStore, so rotating access tokens persist to disk.
 // - Dedupes concurrent refreshes of the same alias so N in-flight tool calls
 //   trigger at most one refresh request to Google.
+// - Bounds every refresh (per-attempt timeout plus one retry, see
+//   tokenRefresh.ts) so a stalled token endpoint fails the call fast instead
+//   of parking every deduped caller on it (#169).
 // - In synthetic modes (service-account / external-token / test), returns
 //   the pre-seeded client from the store unchanged.
 // ---------------------------------------------------------------------------
 
 import { Credentials, OAuth2Client } from 'google-auth-library';
+import { TimeoutError } from '../utils/retry.js';
 import { AccountStore } from './accountStore.js';
 import { loadCredentials } from './client.js';
+import {
+  DEFAULT_TOKEN_REFRESH_CONFIG,
+  isInvalidGrant,
+  REFRESH_BUFFER_MS,
+  refreshAccessTokenBounded,
+  type TokenRefreshConfig,
+} from './tokenRefresh.js';
 import { AccountRecord } from './types.js';
 import { describeErrorForLog } from './utils.js';
-
-/** Buffer before access-token expiry that triggers a refresh (ms). */
-const REFRESH_BUFFER_MS = 5 * 60 * 1000;
-
-/**
- * Detect an OAuth `invalid_grant` (refresh token revoked or expired) across the
- * shapes google-auth-library / gaxios surface it in.
- */
-function isInvalidGrant(err: unknown): boolean {
-  if (!err || typeof err !== 'object') return false;
-  const e = err as { response?: { data?: { error?: unknown } }; message?: unknown };
-  if (e.response?.data?.error === 'invalid_grant') return true;
-  return typeof e.message === 'string' && e.message.includes('invalid_grant');
-}
 
 export class AccountClientFactory {
   private clients = new Map<string, OAuth2Client>();
   private inflightRefresh = new Map<string, Promise<void>>();
   private baseCredentialsPromise: Promise<{ client_id: string; client_secret?: string }> | null = null;
 
-  constructor(private store: AccountStore) {}
+  constructor(
+    private store: AccountStore,
+    private readonly refreshConfig: TokenRefreshConfig = DEFAULT_TOKEN_REFRESH_CONFIG,
+  ) {}
 
   /**
    * Return an OAuth2Client (or GoogleAuth-derived client) for the given alias,
@@ -125,7 +125,12 @@ export class AccountClientFactory {
 
     const p = (async () => {
       try {
-        const { credentials } = await client.refreshAccessToken();
+        const credentials = await refreshAccessTokenBounded(
+          client,
+          this.refreshConfig,
+          alias,
+          (message, data) => console.error(`${message}${data ? ` ${JSON.stringify(data)}` : ''}`),
+        );
         // The `'tokens'` listener handles persistence. `refreshAccessToken`
         // already calls `setCredentials` internally.
         if (!credentials.access_token) {
@@ -138,6 +143,21 @@ export class AccountClientFactory {
           throw new Error(
             `Account '${alias}' authorization was revoked or has expired. ` +
               `Run:  manage_accounts add ${alias}  to reconnect it.`,
+          );
+        }
+        if (err instanceof TimeoutError) {
+          // The token endpoint stalled through every attempt. Fail the call now
+          // with a clear message: swallowing (as for the transient case below)
+          // would hand the caller's API request to the library's own implicit
+          // refresh, which would stall on the same endpoint again (#169).
+          throw Object.assign(
+            new Error(
+              `Account '${alias}' could not refresh its access token: Google's token ` +
+                `endpoint did not respond within ${this.refreshConfig.tokenRefreshTimeout}ms. ` +
+                `Check network/proxy access to oauth2.googleapis.com and retry; ` +
+                `--token-refresh-timeout raises the limit.`,
+            ),
+            { cause: err },
           );
         }
         // Never log the raw error: gaxios embeds the refresh POST body (refresh

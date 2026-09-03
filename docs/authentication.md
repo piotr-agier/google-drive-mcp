@@ -67,6 +67,7 @@ Authentication tokens are stored securely following the XDG Base Directory speci
 - Each token-file write is an atomic rename; concurrent refreshes from different accounts serialize through an in-process queue
 - Never commit tokens to version control
 - Tokens auto-refresh before expiration
+- Each refresh request is bounded (15 seconds per attempt, one retry, tunable with `--token-refresh-timeout`), so a stalled Google token endpoint fails the current call with a clear error instead of hanging every call on the server
 - Google OAuth apps in "Testing" status have refresh tokens that expire after 7 days (Google's policy)
 
 ## External Authentication

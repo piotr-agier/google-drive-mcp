@@ -15,6 +15,11 @@ import { getSecureTokenPath } from './auth/utils.js';
 import { resolveOAuthScopes } from './auth/scopes.js';
 import { AuthServer } from './auth/server.js';
 import { SessionStore } from './auth/sessionStore.js';
+import {
+  DEFAULT_TOKEN_REFRESH_CONFIG,
+  installTokenEndpointTimeout,
+  type TokenRefreshConfig,
+} from './auth/tokenRefresh.js';
 import { AccountRecord, AuthMode } from './auth/types.js';
 import { existsSync } from 'fs';
 
@@ -76,11 +81,18 @@ function warnIfLocalTokensBypassed(): void {
  *   If no accounts are registered, runs the interactive auth flow via AuthServer.
  */
 export async function buildAuthSystem(
-  opts: { interactiveIfEmpty?: boolean; openBrowser?: boolean } = {},
+  opts: {
+    interactiveIfEmpty?: boolean;
+    openBrowser?: boolean;
+    /** Timeout/retry policy for OAuth token refreshes; defaults to the
+     * runtime defaults (15s per attempt, one retry). */
+    tokenRefresh?: TokenRefreshConfig;
+  } = {},
 ): Promise<AuthSystem> {
   console.error('Initializing authentication...');
 
   const mode = getActiveAuthMode();
+  const tokenRefresh = opts.tokenRefresh ?? DEFAULT_TOKEN_REFRESH_CONFIG;
 
   if (mode === 'service_account') {
     warnIfLocalTokensBypassed();
@@ -88,17 +100,20 @@ export async function buildAuthSystem(
     const store = new AccountStore({ mode: 'service-account' });
     await store.reload();
     store.setSyntheticAccount(buildSyntheticRecord('service-account'), client);
-    return assembleSystem('service-account', store);
+    return assembleSystem('service-account', store, tokenRefresh);
   }
 
   if (mode === 'external_token') {
     warnIfLocalTokensBypassed();
     validateExternalTokenConfig();
     const client = createExternalOAuth2Client();
+    // This client bypasses the factory, so its refreshes (with a configured
+    // refresh token) are the library's own implicit ones; bound those too.
+    installTokenEndpointTimeout(client, tokenRefresh);
     const store = new AccountStore({ mode: 'external-token' });
     await store.reload();
     store.setSyntheticAccount(buildSyntheticRecord('external-token'), client);
-    return assembleSystem('external-token', store);
+    return assembleSystem('external-token', store, tokenRefresh);
   }
 
   // Local OAuth mode
@@ -121,7 +136,7 @@ export async function buildAuthSystem(
     if (opts.interactiveIfEmpty === false) {
       // Caller (e.g. the `auth` CLI) drives its own additive consent flow, so
       // don't launch the legacy first-time browser auth here.
-      return assembleSystem('local-oauth', store);
+      return assembleSystem('local-oauth', store, tokenRefresh);
     }
     // First-time auth: run the interactive browser flow. Tokens are persisted
     // additively into the v2 store under the reserved alias 'default' — the
@@ -161,12 +176,16 @@ export async function buildAuthSystem(
     console.error(`Authentication: loaded ${store.list().length} account(s) from ${store.getFilePath()}`);
   }
 
-  return assembleSystem('local-oauth', store);
+  return assembleSystem('local-oauth', store, tokenRefresh);
 }
 
-function assembleSystem(mode: AuthMode, store: AccountStore): AuthSystem {
+function assembleSystem(
+  mode: AuthMode,
+  store: AccountStore,
+  tokenRefresh: TokenRefreshConfig,
+): AuthSystem {
   const sessions = new SessionStore();
-  const factory = new AccountClientFactory(store);
+  const factory = new AccountClientFactory(store, tokenRefresh);
   const resolver = new AccountResolver(store, sessions);
   return { mode, store, factory, resolver, sessions };
 }

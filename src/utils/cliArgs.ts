@@ -1,17 +1,26 @@
 // cliArgs.ts
 export interface RuntimeConfig {
   apiTimeout: number;
+  /**
+   * Per-attempt timeout for an OAuth token refresh (ms). Kept separate from
+   * `apiTimeout`: a token POST is tiny and should fail fast, while API calls
+   * may legitimately stream large uploads/downloads for minutes. 0 disables.
+   */
+  tokenRefreshTimeout: number;
   retryMax: number;
   retryBaseDelay: number;
   disableResources: boolean;
 }
 
-const DEFAULTS: RuntimeConfig = {
+export const RUNTIME_DEFAULTS: Readonly<RuntimeConfig> = {
   apiTimeout: 120_000,
+  tokenRefreshTimeout: 15_000,
   retryMax: 3,
   retryBaseDelay: 1_000,
   disableResources: false,
 };
+
+const DEFAULTS = RUNTIME_DEFAULTS;
 
 function parseIntOr(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
@@ -40,6 +49,10 @@ export function loadRuntimeConfig(argv: string[] = process.argv.slice(2)): Runti
 
   // Env vars fallback
   cfg.apiTimeout = parseIntOr(process.env.GOOGLE_DRIVE_MCP_API_TIMEOUT, cfg.apiTimeout);
+  cfg.tokenRefreshTimeout = parseIntOr(
+    process.env.GOOGLE_DRIVE_MCP_TOKEN_REFRESH_TIMEOUT,
+    cfg.tokenRefreshTimeout,
+  );
   cfg.retryMax = parseIntOr(process.env.GOOGLE_DRIVE_MCP_RETRY_MAX, cfg.retryMax);
   cfg.retryBaseDelay = parseIntOr(process.env.GOOGLE_DRIVE_MCP_RETRY_BASE_DELAY, cfg.retryBaseDelay);
   cfg.disableResources = parseBoolEnv(process.env.GOOGLE_DRIVE_MCP_DISABLE_RESOURCES, cfg.disableResources);
@@ -48,6 +61,8 @@ export function loadRuntimeConfig(argv: string[] = process.argv.slice(2)): Runti
   for (const arg of argv) {
     if (arg.startsWith('--api-timeout=')) {
       cfg.apiTimeout = parseIntOr(arg.split('=')[1], cfg.apiTimeout);
+    } else if (arg.startsWith('--token-refresh-timeout=')) {
+      cfg.tokenRefreshTimeout = parseIntOr(arg.split('=')[1], cfg.tokenRefreshTimeout);
     } else if (arg.startsWith('--retry-max=')) {
       cfg.retryMax = parseIntOr(arg.split('=')[1], cfg.retryMax);
     } else if (arg.startsWith('--retry-base-delay=')) {

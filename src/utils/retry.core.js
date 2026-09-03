@@ -93,7 +93,7 @@ async function runAttempt(fn, controller, timeoutMs, opLabel) {
  *
  * @template T
  * @param {(signal: AbortSignal) => Promise<T>} fn
- * @param {import('./cliArgs.js').RuntimeConfig} cfg
+ * @param {Pick<import('./cliArgs.js').RuntimeConfig, 'apiTimeout' | 'retryMax' | 'retryBaseDelay'>} cfg
  * @param {string} [opLabel]
  * @param {(message: string, data?: unknown) => void} [log]
  * @returns {Promise<T>}

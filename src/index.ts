@@ -124,7 +124,7 @@ async function ensureAuthSystem(): Promise<AuthSystem> {
   }
 
   log('Initializing authentication');
-  authSystemPromise = buildAuthSystem();
+  authSystemPromise = buildAuthSystem({ tokenRefresh: runtimeConfig });
   try {
     authSystem = await authSystemPromise;
     log('Authentication complete');
@@ -1003,6 +1003,9 @@ Options:
                              tools stay available. Bare flag disables; --no-resources=false
                              re-enables (overrides a truthy GOOGLE_DRIVE_MCP_DISABLE_RESOURCES).
   --api-timeout=<ms>         Per-request API timeout in ms; 0 disables (default: 120000)
+  --token-refresh-timeout=<ms>
+                             Per-attempt OAuth token refresh timeout in ms; 0 disables
+                             (default: 15000). A refresh is retried at most once.
   --retry-max=<n>            Max retry attempts on transient failures; 0 disables (default: 3)
   --retry-base-delay=<ms>    Base delay for retry backoff in ms (default: 1000)
 
@@ -1063,7 +1066,7 @@ async function runAuthServer(alias?: string): Promise<void> {
     // Assemble the multi-account system WITHOUT the empty-store first-time flow, so
     // the CLI drives a single additive consent below. This never flat-overwrites a
     // populated tokens.json — the pre-fix legacy path wiped every other account.
-    authSystem = await buildAuthSystem({ interactiveIfEmpty: false });
+    authSystem = await buildAuthSystem({ interactiveIfEmpty: false, tokenRefresh: runtimeConfig });
     const sys = requireAuthSystem();
 
     if (sys.mode !== 'local-oauth') {
@@ -1082,7 +1085,7 @@ async function runAuthServer(alias?: string): Promise<void> {
     // onTokens callback persists the account as 'default' directly into the v2
     // store. Safe: the store is empty here, so there is nothing to overwrite.
     if (sys.store.list().length === 0 && RESERVED_ALIASES.has(target)) {
-      authSystem = await buildAuthSystem();
+      authSystem = await buildAuthSystem({ tokenRefresh: runtimeConfig });
       const created = requireAuthSystem().store.getDefault() ?? 'default';
       console.log(`Authentication successful. Account '${created}' is ready.`);
       process.exit(0);
@@ -1531,7 +1534,7 @@ async function startHttpTransport(args: CliArgs): Promise<void> {
         console.error(`Team mode configuration error: ${(err as Error).message}`);
         process.exit(1);
       }
-      teamRuntime = await createTeamRuntime(teamConfig);
+      teamRuntime = await createTeamRuntime(teamConfig, { tokenRefresh: runtimeConfig });
       // Print every derived URL so a proxy/issuer misconfiguration is
       // debuggable from the startup log alone.
       console.error(

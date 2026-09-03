@@ -6,6 +6,7 @@ import type { RuntimeConfig } from '../src/utils/cliArgs.js';
 
 const cfg = (o: Partial<RuntimeConfig> = {}): RuntimeConfig => ({
   apiTimeout: 0,
+  tokenRefreshTimeout: 0,
   retryMax: 0,
   retryBaseDelay: 0,
   disableResources: false,

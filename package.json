@@ -1,6 +1,6 @@
 {
     "name": "@piotr-agier/google-drive-mcp",
-    "version": "2.7.1",
+    "version": "2.8.0",
     "mcpName": "io.github.piotr-agier/google-drive-mcp",
     "description": "Secure access to Google Drive, Docs, Sheets, Slides, and Calendar through MCP.",
     "license": "MIT",

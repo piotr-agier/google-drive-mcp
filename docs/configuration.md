@@ -22,10 +22,14 @@ CLI arguments take priority over their environment-variable equivalents. Authent
 | `--issuer-url <url>` | — | Public HTTPS issuer URL required by team mode; HTTP is accepted only for localhost |
 | `--no-resources[=<bool>]` | false | Disable `gdrive:///` resources while leaving tools enabled; an explicit false value re-enables resources |
 | `--api-timeout=<ms>` | `120000` | Per-attempt timeout; `0` disables it |
+| `--token-refresh-timeout=<ms>` | `15000` | Per-attempt timeout for an OAuth access-token refresh; `0` disables it |
 | `--retry-max=<n>` | `3` | Maximum retry attempts on retryable errors (429, 503, 504, timeouts, and network failures); `0` disables retries |
 | `--retry-base-delay=<ms>` | `1000` | Exponential-backoff base delay, capped at 30 seconds with jitter |
 
-The timeout and retry settings currently apply to the retry-wrapped content insertion performed by `createGoogleDoc`; they are not applied to every Google API request. 500 and 502 are deliberately not retried: a 5xx raised after the request reached Google may mean a non-idempotent batch update was partially applied, and retrying could double-apply edits.
+The timeout and retry settings apply to two paths; they are not applied to every Google API request:
+
+- The retry-wrapped content insertion performed by `createGoogleDoc` uses `--api-timeout` per attempt with up to `--retry-max` retries. 500 and 502 are deliberately not retried: a 5xx raised after the request reached Google may mean a non-idempotent batch update was partially applied, and retrying could double-apply edits.
+- OAuth access-token refreshes (local OAuth accounts, team members, and an external refresh token) use `--token-refresh-timeout` per attempt and are retried at most once, with `--retry-base-delay` backoff; `--retry-max=0` disables that retry too. A refresh that stalls through both attempts fails the current call with an explicit error instead of hanging every call on the server until Google answers. With the defaults, that is about 31 seconds at worst. A larger timeout suits a slow proxy; `0` restores the previous unbounded wait.
 
 Flags are read from the server's own command line. For a client that launches the server over stdio, append them to the `args` array after the package name:
 
@@ -68,6 +72,7 @@ Supported scope aliases are `drive`, `drive.file`, `drive.readonly`, `documents`
 |---|---:|---|
 | `GOOGLE_DRIVE_MCP_DISABLE_RESOURCES` | false | Disable MCP resources; accepts `1/0`, `true/false`, `yes/no`, or `on/off` |
 | `GOOGLE_DRIVE_MCP_API_TIMEOUT` | `120000` | Fallback for `--api-timeout` |
+| `GOOGLE_DRIVE_MCP_TOKEN_REFRESH_TIMEOUT` | `15000` | Fallback for `--token-refresh-timeout` |
 | `GOOGLE_DRIVE_MCP_RETRY_MAX` | `3` | Fallback for `--retry-max` |
 | `GOOGLE_DRIVE_MCP_RETRY_BASE_DELAY` | `1000` | Fallback for `--retry-base-delay` |
 

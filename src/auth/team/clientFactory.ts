@@ -12,18 +12,16 @@
 
 import { OAuth2Client } from 'google-auth-library';
 import { calendar_v3, drive_v3, google } from 'googleapis';
+import { TimeoutError } from '../../utils/retry.js';
+import {
+  DEFAULT_TOKEN_REFRESH_CONFIG,
+  isInvalidGrant,
+  REFRESH_BUFFER_MS,
+  refreshAccessTokenBounded,
+  type TokenRefreshConfig,
+} from '../tokenRefresh.js';
 import { describeErrorForLog } from '../utils.js';
 import { TeamStore, TeamUserRecord } from './types.js';
-
-/** Buffer before access-token expiry that triggers a refresh (ms). */
-const REFRESH_BUFFER_MS = 5 * 60 * 1000;
-
-function isInvalidGrant(err: unknown): boolean {
-  if (!err || typeof err !== 'object') return false;
-  const e = err as { response?: { data?: { error?: unknown } }; message?: unknown };
-  if (e.response?.data?.error === 'invalid_grant') return true;
-  return typeof e.message === 'string' && e.message.includes('invalid_grant');
-}
 
 function reauthErrorMessage(email: string): string {
   return (
@@ -41,6 +39,7 @@ export class TeamClientFactory {
   constructor(
     private readonly store: TeamStore,
     private readonly credentials: { client_id: string; client_secret: string },
+    private readonly refreshConfig: TokenRefreshConfig = DEFAULT_TOKEN_REFRESH_CONFIG,
   ) {}
 
   async getClient(sub: string): Promise<OAuth2Client> {
@@ -136,7 +135,13 @@ export class TeamClientFactory {
 
     const p = (async () => {
       try {
-        const { credentials } = await client.refreshAccessToken();
+        const credentials = await refreshAccessTokenBounded(
+          client,
+          this.refreshConfig,
+          user.email,
+          (message, data) =>
+            console.error(`[team-auth] ${message}${data ? ` ${JSON.stringify(data)}` : ''}`),
+        );
         if (!credentials.access_token) {
           throw new Error('Token refresh returned no access_token.');
         }
@@ -144,6 +149,20 @@ export class TeamClientFactory {
         if (isInvalidGrant(err)) {
           await this.handleRevokedGrant(sub, user);
           throw new Error(reauthErrorMessage(user.email));
+        }
+        if (err instanceof TimeoutError) {
+          // The token endpoint stalled through every attempt: a server-side
+          // connectivity problem, not a dead grant, so the record is left alone.
+          // Fail fast rather than swallow — the caller's API request would
+          // otherwise stall on the same endpoint via the implicit refresh (#169).
+          throw Object.assign(
+            new Error(
+              `Could not refresh Google credentials for ${user.email}: Google's token ` +
+                `endpoint did not respond within ${this.refreshConfig.tokenRefreshTimeout}ms. ` +
+                `This is a connectivity problem on the server, not a revoked grant — retry shortly.`,
+            ),
+            { cause: err },
+          );
         }
         console.error(`[team-auth] Google token refresh failed: ${describeErrorForLog(err)}`);
         // Transient failure — let the caller's API call surface it.

@@ -14,6 +14,7 @@ import { FileTeamStore } from './fileStore.js';
 import { GoogleIdp, GoogleIdpClient } from './googleIdp.js';
 import { InMemoryTeamStore } from './memoryStore.js';
 import { TeamOAuthProvider } from './provider.js';
+import type { TokenRefreshConfig } from '../tokenRefresh.js';
 import type { TeamStore } from './types.js';
 
 const SWEEP_INTERVAL_MS = 60 * 1000;
@@ -37,6 +38,9 @@ export interface TeamRuntimeOverrides {
   /** Google OAuth client pair for the per-user client factory. Defaults to the
    * loaded web credentials; tests with a fake IdP get inert placeholders. */
   clientCredentials?: { client_id: string; client_secret: string };
+  /** Timeout/retry policy for per-user Google token refreshes (the runtime
+   * config's `tokenRefreshTimeout` / `retryMax` / `retryBaseDelay`). */
+  tokenRefresh?: TokenRefreshConfig;
 }
 
 export async function createTeamRuntime(
@@ -64,7 +68,7 @@ export async function createTeamRuntime(
   credentials ??= { client_id: 'unused-test-client', client_secret: 'unused-test-secret' };
 
   const provider = new TeamOAuthProvider({ store, idp, config });
-  const clientFactory = new TeamClientFactory(store, credentials);
+  const clientFactory = new TeamClientFactory(store, credentials, overrides.tokenRefresh);
   const callbackHandler = makeGoogleCallbackHandler({
     store,
     idp,

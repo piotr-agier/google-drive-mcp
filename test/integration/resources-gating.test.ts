@@ -19,6 +19,7 @@ import { createAllMocks } from '../helpers/mock-google-apis.js';
 
 const BASE_CONFIG = {
   apiTimeout: 120_000,
+  tokenRefreshTimeout: 15_000,
   retryMax: 3,
   retryBaseDelay: 1_000,
   disableResources: false,

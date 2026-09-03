@@ -147,6 +147,11 @@ docker build -t google-drive-mcp .
 
 The Dockerfile expects the `dist/` directory to exist from your local build.
 
+### "Google's token endpoint did not respond within 15000ms"
+**Problem:** An access-token refresh stalled. The server gives each refresh attempt 15 seconds and retries once, then fails the call with this message rather than leaving every call waiting on the stalled request. It is a connectivity problem between the server and `oauth2.googleapis.com` (a proxy, a firewall, or a dropped connection), not a revoked grant.
+
+**Solution:** Retry the call; a transient stall clears on its own. If it keeps happening behind a slow proxy, raise the limit with `--token-refresh-timeout=<ms>` (or `GOOGLE_DRIVE_MCP_TOKEN_REFRESH_TIMEOUT`), and check that the server can reach `https://oauth2.googleapis.com/token` directly.
+
 ### "Token refresh failed" in Docker
 **Problem:** Tokens can't refresh inside the container.
 

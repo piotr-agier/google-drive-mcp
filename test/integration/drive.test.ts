@@ -323,6 +323,23 @@ describe('Drive tools', () => {
       assert.ok(text.endsWith('Hello World'));
     });
 
+    it('reads content delivered as a web ReadableStream (gaxios 7 shape)', async () => {
+      ctx.mocks.drive.service.files.get._setImpl(async (p: any) =>
+        p?.alt === 'media'
+          ? {
+              data: new ReadableStream<Uint8Array>({
+                start(controller) {
+                  controller.enqueue(new TextEncoder().encode('Hello Web'));
+                  controller.close();
+                },
+              }),
+            }
+          : { data: { id: 'file-1', name: 'notes.txt', mimeType: 'text/plain', parents: ['root'] } });
+      const res = await callTool(ctx.client, 'readTextFile', { fileId: 'file-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text!.endsWith('Hello Web'));
+    });
+
     it('reports code-point Length for astral characters (emoji counts as 1)', async () => {
       stubTextFile('😀😀😀');
       const res = await callTool(ctx.client, 'readTextFile', { fileId: 'file-1' });

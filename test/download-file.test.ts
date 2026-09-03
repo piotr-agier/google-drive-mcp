@@ -10,7 +10,7 @@ import { downloadDriveFile } from '../src/download-file.js';
 type MockDriveOptions = {
   mimeType: string;
   name: string;
-  streamFactory?: () => Readable;
+  streamFactory?: () => Readable | ReadableStream<Uint8Array>;
 };
 
 function createMockDrive(options: MockDriveOptions) {
@@ -123,6 +123,34 @@ test('uses extension-based export MIME for Workspace files', async () => {
     assert.equal(calls.lastExportMime, 'text/csv');
     assert.equal(result.exportMime, 'text/csv');
     assert.equal(readFileSync(outputPath, 'utf8'), 'payload');
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('downloads a media response that is a web ReadableStream (gaxios 7 shape)', async () => {
+  const tempDir = createTempDir();
+  try {
+    const outputPath = join(tempDir, 'web-stream.txt');
+    const { drive } = createMockDrive({
+      mimeType: 'text/plain',
+      name: 'web-stream.txt',
+      streamFactory: () =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('web-payload'));
+            controller.close();
+          },
+        }),
+    });
+
+    await downloadDriveFile(
+      drive,
+      { fileId: 'file-123', localPath: outputPath },
+      () => {}
+    );
+
+    assert.equal(readFileSync(outputPath, 'utf8'), 'web-payload');
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

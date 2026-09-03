@@ -2579,7 +2579,7 @@ describe('Docs tools', () => {
       let requestedUrl = '';
       ctx.setAuthRequest(async (opts: any) => {
         requestedUrl = opts.url;
-        return { data: pngArrayBuffer(), headers: { 'content-type': 'image/png' } };
+        return { data: pngArrayBuffer(), headers: new Headers({ 'content-type': 'image/png' }) };
       });
       const res = await callTool(ctx.client, 'getGoogleDocImage', { documentId: 'doc-1', inlineObjectId: 'obj-1' });
       assert.equal(res.isError, false);
@@ -2591,15 +2591,26 @@ describe('Docs tools', () => {
 
     it('strips charset from the content-type header', async () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: imageDocData }));
-      ctx.setAuthRequest(async () => ({ data: pngArrayBuffer(), headers: { 'content-type': 'image/jpeg; charset=binary' } }));
+      ctx.setAuthRequest(async () => ({ data: pngArrayBuffer(), headers: new Headers({ 'content-type': 'image/jpeg; charset=binary' }) }));
       const res = await callTool(ctx.client, 'getGoogleDocImage', { documentId: 'doc-1', inlineObjectId: 'obj-1' });
       assert.equal(res.isError, false);
       assert.equal(res.content[0].mimeType, 'image/jpeg');
     });
 
+    // gaxios 7 returns a Headers instance (see test/gaxios-contract.test.ts); the
+    // doubles above use it. This one keeps the legacy plain-object shape covered,
+    // since getResponseHeader() accepts both.
+    it('reads a plain-object content-type header (pre-gaxios-7 shape)', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: imageDocData }));
+      ctx.setAuthRequest(async () => ({ data: pngArrayBuffer(), headers: { 'content-type': 'image/gif' } }));
+      const res = await callTool(ctx.client, 'getGoogleDocImage', { documentId: 'doc-1', inlineObjectId: 'obj-1' });
+      assert.equal(res.isError, false);
+      assert.equal(res.content[0].mimeType, 'image/gif');
+    });
+
     it('returns a base64 JSON envelope when outputFormat=base64', async () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: imageDocData }));
-      ctx.setAuthRequest(async () => ({ data: pngArrayBuffer(), headers: { 'content-type': 'image/png' } }));
+      ctx.setAuthRequest(async () => ({ data: pngArrayBuffer(), headers: new Headers({ 'content-type': 'image/png' }) }));
       const res = await callTool(ctx.client, 'getGoogleDocImage', { documentId: 'doc-1', inlineObjectId: 'obj-1', outputFormat: 'base64' });
       assert.equal(res.isError, false);
       assert.equal(res.content[0].type, 'text');
@@ -2635,7 +2646,7 @@ describe('Docs tools', () => {
       let requestedUrl = '';
       ctx.setAuthRequest(async (opts: any) => {
         requestedUrl = opts.url;
-        return { data: pngArrayBuffer(), headers: { 'content-type': 'image/png' } };
+        return { data: pngArrayBuffer(), headers: new Headers({ 'content-type': 'image/png' }) };
       });
       const res = await callTool(ctx.client, 'getGoogleDocImage', { documentId: 'doc-1', inlineObjectId: 'obj-2' });
       assert.equal(res.isError, false);
@@ -2688,7 +2699,7 @@ describe('Docs tools', () => {
     it('reports a non-contradictory decimal size when the image exceeds the 40 MB cap', async () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: imageDocData }));
       const oversized = new Uint8Array(42257613).buffer; // ~40.3 MB, just over the 40 MB cap
-      ctx.setAuthRequest(async () => ({ data: oversized, headers: { 'content-type': 'image/png' } }));
+      ctx.setAuthRequest(async () => ({ data: oversized, headers: new Headers({ 'content-type': 'image/png' }) }));
       const res = await callTool(ctx.client, 'getGoogleDocImage', { documentId: 'doc-1', inlineObjectId: 'obj-1' });
       assert.equal(res.isError, true);
       const text = res.content[0].text!;

@@ -7,6 +7,7 @@ import { escapeDriveQuery, isTextMime, ALL_DRIVES_LIST_PARAMS, DRIVE_ORDER_BY_VA
 import { downloadTextContent, writeTextContent } from './text-content.js';
 import { uploadImageToDrive } from '../utils/driveImageUpload.js';
 import { withRetry } from '../utils/retry.js';
+import { getResponseHeader } from '../utils/streams.js';
 
 // ---------------------------------------------------------------------------
 // Helper functions
@@ -594,8 +595,10 @@ async function executeBatchUpdate(ctx: ToolContext, documentId: string, requests
     return response.data;
   } catch (error: any) {
     ctx.log('Google Docs batchUpdate error:', error.message);
-    if (error.code === 404) throw new Error(`Document not found (ID: ${documentId})`);
-    if (error.code === 403) throw new Error(`Permission denied for document (ID: ${documentId})`);
+    // gaxios 7 only sets a numeric `code` for AIP-193-shaped errors; `status`
+    // is the reliable field. Keep `code` for gaxios-6-shaped callers/mocks.
+    if ((error.status ?? error.code) === 404) throw new Error(`Document not found (ID: ${documentId})`);
+    if ((error.status ?? error.code) === 403) throw new Error(`Permission denied for document (ID: ${documentId})`);
     throw new Error(`Google Docs API Error: ${error.message}`);
   }
 }
@@ -731,7 +734,7 @@ async function findTextRange(ctx: ToolContext, documentId: string, textToFind: s
     return null;
   } catch (error: any) {
     ctx.log('Error finding text in document:', error.message);
-    if (error.code === 404) throw new Error(`Document not found (ID: ${documentId})`);
+    if ((error.status ?? error.code) === 404) throw new Error(`Document not found (ID: ${documentId})`);
     throw new Error(`Failed to search document: ${error.message}`);
   }
 }
@@ -2700,7 +2703,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         );
       }
 
-      const rawContentType = (resp.headers?.['content-type'] as string | undefined) || 'application/octet-stream';
+      const rawContentType = getResponseHeader(resp.headers, 'content-type') || 'application/octet-stream';
       const mimeType = rawContentType.split(';')[0].trim();
       const dataBase64 = buffer.toString('base64');
 

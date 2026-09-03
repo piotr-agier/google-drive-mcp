@@ -2,6 +2,7 @@
 // External authentication modes: Service Account & pre-obtained OAuth tokens
 // ---------------------------------------------------------------------------
 
+import { readFileSync } from 'node:fs';
 import { OAuth2Client } from 'google-auth-library';
 import { GoogleAuth, GoogleAuthOptions } from 'google-auth-library';
 import { resolveOAuthScopes } from './scopes.js';
@@ -99,6 +100,78 @@ export function buildServiceAccountAuthOptions(): GoogleAuthOptions {
 }
 
 /**
+ * Credential `type` values `GoogleAuth` accepts from a file pointed at by
+ * `GOOGLE_APPLICATION_CREDENTIALS`. It is the standard ADC variable, so it may
+ * legitimately hold more than a service-account key — e.g. the `authorized_user`
+ * file written by `gcloud auth application-default login`, or a workload-identity
+ * config. Validation below stays permissive about which of these it is.
+ */
+const ADC_CREDENTIAL_TYPES = new Set([
+  'service_account',
+  'authorized_user',
+  'external_account',
+  'external_account_authorized_user',
+  'impersonated_service_account',
+  'gdch_service_account',
+]);
+
+/**
+ * Fail fast on a malformed credentials file.
+ *
+ * google-auth-library v10 no longer rejects one: `getClient()` *resolves* with a
+ * credential-less JWT client when the file is unparseable or missing its fields
+ * (only an absent file throws). Without this guard the server would report
+ * "Service account authentication successful" while holding no credentials, and
+ * every later call would fail with a misleading `Method doesn't allow
+ * unregistered callers`. v9 surfaced this immediately, so this restores that.
+ *
+ * Read errors (ENOENT and friends) propagate untouched — they already name the
+ * path and are clear. Messages never include file contents: the file holds a
+ * private key.
+ */
+export function validateCredentialsFile(keyFile: string): void {
+  const raw = readFileSync(keyFile, 'utf-8');
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(
+      `Credentials file at ${keyFile} is not valid JSON. ` +
+        'It may be truncated or corrupted; re-download the key file.',
+    );
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`Credentials file at ${keyFile} must contain a JSON object.`);
+  }
+
+  const cred = parsed as { type?: unknown; client_email?: unknown; private_key?: unknown };
+  const type = typeof cred.type === 'string' ? cred.type : undefined;
+
+  if (type !== undefined && !ADC_CREDENTIAL_TYPES.has(type)) {
+    throw new Error(
+      `Credentials file at ${keyFile} has unrecognized type "${type}". ` +
+        `Expected one of: ${[...ADC_CREDENTIAL_TYPES].join(', ')}.`,
+    );
+  }
+
+  // Only service-account keys are checked field-by-field; the other ADC shapes
+  // carry different fields and are left to GoogleAuth.
+  if (type === 'service_account' || type === undefined) {
+    const missing = (['client_email', 'private_key'] as const).filter(
+      (f) => typeof cred[f] !== 'string' || !(cred[f] as string).trim(),
+    );
+    if (missing.length) {
+      throw new Error(
+        `Credentials file at ${keyFile} is missing required field(s): ${missing.join(', ')}. ` +
+          'A service account key needs both; re-download it from the Google Cloud console.',
+      );
+    }
+  }
+}
+
+/**
  * Create an authorized client from a service account JSON key file.
  * `GoogleAuth` handles JWT signing and token refresh automatically.
  */
@@ -109,6 +182,8 @@ export async function createServiceAccountAuth(): Promise<any> {
     `Using service account credentials from ${options.keyFile}` +
       (subject ? ` (impersonating ${subject} via domain-wide delegation)` : ''),
   );
+
+  validateCredentialsFile(options.keyFile as string);
 
   const auth = new GoogleAuth(options);
   const client = await auth.getClient();

@@ -51,6 +51,49 @@ test('retries on numeric err.status and on string err.code', async () => {
   assert.equal(calls, 3);
 });
 
+// gaxios 7 (native fetch) wraps transport failures as GaxiosError(code:
+// undefined) -> cause: TypeError('fetch failed') -> cause: undici error with
+// the real code. The retry policy must find retryable codes down that chain.
+const fetchFailedErr = (code: string) => {
+  const undiciErr = Object.assign(new Error('socket hang up'), { code });
+  const fetchErr = new TypeError('fetch failed');
+  (fetchErr as Error & { cause?: unknown }).cause = undiciErr;
+  return Object.assign(new Error('Request failed'), { cause: fetchErr });
+};
+
+test('retries a gaxios-7 transport error with the code nested in err.cause.cause', async () => {
+  for (const code of ['ECONNRESET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET']) {
+    let calls = 0;
+    const out = await withRetry(async () => {
+      calls++;
+      if (calls === 1) throw fetchFailedErr(code);
+      return 'ok';
+    }, cfg({ retryMax: 2 }));
+    assert.equal(out, 'ok');
+    assert.equal(calls, 2, `expected one retry for nested code ${code}`);
+  }
+});
+
+test('does not retry a non-retryable code nested in the cause chain', async () => {
+  let calls = 0;
+  await assert.rejects(
+    withRetry(async () => { calls++; throw fetchFailedErr('ECONNREFUSED'); }, cfg({ retryMax: 3 })),
+    /Request failed/,
+  );
+  assert.equal(calls, 1);
+});
+
+test('cause-chain walk is bounded on a cyclic cause chain', async () => {
+  const cyclic = new Error('cyclic') as Error & { cause?: unknown };
+  cyclic.cause = cyclic;
+  let calls = 0;
+  await assert.rejects(
+    withRetry(async () => { calls++; throw cyclic; }, cfg({ retryMax: 3 })),
+    /cyclic/,
+  );
+  assert.equal(calls, 1);
+});
+
 test('exhausts retryMax then throws the last error', async () => {
   let calls = 0;
   await assert.rejects(

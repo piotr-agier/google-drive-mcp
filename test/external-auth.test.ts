@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   isExternalTokenMode,
@@ -7,6 +10,7 @@ import {
   validateExternalTokenConfig,
   createExternalOAuth2Client,
   buildServiceAccountAuthOptions,
+  validateCredentialsFile,
   describeBypassedTokens,
 } from '../src/auth/externalAuth.js';
 import { SCOPE_ALIASES } from '../src/auth/scopes.js';
@@ -274,3 +278,100 @@ test('describeBypassedTokens tells the user to unset BOTH override vars when bot
     );
   },
 ));
+
+// ---------------------------------------------------------------------------
+// validateCredentialsFile
+//
+// google-auth-library v10 stopped rejecting malformed credentials files:
+// getClient() resolves with a credential-less JWT client, so the server would
+// claim "authentication successful" and then fail every call with a misleading
+// "unregistered callers" error. These pin the fail-fast guard that restores v9
+// behavior — and pin that it stays permissive toward non-service-account ADC
+// files, which GOOGLE_APPLICATION_CREDENTIALS may legitimately point at.
+// ---------------------------------------------------------------------------
+
+const PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nsuper-secret-key-material\n-----END PRIVATE KEY-----\n';
+
+function writeCredFile(contents: string): string {
+  const dir = mkdtempSync(join(tmpdir(), 'gdrive-mcp-cred-'));
+  const file = join(dir, 'creds.json');
+  writeFileSync(file, contents);
+  return file;
+}
+
+test('validateCredentialsFile accepts a well-formed service account key', () => {
+  const file = writeCredFile(JSON.stringify({
+    type: 'service_account',
+    client_email: 'sa@example.iam.gserviceaccount.com',
+    private_key: PRIVATE_KEY,
+  }));
+  assert.doesNotThrow(() => validateCredentialsFile(file));
+});
+
+test('validateCredentialsFile rejects invalid JSON naming the file', () => {
+  const file = writeCredFile('{ this is not valid json ');
+  assert.throws(() => validateCredentialsFile(file), (err: Error) => {
+    assert.match(err.message, /not valid JSON/);
+    assert.ok(err.message.includes(file), 'error should name the offending file');
+    return true;
+  });
+});
+
+test('validateCredentialsFile rejects a service account key missing its fields', () => {
+  const file = writeCredFile(JSON.stringify({ type: 'service_account' }));
+  assert.throws(() => validateCredentialsFile(file), (err: Error) => {
+    assert.match(err.message, /client_email/);
+    assert.match(err.message, /private_key/);
+    return true;
+  });
+});
+
+test('validateCredentialsFile rejects a bare JSON object with no credential fields', () => {
+  const file = writeCredFile(JSON.stringify({ not: 'a valid sa key' }));
+  assert.throws(() => validateCredentialsFile(file), /missing required field/);
+});
+
+test('validateCredentialsFile rejects a non-object and an unknown type', () => {
+  assert.throws(() => validateCredentialsFile(writeCredFile('["array"]')), /must contain a JSON object/);
+  assert.throws(
+    () => validateCredentialsFile(writeCredFile(JSON.stringify({ type: 'not_a_real_type' }))),
+    /unrecognized type/,
+  );
+});
+
+test('validateCredentialsFile accepts non-service-account ADC credential types', () => {
+  // `gcloud auth application-default login` writes an authorized_user file;
+  // workload identity writes external_account. Neither carries client_email,
+  // and both are valid targets for GOOGLE_APPLICATION_CREDENTIALS.
+  const authorizedUser = writeCredFile(JSON.stringify({
+    type: 'authorized_user',
+    client_id: 'x.apps.googleusercontent.com',
+    client_secret: 'shh',
+    refresh_token: '1//token',
+  }));
+  assert.doesNotThrow(() => validateCredentialsFile(authorizedUser));
+
+  const externalAccount = writeCredFile(JSON.stringify({
+    type: 'external_account',
+    audience: '//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/x',
+    subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
+    token_url: 'https://sts.googleapis.com/v1/token',
+  }));
+  assert.doesNotThrow(() => validateCredentialsFile(externalAccount));
+});
+
+test('validateCredentialsFile never echoes key material into the error', () => {
+  // The file holds a private key; a validation error must not leak it.
+  const file = writeCredFile(JSON.stringify({ type: 'service_account', private_key: PRIVATE_KEY }));
+  assert.throws(() => validateCredentialsFile(file), (err: Error) => {
+    assert.ok(!err.message.includes('super-secret-key-material'), 'key material leaked into error');
+    return true;
+  });
+});
+
+test('validateCredentialsFile lets a missing file surface as ENOENT', () => {
+  assert.throws(
+    () => validateCredentialsFile(join(tmpdir(), 'gdrive-mcp-definitely-missing.json')),
+    /ENOENT/,
+  );
+});

@@ -1067,7 +1067,7 @@ export interface DocxContextResult {
  * Build formatted content with indices from a Google Doc document data object.
  * Returns the formatted string and total character length.
  */
-function buildDocFormattedContent(
+export function buildDocFormattedContent(
   docData: any,
   withFormatting: boolean
 ): { formattedContent: string; totalLength: number } {
@@ -1079,6 +1079,11 @@ function buildDocFormattedContent(
     // rules) whose rendered text length is unrelated to their real doc span, so
     // the displayed edit range must use [startIndex, endIndex), not text length.
     atomic?: boolean;
+    // True for multi-line renderings (tables) whose text is a *rendering*, not
+    // index-mapped content: emit one real [startIndex-endIndex) span for the
+    // whole element and never derive per-line ranges from rendered lengths —
+    // doing so fabricated overlapping indices for 2nd/3rd tables in a doc.
+    spanOnly?: boolean;
     fontFamily?: string;
     fontSize?: number;
     bold?: boolean;
@@ -1160,6 +1165,7 @@ function buildDocFormattedContent(
               text: md,
               startIndex: element.startIndex,
               endIndex: element.endIndex,
+              spanOnly: true,
             });
           }
         } else if (element.tableOfContents?.content) {
@@ -1187,6 +1193,17 @@ function buildDocFormattedContent(
           result += meta
             ? `[${segment.startIndex}-${segment.endIndex}] ${meta}\n  ${line}\n`
             : `[${segment.startIndex}-${segment.endIndex}] ${line}\n`;
+        }
+        continue;
+      }
+      // Tables: the markdown below is a rendering, not index-mapped content —
+      // one real span for the element, no fabricated per-row ranges. Cell
+      // indices live in documents.get; targeting a cell needs the table's real
+      // startIndex (this one) with editTableCell's row/column addressing.
+      if (segment.spanOnly) {
+        const body = segment.text.replace(/\n+$/, '');
+        if (body.trim()) {
+          result += `[${segment.startIndex}-${segment.endIndex}] <table — span is the real index range; rows below are a rendering, use editTableCell (tableStartIndex=${segment.startIndex}) for cell edits>\n${body}\n`;
         }
         continue;
       }

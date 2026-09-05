@@ -126,7 +126,7 @@ CLI flags take priority over environment variables.
 | `--port` | `MCP_HTTP_PORT` | `3100` | HTTP listen port |
 | `--host` | `MCP_HTTP_HOST` | `127.0.0.1` | HTTP bind address |
 
-The HTTP endpoint is `POST /mcp` for JSON-RPC requests, `GET /mcp` for SSE streaming, and `DELETE /mcp` to close a session. After the initial `initialize` request, all subsequent requests must include the `mcp-session-id` header returned in the initialize response.
+The HTTP endpoint is `POST /mcp` for JSON-RPC requests, `GET /mcp` for SSE streaming, and `DELETE /mcp` to close a session. After the initial `initialize` request, all subsequent requests must include the `mcp-session-id` header returned in the initialize response. A session is evicted after 30 idle minutes; a request that then presents its id receives HTTP 404 with JSON-RPC error `-32001` (`Session not found`), which tells the client to start a new session with `initialize`. Omitting the header where one is required is a 400.
 
 When binding to `127.0.0.1` (default), DNS rebinding protection is automatically enabled. For remote deployments (`0.0.0.0`), prefer [Team Mode](#team-mode-multi-user-http-deployments), which authenticates every request with per-user OAuth; a single-identity remote deployment (service account or external token) must sit behind a reverse proxy with TLS and its own access control. **Without authentication and TLS, anyone who can reach the port gets full access to the configured Google Drive account.**
 

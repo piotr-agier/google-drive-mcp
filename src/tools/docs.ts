@@ -1587,16 +1587,28 @@ const InsertTextSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
   text: z.string().min(1, "Text to insert is required"),
   // Google Docs use 1-based indexes; text files use 0-based offsets — accept both, validate at runtime.
-  index: z.number().int().min(0, "Index must be non-negative"),
+  index: z.number().int().min(0, "Index must be non-negative").optional(),
+  textToFind: z.string().min(1).optional(),
+  matchInstance: z.number().int().min(1).optional().default(1),
+  position: z.enum(['before', 'after']).optional().default('after'),
   tabId: z.string().optional()
+}).refine(data => (data.index !== undefined) !== (data.textToFind !== undefined), {
+  message: "Provide exactly one of index or textToFind"
 });
 
 const DeleteRangeSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
-  startIndex: z.number().int().min(0, "Start index must be non-negative"),
-  endIndex: z.number().int().min(0, "End index must be non-negative"),
+  startIndex: z.number().int().min(0, "Start index must be non-negative").optional(),
+  endIndex: z.number().int().min(0, "End index must be non-negative").optional(),
+  textToFind: z.string().min(1).optional(),
+  matchInstance: z.number().int().min(1).optional().default(1),
   tabId: z.string().optional()
-}).refine(data => data.endIndex > data.startIndex, {
+}).refine(data => {
+  const hasIndices = data.startIndex !== undefined && data.endIndex !== undefined;
+  return hasIndices !== (data.textToFind !== undefined);
+}, {
+  message: "Provide either startIndex+endIndex or textToFind"
+}).refine(data => data.startIndex === undefined || data.endIndex === undefined || data.endIndex > data.startIndex, {
   message: "End index must be greater than start index",
   path: ["endIndex"]
 });
@@ -1869,10 +1881,13 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         documentId: { type: "string", description: "The Google Doc or text file ID" },
         text: { type: "string", description: "Text to insert" },
-        index: { type: "number", description: "Position to insert at. Google Docs: 1-based Docs API structural index. Text files: 0-based Unicode code point (character) offset." },
+        index: { type: "number", description: "Position to insert at. Google Docs: 1-based Docs API structural index. Text files: 0-based Unicode code point (character) offset. Provide exactly one of index or textToFind." },
+        textToFind: { type: "string", description: "Google Docs only: locate the insertion point by text instead of index. Combine with position (before/after) and matchInstance." },
+        matchInstance: { type: "number", description: "Which instance of textToFind (default: 1)" },
+        position: { type: "string", enum: ["before", "after"], description: "Insert before or after the matched text (default: after). Only used with textToFind." },
         tabId: { type: "string", description: "Optional. Google Docs only — Tab ID to insert into (from listDocumentTabs). If omitted, inserts into the first/default tab. Not supported on text files." }
       },
-      required: ["documentId", "text", "index"]
+      required: ["documentId", "text"]
     }
   },
   {
@@ -1882,11 +1897,13 @@ export const toolDefinitions: ToolDefinition[] = [
       type: "object",
       properties: {
         documentId: { type: "string", description: "The Google Doc or text file ID" },
-        startIndex: { type: "number", description: "Start index (inclusive). Google Docs: 1-based Docs API structural index. Text files: 0-based Unicode code point (character) offset." },
+        startIndex: { type: "number", description: "Start index (inclusive). Google Docs: 1-based Docs API structural index. Text files: 0-based Unicode code point (character) offset. Provide startIndex+endIndex or textToFind." },
         endIndex: { type: "number", description: "End index (exclusive). Google Docs: 1-based Docs API structural index. Text files: 0-based Unicode code point (character) offset." },
+        textToFind: { type: "string", description: "Google Docs only: delete the matched text instead of an index range. Combine with matchInstance." },
+        matchInstance: { type: "number", description: "Which instance of textToFind (default: 1)" },
         tabId: { type: "string", description: "Optional. Google Docs only — Tab ID to delete from (from listDocumentTabs). If omitted, deletes from the first/default tab. Not supported on text files." }
       },
-      required: ["documentId", "startIndex", "endIndex"]
+      required: ["documentId"]
     }
   },
   {
@@ -2764,10 +2781,25 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
 
       if (mimeType === 'application/vnd.google-apps.document') {
-        if (a.index < 1) {
+        let index: number;
+        let targetNote = '';
+        if (a.textToFind !== undefined) {
+          const range = await findTextRange(ctx, a.documentId, a.textToFind, a.matchInstance, a.tabId);
+          if (range && 'error' in range) {
+            return errorResponse(range.error);
+          }
+          if (!range) {
+            return errorResponse(`Text "${a.textToFind}" not found in document`);
+          }
+          index = a.position === 'before' ? range.startIndex : range.endIndex;
+          targetNote = ` (${a.position} "${a.textToFind}"${a.matchInstance > 1 ? ` match ${a.matchInstance}` : ''})`;
+        } else {
+          index = a.index!;
+        }
+        if (index < 1) {
           return errorResponse('For Google Docs, index must be at least 1 (1-based).');
         }
-        const location: { index: number; tabId?: string } = { index: a.index };
+        const location: { index: number; tabId?: string } = { index };
         if (a.tabId) location.tabId = a.tabId;
 
         const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
@@ -2784,7 +2816,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         });
 
         return {
-          content: [{ type: "text", text: `Successfully inserted ${a.text.length} characters at index ${a.index}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
+          content: [{ type: "text", text: `Successfully inserted ${a.text.length} characters at index ${index}${targetNote}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
           isError: false
         };
       }
@@ -2793,6 +2825,9 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         if (a.tabId) {
           return errorResponse('tabId is not supported for text files');
         }
+        if (a.textToFind !== undefined) {
+          return errorResponse('textToFind targeting is only supported on Google Docs — pass a 0-based index for text files');
+        }
 
         const content = await downloadTextContent(ctx.getDrive(), a.documentId);
         // Index offsets are 0-based Unicode code points, so edit on the code-point
@@ -2800,7 +2835,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         // pair and corrupt astral characters (emoji) on write-back.
         const codePoints = Array.from(content);
 
-        if (a.index > codePoints.length) {
+        if (a.index! > codePoints.length) {
           return errorResponse(`index ${a.index} is beyond end of file (length ${codePoints.length})`);
         }
 
@@ -2825,10 +2860,6 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
       const a = validation.data;
 
-      if (a.endIndex <= a.startIndex) {
-        return errorResponse("endIndex must be greater than startIndex");
-      }
-
       let mimeType = '';
       let fileName = 'unknown';
       try {
@@ -2847,12 +2878,30 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
 
       if (mimeType === 'application/vnd.google-apps.document') {
-        if (a.startIndex < 1) {
+        let startIndex: number;
+        let endIndex: number;
+        let targetNote = '';
+        if (a.textToFind !== undefined) {
+          const found = await findTextRange(ctx, a.documentId, a.textToFind, a.matchInstance, a.tabId);
+          if (found && 'error' in found) {
+            return errorResponse(found.error);
+          }
+          if (!found) {
+            return errorResponse(`Text "${a.textToFind}" not found in document`);
+          }
+          startIndex = found.startIndex;
+          endIndex = found.endIndex;
+          targetNote = ` ("${a.textToFind}"${a.matchInstance > 1 ? ` match ${a.matchInstance}` : ''})`;
+        } else {
+          startIndex = a.startIndex!;
+          endIndex = a.endIndex!;
+        }
+        if (startIndex < 1) {
           return errorResponse('For Google Docs, startIndex must be at least 1 (1-based).');
         }
         const range: { startIndex: number; endIndex: number; tabId?: string } = {
-          startIndex: a.startIndex,
-          endIndex: a.endIndex
+          startIndex,
+          endIndex
         };
         if (a.tabId) range.tabId = a.tabId;
 
@@ -2867,7 +2916,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         });
 
         return {
-          content: [{ type: "text", text: `Successfully deleted content from index ${a.startIndex} to ${a.endIndex}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
+          content: [{ type: "text", text: `Successfully deleted content from index ${startIndex} to ${endIndex}${targetNote}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
           isError: false
         };
       }
@@ -2876,22 +2925,27 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         if (a.tabId) {
           return errorResponse('tabId is not supported for text files');
         }
+        if (a.textToFind !== undefined) {
+          return errorResponse('textToFind targeting is only supported on Google Docs — pass 0-based startIndex/endIndex for text files');
+        }
 
+        const startIndex = a.startIndex!;
+        const endIndex = a.endIndex!;
         const content = await downloadTextContent(ctx.getDrive(), a.documentId);
         // Offsets are 0-based Unicode code points, so edit on the code-point array
         // — slicing the raw JS string (UTF-16 units) would split a surrogate pair
         // and corrupt astral characters (emoji) on write-back.
         const codePoints = Array.from(content);
 
-        if (a.endIndex > codePoints.length) {
-          return errorResponse(`endIndex ${a.endIndex} is beyond end of file (length ${codePoints.length})`);
+        if (endIndex > codePoints.length) {
+          return errorResponse(`endIndex ${endIndex} is beyond end of file (length ${codePoints.length})`);
         }
 
-        const updated = codePoints.slice(0, a.startIndex).join('') + codePoints.slice(a.endIndex).join('');
+        const updated = codePoints.slice(0, startIndex).join('') + codePoints.slice(endIndex).join('');
         await writeTextContent(ctx.getDrive(), a.documentId, mimeType, updated);
 
         return {
-          content: [{ type: "text", text: `Successfully deleted ${a.endIndex - a.startIndex} characters from offset ${a.startIndex} to ${a.endIndex} in ${fileName}` }],
+          content: [{ type: "text", text: `Successfully deleted ${endIndex - startIndex} characters from offset ${startIndex} to ${endIndex} in ${fileName}` }],
           isError: false
         };
       }

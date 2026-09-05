@@ -301,6 +301,39 @@ describe('Docs tools', () => {
       assert.ok(res.content[0].text!.includes('1-based'));
     });
 
+    it('textToFind inserts after the match by default and before with position', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          body: { content: [{ paragraph: { elements: [{ textRun: { content: 'Hello target world\n' }, startIndex: 1, endIndex: 20 }] } }] },
+        },
+      }));
+
+      const after = await callTool(ctx.client, 'insertText', { documentId: 'doc-1', text: '!', textToFind: 'target' });
+      assert.equal(after.isError, false);
+      let calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
+      // "target" spans doc indices 7-13, so after = 13.
+      assert.equal(calls[calls.length - 1].args[0].requestBody.requests[0].insertText.location.index, 13);
+
+      const before = await callTool(ctx.client, 'insertText', { documentId: 'doc-1', text: '>', textToFind: 'target', position: 'before' });
+      assert.equal(before.isError, false);
+      calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
+      assert.equal(calls[calls.length - 1].args[0].requestBody.requests[0].insertText.location.index, 7);
+    });
+
+    it('textToFind not found is an error, and index+textToFind together are refused', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: { documentId: 'doc-1', body: { content: [] } },
+      }));
+      const missing = await callTool(ctx.client, 'insertText', { documentId: 'doc-1', text: 'x', textToFind: 'nope' });
+      assert.equal(missing.isError, true);
+      assert.ok(missing.content[0].text!.includes('not found'));
+
+      const both = await callTool(ctx.client, 'insertText', { documentId: 'doc-1', text: 'x', index: 1, textToFind: 'y' });
+      assert.equal(both.isError, true);
+      assert.ok(both.content[0].text!.includes('exactly one'));
+    });
+
     it('validation error', async () => {
       const res = await callTool(ctx.client, 'insertText', {});
       assert.equal(res.isError, true);
@@ -345,6 +378,26 @@ describe('Docs tools', () => {
       const res = await callTool(ctx.client, 'deleteRange', { documentId: 'doc-1', startIndex: 0, endIndex: 3 });
       assert.equal(res.isError, true);
       assert.ok(res.content[0].text!.includes('1-based'));
+    });
+
+    it('textToFind deletes the matched range', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          body: { content: [{ paragraph: { elements: [{ textRun: { content: 'keep DELETE keep\n' }, startIndex: 1, endIndex: 18 }] } }] },
+        },
+      }));
+      const res = await callTool(ctx.client, 'deleteRange', { documentId: 'doc-1', textToFind: 'DELETE ' });
+      assert.equal(res.isError, false);
+      const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
+      const range = calls[calls.length - 1].args[0].requestBody.requests[0].deleteContentRange.range;
+      // "DELETE " spans doc indices 6-13.
+      assert.deepEqual({ startIndex: range.startIndex, endIndex: range.endIndex }, { startIndex: 6, endIndex: 13 });
+    });
+
+    it('refuses indices and textToFind together', async () => {
+      const res = await callTool(ctx.client, 'deleteRange', { documentId: 'doc-1', startIndex: 1, endIndex: 3, textToFind: 'x' });
+      assert.equal(res.isError, true);
     });
 
     it('validation error', async () => {

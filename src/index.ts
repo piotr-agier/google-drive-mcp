@@ -1370,6 +1370,40 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
     }, idleTimeoutMs));
   }
 
+  /**
+   * Reject a request that did not reach a live session of the caller's.
+   *
+   * Streamable HTTP distinguishes the two cases: a request that presents an
+   * `Mcp-Session-Id` the server no longer knows (evicted, closed, or never
+   * issued) gets 404 so the client starts a new session with `initialize`,
+   * whereas a request that omits the header where one is required gets 400.
+   * Answering an expired session with 400 leaves compliant clients stuck,
+   * failing every call until the user reconnects by hand. The 404 body uses
+   * the SDK's own code and message so clients see one shape either way.
+   *
+   * Team mode routes a foreign user's session id through the same 404 as an
+   * unknown one, so the id's existence cannot be probed.
+   */
+  function rejectSession(
+    res: { status(code: number): { json(body: unknown): unknown } },
+    sessionId: string | undefined,
+    missingHeaderMessage: string,
+  ): void {
+    if (sessionId) {
+      res.status(404).json({
+        jsonrpc: '2.0',
+        error: { code: -32001, message: 'Session not found' },
+        id: null,
+      });
+      return;
+    }
+    res.status(400).json({
+      jsonrpc: '2.0',
+      error: { code: -32600, message: missingHeaderMessage },
+      id: null,
+    });
+  }
+
   function clearSessionTimer(sid: string) {
     const timer = sessionTimers.get(sid);
     if (timer) {
@@ -1384,7 +1418,7 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
 
       // If we have an existing session owned by this caller, delegate to it.
       // A foreign user presenting a leaked session id falls through and gets
-      // the same 400 as an unknown session.
+      // the same 404 as an unknown session.
       const existingSession = sessionId ? sessions.get(sessionId) : undefined;
       if (existingSession && sessionBelongsToCaller(existingSession, req)) {
         resetSessionTimer(sessionId!);
@@ -1392,13 +1426,11 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
         return;
       }
 
-      // New session: only accept initialize requests
+      // New session: only accept initialize requests. A stale session id on an
+      // initialize is tolerated so a client recovering from a 404 does not
+      // have to scrub the header first.
       if (!isInitializeRequest(req.body)) {
-        res.status(400).json({
-          jsonrpc: '2.0',
-          error: { code: -32600, message: 'Bad Request: expected initialize request or valid session ID' },
-          id: null,
-        });
+        rejectSession(res, sessionId, 'Bad Request: expected initialize request or valid session ID');
         return;
       }
 
@@ -1468,11 +1500,7 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
       const session = sessionId ? sessions.get(sessionId) : undefined;
       if (!session || !sessionBelongsToCaller(session, req)) {
-        res.status(400).json({
-          jsonrpc: '2.0',
-          error: { code: -32600, message: 'Bad Request: missing or invalid session ID' },
-          id: null,
-        });
+        rejectSession(res, sessionId, 'Bad Request: Mcp-Session-Id header is required');
         return;
       }
       resetSessionTimer(sessionId!);
@@ -1494,11 +1522,7 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
       const session = sessionId ? sessions.get(sessionId) : undefined;
       if (!session || !sessionBelongsToCaller(session, req)) {
-        res.status(400).json({
-          jsonrpc: '2.0',
-          error: { code: -32600, message: 'Bad Request: missing or invalid session ID' },
-          id: null,
-        });
+        rejectSession(res, sessionId, 'Bad Request: Mcp-Session-Id header is required');
         return;
       }
       await session.transport.close();

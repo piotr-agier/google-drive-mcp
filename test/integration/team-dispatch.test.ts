@@ -338,24 +338,26 @@ describe('Team mode — bearer-guarded per-user dispatch', () => {
     const bob = await signIn({ sub: 'sub-bob', email: 'bob@corp.example', scope: DRIVE_SCOPE });
     const aliceSid = await initSession(alice);
 
-    // POST with a non-initialize body: indistinguishable from an unknown session.
+    // POST with a non-initialize body: indistinguishable from an unknown
+    // session, which is a 404 "Session not found".
     const post = await mcpPost(bob, aliceSid, { jsonrpc: '2.0', method: 'tools/list', id: 2 });
-    assert.equal(post.status, 400);
+    assert.equal(post.status, 404);
     const postBody = await post.json();
-    assert.match(postBody.error.message, /expected initialize request or valid session ID/);
+    assert.equal(postBody.error.code, -32001);
+    assert.equal(postBody.error.message, 'Session not found');
 
-    // GET (SSE stream) and DELETE: same 400 as an unknown session.
+    // GET (SSE stream) and DELETE: same 404 as an unknown session.
     const get = await fetch(`${baseUrl}/mcp`, {
       headers: { Accept: 'text/event-stream', Authorization: `Bearer ${bob}`, 'mcp-session-id': aliceSid },
     });
-    assert.equal(get.status, 400);
+    assert.equal(get.status, 404);
     await get.text();
 
     const del = await fetch(`${baseUrl}/mcp`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${bob}`, 'mcp-session-id': aliceSid },
     });
-    assert.equal(del.status, 400);
+    assert.equal(del.status, 404);
     await del.text();
 
     // Alice's session survived the hijack attempts.

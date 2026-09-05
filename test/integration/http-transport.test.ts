@@ -235,8 +235,8 @@ describe('HTTP transport', () => {
         id: 2,
       }),
     });
-    // Session is gone, and it's not an initialize request, so 400
-    assert.equal(postRes.status, 400);
+    // Session is gone: 404 tells the client to start a new session.
+    assert.equal(postRes.status, 404);
   });
 });
 
@@ -303,7 +303,7 @@ describe('HTTP transport — session isolation', () => {
       headers: { ...MCP_HEADERS, 'mcp-session-id': sidA },
       body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', params: {}, id: 4 }),
     });
-    assert.equal(aRes.status, 400);
+    assert.equal(aRes.status, 404);
   });
 });
 
@@ -341,8 +341,42 @@ describe('HTTP transport — session idle timeout', () => {
       headers: { ...MCP_HEADERS, 'mcp-session-id': sid },
       body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', params: {}, id: 2 }),
     });
-    assert.equal(res.status, 400);
+    // Streamable HTTP: an unknown session id is 404, and the body carries the
+    // SDK's own code/message so clients see one shape for "start over".
+    assert.equal(res.status, 404);
+    const body = await parseResponse(res);
+    assert.equal(body.error.code, -32001);
+    assert.equal(body.error.message, 'Session not found');
     assert.equal(sessions.has(sid), false);
+  });
+
+  it('a client can recover from an evicted session by re-initializing', async () => {
+    const sid = await initializeSession(baseUrl);
+    await delay(1000);
+    assert.equal(sessions.has(sid), false);
+
+    // The spec says the client sends a fresh initialize without a session id...
+    const fresh = await initializeSession(baseUrl);
+    assert.notEqual(fresh, sid);
+    assert.ok(sessions.has(fresh));
+
+    // ...but a client that leaves the stale id on the initialize is tolerated
+    // too, rather than being bounced with a second 404.
+    const lenient = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: { ...MCP_HEADERS, 'mcp-session-id': sid },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'initialize',
+        params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test-client', version: '1.0.0' } },
+        id: 1,
+      }),
+    });
+    assert.equal(lenient.status, 200);
+    const lenientSid = lenient.headers.get('mcp-session-id');
+    await lenient.text();
+    assert.ok(lenientSid && lenientSid !== sid);
+    assert.ok(sessions.has(lenientSid!));
   });
 
   it('activity resets the idle timer', async () => {
@@ -458,20 +492,24 @@ describe('HTTP transport — error handling', () => {
     assert.ok(body.error);
   });
 
-  it('DELETE with non-existent session ID returns 400', async () => {
+  it('DELETE with non-existent session ID returns 404', async () => {
     const res = await fetch(`${baseUrl}/mcp`, {
       method: 'DELETE',
       headers: { 'mcp-session-id': 'non-existent-uuid' },
     });
-    assert.equal(res.status, 400);
+    assert.equal(res.status, 404);
+    const body = await parseResponse(res);
+    assert.equal(body.error.code, -32001);
   });
 
-  it('GET with non-existent session ID returns 400', async () => {
+  it('GET with non-existent session ID returns 404', async () => {
     const res = await fetch(`${baseUrl}/mcp`, {
       method: 'GET',
       headers: { 'mcp-session-id': 'non-existent-uuid' },
     });
-    assert.equal(res.status, 400);
+    assert.equal(res.status, 404);
+    const body = await parseResponse(res);
+    assert.equal(body.error.code, -32001);
   });
 });
 

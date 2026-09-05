@@ -256,14 +256,17 @@ This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `linkUrl`: URL for hyperlink (optional)
   - `baselineOffset`: `SUPERSCRIPT`, `SUBSCRIPT`, or `NONE` to reset to the normal baseline (optional)
 
-- **applyParagraphStyle** - Apply paragraph formatting
+- **applyParagraphStyle** - Apply paragraph formatting, including borders and shading
   - `documentId`: Document ID
   - Target (use one): `startIndex`+`endIndex` OR `textToFind`+`matchInstance` OR `indexWithinParagraph`
   - `namedStyleType`: NORMAL_TEXT, TITLE, SUBTITLE, HEADING_1 through HEADING_6 (optional)
   - `alignment`: START, CENTER, END, or JUSTIFIED (optional)
-  - `indentStart`, `indentEnd`: Indent in points (optional)
+  - `indentStart`, `indentEnd`, `indentFirstLine`: Indents in points (optional)
   - `spaceAbove`, `spaceBelow`: Spacing in points (optional)
-  - `keepWithNext`: Keep with next paragraph (optional)
+  - `keepWithNext`, `keepLinesTogether`, `avoidWidowAndOrphan`, `pageBreakBefore`: Pagination controls (optional)
+  - `borderTop`, `borderBottom`, `borderLeft`, `borderRight`, `borderBetween`: Paragraph borders, each `{ color?, width?, padding?, dashStyle? }` — hex color (default `#000000`), width/padding in points (width default 1), `SOLID`/`DOT`/`DASH` (default `SOLID`) (optional)
+  - `removeBorders`: Edges to clear — `top`, `bottom`, `left`, `right`, `between`, or `all`. The update styles every paragraph overlapping the range, so `removeBorders: ["all"]` over the whole body strips every decorative rule in one call (optional)
+  - `shading`: Paragraph background color as hex, e.g., `#F1F3F4`; `removeShading`: clear it (optional)
 
 - **formatGoogleDocText** - Alias for `applyTextStyle` (compatibility helper)
   - Same parameters as `applyTextStyle`

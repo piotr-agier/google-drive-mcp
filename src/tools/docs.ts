@@ -876,18 +876,62 @@ function buildUpdateTextStyleRequest(
   };
 }
 
+// Paragraph border edges as exposed on applyParagraphStyle. "between" is the
+// rule Docs draws between consecutive paragraphs that share identical border
+// settings.
+const PARAGRAPH_BORDER_EDGES = ['top', 'bottom', 'left', 'right', 'between'] as const;
+type ParagraphBorderEdge = (typeof PARAGRAPH_BORDER_EDGES)[number];
+
+export interface ParagraphBorderInput {
+  color?: string;
+  width?: number;
+  padding?: number;
+  dashStyle?: 'SOLID' | 'DOT' | 'DASH';
+}
+
+function borderFieldName(edge: ParagraphBorderEdge): string {
+  return `border${edge.charAt(0).toUpperCase()}${edge.slice(1)}`;
+}
+
+// Compile a border param into the API's ParagraphBorder. The API refuses a
+// partially-specified border ("Unsupported dimension unit: UNIT_UNSPECIFIED"
+// when padding is omitted), so every subfield gets a default: black, 1pt
+// wide, 1pt padding, SOLID.
+function buildParagraphBorder(input: ParagraphBorderInput): any {
+  const rgbColor = hexToRgbColor(input.color ?? '#000000');
+  if (!rgbColor) throw new Error(`Invalid border hex color: ${input.color}`);
+  return {
+    color: { color: { rgbColor } },
+    width: { magnitude: input.width ?? 1, unit: 'PT' },
+    padding: { magnitude: input.padding ?? 1, unit: 'PT' },
+    dashStyle: input.dashStyle ?? 'SOLID',
+  };
+}
+
 // Pure helper – build paragraph style update request
-function buildUpdateParagraphStyleRequest(
+export function buildUpdateParagraphStyleRequest(
   startIndex: number,
   endIndex: number,
   style: {
     alignment?: 'START' | 'END' | 'CENTER' | 'JUSTIFIED';
     indentStart?: number;
     indentEnd?: number;
+    indentFirstLine?: number;
     spaceAbove?: number;
     spaceBelow?: number;
     namedStyleType?: string;
     keepWithNext?: boolean;
+    keepLinesTogether?: boolean;
+    avoidWidowAndOrphan?: boolean;
+    pageBreakBefore?: boolean;
+    borderTop?: ParagraphBorderInput;
+    borderBottom?: ParagraphBorderInput;
+    borderLeft?: ParagraphBorderInput;
+    borderRight?: ParagraphBorderInput;
+    borderBetween?: ParagraphBorderInput;
+    removeBorders?: Array<ParagraphBorderEdge | 'all'>;
+    shading?: string;
+    removeShading?: boolean;
   },
   tabId?: string
 ): { request: any; fields: string[] } | null {
@@ -897,10 +941,41 @@ function buildUpdateParagraphStyleRequest(
   if (style.alignment !== undefined) { paragraphStyle.alignment = style.alignment; fieldsToUpdate.push('alignment'); }
   if (style.indentStart !== undefined) { paragraphStyle.indentStart = { magnitude: style.indentStart, unit: 'PT' }; fieldsToUpdate.push('indentStart'); }
   if (style.indentEnd !== undefined) { paragraphStyle.indentEnd = { magnitude: style.indentEnd, unit: 'PT' }; fieldsToUpdate.push('indentEnd'); }
+  if (style.indentFirstLine !== undefined) { paragraphStyle.indentFirstLine = { magnitude: style.indentFirstLine, unit: 'PT' }; fieldsToUpdate.push('indentFirstLine'); }
   if (style.spaceAbove !== undefined) { paragraphStyle.spaceAbove = { magnitude: style.spaceAbove, unit: 'PT' }; fieldsToUpdate.push('spaceAbove'); }
   if (style.spaceBelow !== undefined) { paragraphStyle.spaceBelow = { magnitude: style.spaceBelow, unit: 'PT' }; fieldsToUpdate.push('spaceBelow'); }
   if (style.namedStyleType !== undefined) { paragraphStyle.namedStyleType = style.namedStyleType; fieldsToUpdate.push('namedStyleType'); }
   if (style.keepWithNext !== undefined) { paragraphStyle.keepWithNext = style.keepWithNext; fieldsToUpdate.push('keepWithNext'); }
+  if (style.keepLinesTogether !== undefined) { paragraphStyle.keepLinesTogether = style.keepLinesTogether; fieldsToUpdate.push('keepLinesTogether'); }
+  if (style.avoidWidowAndOrphan !== undefined) { paragraphStyle.avoidWidowAndOrphan = style.avoidWidowAndOrphan; fieldsToUpdate.push('avoidWidowAndOrphan'); }
+  if (style.pageBreakBefore !== undefined) { paragraphStyle.pageBreakBefore = style.pageBreakBefore; fieldsToUpdate.push('pageBreakBefore'); }
+
+  // Removal rides the API's FieldMask reset semantics: naming a border field in
+  // `fields` while leaving it unset in paragraphStyle clears that border.
+  const removals = new Set<ParagraphBorderEdge>(
+    (style.removeBorders ?? []).flatMap((edge) => (edge === 'all' ? PARAGRAPH_BORDER_EDGES : [edge]))
+  );
+  for (const edge of PARAGRAPH_BORDER_EDGES) {
+    const field = borderFieldName(edge);
+    const input = style[field as 'borderTop'];
+    if (removals.has(edge)) {
+      if (input !== undefined) throw new Error(`Cannot both set and remove the ${edge} border in one call`);
+      fieldsToUpdate.push(field);
+    } else if (input !== undefined) {
+      paragraphStyle[field] = buildParagraphBorder(input);
+      fieldsToUpdate.push(field);
+    }
+  }
+
+  if (style.removeShading) {
+    if (style.shading !== undefined) throw new Error('Cannot both set and remove shading in one call');
+    fieldsToUpdate.push('shading');
+  } else if (style.shading !== undefined) {
+    const rgbColor = hexToRgbColor(style.shading);
+    if (!rgbColor) throw new Error(`Invalid shading hex color: ${style.shading}`);
+    paragraphStyle.shading = { backgroundColor: { color: { rgbColor } } };
+    fieldsToUpdate.push('shading');
+  }
 
   if (fieldsToUpdate.length === 0) return null;
 
@@ -1675,6 +1750,13 @@ const ApplyTextStyleSchema = z.object({
   tabId: z.string().optional()
 });
 
+const ParagraphBorderParamSchema = z.object({
+  color: z.string().optional(),
+  width: z.number().min(0).optional(),
+  padding: z.number().min(0).optional(),
+  dashStyle: z.enum(['SOLID', 'DOT', 'DASH']).optional(),
+});
+
 const ApplyParagraphStyleSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
   startIndex: z.number().int().min(1).optional(),
@@ -1685,10 +1767,22 @@ const ApplyParagraphStyleSchema = z.object({
   alignment: z.enum(['START', 'END', 'CENTER', 'JUSTIFIED']).optional(),
   indentStart: z.number().min(0).optional(),
   indentEnd: z.number().min(0).optional(),
+  indentFirstLine: z.number().min(0).optional(),
   spaceAbove: z.number().min(0).optional(),
   spaceBelow: z.number().min(0).optional(),
   namedStyleType: z.enum(['NORMAL_TEXT', 'TITLE', 'SUBTITLE', 'HEADING_1', 'HEADING_2', 'HEADING_3', 'HEADING_4', 'HEADING_5', 'HEADING_6']).optional(),
   keepWithNext: z.boolean().optional(),
+  keepLinesTogether: z.boolean().optional(),
+  avoidWidowAndOrphan: z.boolean().optional(),
+  pageBreakBefore: z.boolean().optional(),
+  borderTop: ParagraphBorderParamSchema.optional(),
+  borderBottom: ParagraphBorderParamSchema.optional(),
+  borderLeft: ParagraphBorderParamSchema.optional(),
+  borderRight: ParagraphBorderParamSchema.optional(),
+  borderBetween: ParagraphBorderParamSchema.optional(),
+  removeBorders: z.array(z.enum(['top', 'bottom', 'left', 'right', 'between', 'all'])).optional(),
+  shading: z.string().optional(),
+  removeShading: z.boolean().optional(),
   tabId: z.string().optional()
 });
 
@@ -1849,6 +1943,54 @@ const CreateFootnoteSchema = z.object({
 // Tool definitions
 // ---------------------------------------------------------------------------
 
+// Shared by applyParagraphStyle and its formatGoogleDocParagraph alias so the
+// two schemas cannot drift.
+function paragraphBorderProperty(edgeDescription: string) {
+  return {
+    type: "object",
+    description: `${edgeDescription} Omitted subfields default to a rendering border: color #000000, width 1pt, SOLID.`,
+    properties: {
+      color: { type: "string", description: "Hex color (e.g., #FF0000; default #000000)" },
+      width: { type: "number", description: "Line width in points (default: 1)" },
+      padding: { type: "number", description: "Space between the border and the paragraph text, in points" },
+      dashStyle: { type: "string", enum: ["SOLID", "DOT", "DASH"], description: "Line style (default: SOLID)" }
+    }
+  };
+}
+
+const applyParagraphStyleInputSchema = {
+  type: "object",
+  properties: {
+    documentId: { type: "string", description: "The document ID" },
+    startIndex: { type: "number", description: "Start index (1-based) - use with endIndex" },
+    endIndex: { type: "number", description: "End index (exclusive) - use with startIndex" },
+    textToFind: { type: "string", description: "Text within the target paragraph" },
+    matchInstance: { type: "number", description: "Which instance of textToFind (default: 1)" },
+    indexWithinParagraph: { type: "number", description: "Any index within the target paragraph" },
+    alignment: { type: "string", enum: ["START", "END", "CENTER", "JUSTIFIED"], description: "Text alignment" },
+    indentStart: { type: "number", description: "Left indent in points" },
+    indentEnd: { type: "number", description: "Right indent in points" },
+    indentFirstLine: { type: "number", description: "First-line indent in points" },
+    spaceAbove: { type: "number", description: "Space above in points" },
+    spaceBelow: { type: "number", description: "Space below in points" },
+    namedStyleType: { type: "string", enum: ["NORMAL_TEXT", "TITLE", "SUBTITLE", "HEADING_1", "HEADING_2", "HEADING_3", "HEADING_4", "HEADING_5", "HEADING_6"], description: "Named paragraph style" },
+    keepWithNext: { type: "boolean", description: "Keep with next paragraph" },
+    keepLinesTogether: { type: "boolean", description: "Keep all lines of the paragraph on one page" },
+    avoidWidowAndOrphan: { type: "boolean", description: "Avoid widow and orphan lines" },
+    pageBreakBefore: { type: "boolean", description: "Start the paragraph on a new page" },
+    borderTop: paragraphBorderProperty("Border above the paragraph."),
+    borderBottom: paragraphBorderProperty("Border below the paragraph (a horizontal rule)."),
+    borderLeft: paragraphBorderProperty("Border left of the paragraph."),
+    borderRight: paragraphBorderProperty("Border right of the paragraph."),
+    borderBetween: paragraphBorderProperty("Border between consecutive same-styled paragraphs."),
+    removeBorders: { type: "array", items: { type: "string", enum: ["top", "bottom", "left", "right", "between", "all"] }, description: "Border edges to clear. The update applies to EVERY paragraph overlapping the target range, so removeBorders: [\"all\"] over the whole body strips every decorative rule in one call." },
+    shading: { type: "string", description: "Paragraph background color as hex (e.g., #F1F3F4)" },
+    removeShading: { type: "boolean", description: "Clear the paragraph background shading" },
+    tabId: { type: "string", description: "Optional. Tab ID to format within (from listDocumentTabs). If omitted, operates on the first/default tab." }
+  },
+  required: ["documentId"]
+};
+
 export const toolDefinitions: ToolDefinition[] = [
   {
     name: "createGoogleDoc",
@@ -1991,27 +2133,8 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "applyParagraphStyle",
-    description: "Apply paragraph formatting. Use EITHER startIndex+endIndex OR textToFind OR indexWithinParagraph for targeting.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        documentId: { type: "string", description: "The document ID" },
-        startIndex: { type: "number", description: "Start index (1-based) - use with endIndex" },
-        endIndex: { type: "number", description: "End index (exclusive) - use with startIndex" },
-        textToFind: { type: "string", description: "Text within the target paragraph" },
-        matchInstance: { type: "number", description: "Which instance of textToFind (default: 1)" },
-        indexWithinParagraph: { type: "number", description: "Any index within the target paragraph" },
-        alignment: { type: "string", enum: ["START", "END", "CENTER", "JUSTIFIED"], description: "Text alignment" },
-        indentStart: { type: "number", description: "Left indent in points" },
-        indentEnd: { type: "number", description: "Right indent in points" },
-        spaceAbove: { type: "number", description: "Space above in points" },
-        spaceBelow: { type: "number", description: "Space below in points" },
-        namedStyleType: { type: "string", enum: ["NORMAL_TEXT", "TITLE", "SUBTITLE", "HEADING_1", "HEADING_2", "HEADING_3", "HEADING_4", "HEADING_5", "HEADING_6"], description: "Named paragraph style" },
-        keepWithNext: { type: "boolean", description: "Keep with next paragraph" },
-        tabId: { type: "string", description: "Optional. Tab ID to format within (from listDocumentTabs). If omitted, operates on the first/default tab." }
-      },
-      required: ["documentId"]
-    }
+    description: "Apply paragraph formatting — alignment, indents, spacing, named styles, borders (top/bottom/left/right/between), shading, and pagination controls. Use EITHER startIndex+endIndex OR textToFind OR indexWithinParagraph for targeting. The update styles EVERY paragraph overlapping the range, so one call over the whole body with removeBorders: [\"all\"] strips every decorative rule from a document.",
+    inputSchema: applyParagraphStyleInputSchema
   },
   {
     name: "formatGoogleDocText",
@@ -2041,27 +2164,8 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "formatGoogleDocParagraph",
-    description: "Apply paragraph formatting (alignment, indentation, spacing, heading style) in a Google Doc. Alias for applyParagraphStyle.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        documentId: { type: "string", description: "The document ID" },
-        startIndex: { type: "number", description: "Start index (1-based) - use with endIndex" },
-        endIndex: { type: "number", description: "End index (exclusive) - use with startIndex" },
-        textToFind: { type: "string", description: "Text within the target paragraph" },
-        matchInstance: { type: "number", description: "Which instance of textToFind (default: 1)" },
-        indexWithinParagraph: { type: "number", description: "Any index within the target paragraph" },
-        alignment: { type: "string", enum: ["START", "END", "CENTER", "JUSTIFIED"], description: "Text alignment" },
-        indentStart: { type: "number", description: "Left indent in points" },
-        indentEnd: { type: "number", description: "Right indent in points" },
-        spaceAbove: { type: "number", description: "Space above in points" },
-        spaceBelow: { type: "number", description: "Space below in points" },
-        namedStyleType: { type: "string", enum: ["NORMAL_TEXT", "TITLE", "SUBTITLE", "HEADING_1", "HEADING_2", "HEADING_3", "HEADING_4", "HEADING_5", "HEADING_6"], description: "Named paragraph style" },
-        keepWithNext: { type: "boolean", description: "Keep with next paragraph" },
-        tabId: { type: "string", description: "Optional. Tab ID to format within (from listDocumentTabs). If omitted, operates on the first/default tab." }
-      },
-      required: ["documentId"]
-    }
+    description: "Apply paragraph formatting (alignment, indentation, spacing, heading style, borders, shading) in a Google Doc. Alias for applyParagraphStyle.",
+    inputSchema: applyParagraphStyleInputSchema
   },
   {
     name: "createParagraphBullets",
@@ -3312,10 +3416,22 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         alignment: a.alignment,
         indentStart: a.indentStart,
         indentEnd: a.indentEnd,
+        indentFirstLine: a.indentFirstLine,
         spaceAbove: a.spaceAbove,
         spaceBelow: a.spaceBelow,
         namedStyleType: a.namedStyleType,
-        keepWithNext: a.keepWithNext
+        keepWithNext: a.keepWithNext,
+        keepLinesTogether: a.keepLinesTogether,
+        avoidWidowAndOrphan: a.avoidWidowAndOrphan,
+        pageBreakBefore: a.pageBreakBefore,
+        borderTop: a.borderTop,
+        borderBottom: a.borderBottom,
+        borderLeft: a.borderLeft,
+        borderRight: a.borderRight,
+        borderBetween: a.borderBetween,
+        removeBorders: a.removeBorders,
+        shading: a.shading,
+        removeShading: a.removeShading
       };
 
       // Build the update request

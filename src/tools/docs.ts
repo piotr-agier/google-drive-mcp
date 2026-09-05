@@ -634,7 +634,11 @@ function withTab<T extends object>(target: T, tabId?: string): T & { tabId?: str
 // Pass `preResolvedContent` to reuse an already-fetched body content array
 // (e.g. a tab body resolved once by the caller) and skip the internal GET —
 // see applyParagraphStyle's tab-scoped textToFind path (#114 follow-up).
-async function findTextRange(ctx: ToolContext, documentId: string, textToFind: string, instance: number = 1, tabId?: string, preResolvedContent?: any[]): Promise<{ startIndex: number; endIndex: number } | { error: string } | null> {
+// `segmentEndIndex` is the end index of the searched body/tab segment (the
+// index just past its final paragraph break). Callers that delete the match or
+// insert after it use it to stay inside the segment: Docs rejects deleting the
+// final newline and inserting at the segment end (#183 follow-up).
+async function findTextRange(ctx: ToolContext, documentId: string, textToFind: string, instance: number = 1, tabId?: string, preResolvedContent?: any[]): Promise<{ startIndex: number; endIndex: number; segmentEndIndex?: number } | { error: string } | null> {
   const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
 
   try {
@@ -690,6 +694,14 @@ async function findTextRange(ctx: ToolContext, documentId: string, textToFind: s
     collectTextFromContent(content);
     segments.sort((a, b) => a.start - b.start);
 
+    // The segment end is the last structural element's endIndex. Fall back to
+    // the furthest text run when the structural index is absent (the body's
+    // closing paragraph always sorts last, after any tables).
+    const lastElement = content.length ? content[content.length - 1] : undefined;
+    const segmentEndIndex: number | undefined = typeof lastElement?.endIndex === 'number'
+      ? lastElement.endIndex
+      : (segments.length ? segments[segments.length - 1].end : undefined);
+
     // Find the specified instance
     let foundCount = 0;
     let searchStartIndex = 0;
@@ -724,7 +736,7 @@ async function findTextRange(ctx: ToolContext, documentId: string, textToFind: s
         }
 
         if (startIndex !== -1 && endIndex !== -1) {
-          return { startIndex, endIndex };
+          return segmentEndIndex !== undefined ? { startIndex, endIndex, segmentEndIndex } : { startIndex, endIndex };
         }
       }
 
@@ -1604,10 +1616,14 @@ const DeleteRangeSchema = z.object({
   matchInstance: z.number().int().min(1).optional().default(1),
   tabId: z.string().optional()
 }).refine(data => {
-  const hasIndices = data.startIndex !== undefined && data.endIndex !== undefined;
-  return hasIndices !== (data.textToFind !== undefined);
+  // Exactly one targeting mode: both indices and no textToFind, or textToFind
+  // and no index at all. A stray single index next to textToFind is refused
+  // rather than silently ignored (#183 follow-up).
+  const anyIndex = data.startIndex !== undefined || data.endIndex !== undefined;
+  const bothIndices = data.startIndex !== undefined && data.endIndex !== undefined;
+  return data.textToFind !== undefined ? !anyIndex : bothIndices;
 }, {
-  message: "Provide either startIndex+endIndex or textToFind"
+  message: "Provide either startIndex+endIndex or textToFind, not both"
 }).refine(data => data.startIndex === undefined || data.endIndex === undefined || data.endIndex > data.startIndex, {
   message: "End index must be greater than start index",
   path: ["endIndex"]
@@ -1882,7 +1898,7 @@ export const toolDefinitions: ToolDefinition[] = [
         documentId: { type: "string", description: "The Google Doc or text file ID" },
         text: { type: "string", description: "Text to insert" },
         index: { type: "number", description: "Position to insert at. Google Docs: 1-based Docs API structural index. Text files: 0-based Unicode code point (character) offset. Provide exactly one of index or textToFind." },
-        textToFind: { type: "string", description: "Google Docs only: locate the insertion point by text instead of index. Combine with position (before/after) and matchInstance." },
+        textToFind: { type: "string", description: "Google Docs only: locate the insertion point by text instead of index (exact, case-sensitive match). Combine with position (before/after) and matchInstance. If the match ends at the document's final paragraph break, 'after' inserts just before that break." },
         matchInstance: { type: "number", description: "Which instance of textToFind (default: 1)" },
         position: { type: "string", enum: ["before", "after"], description: "Insert before or after the matched text (default: after). Only used with textToFind." },
         tabId: { type: "string", description: "Optional. Google Docs only — Tab ID to insert into (from listDocumentTabs). If omitted, inserts into the first/default tab. Not supported on text files." }
@@ -1899,7 +1915,7 @@ export const toolDefinitions: ToolDefinition[] = [
         documentId: { type: "string", description: "The Google Doc or text file ID" },
         startIndex: { type: "number", description: "Start index (inclusive). Google Docs: 1-based Docs API structural index. Text files: 0-based Unicode code point (character) offset. Provide startIndex+endIndex or textToFind." },
         endIndex: { type: "number", description: "End index (exclusive). Google Docs: 1-based Docs API structural index. Text files: 0-based Unicode code point (character) offset." },
-        textToFind: { type: "string", description: "Google Docs only: delete the matched text instead of an index range. Combine with matchInstance." },
+        textToFind: { type: "string", description: "Google Docs only: delete the matched text instead of an index range (exact, case-sensitive match). Combine with matchInstance. A match that ends with the document's final paragraph break is trimmed to keep that break, since Docs does not allow deleting it." },
         matchInstance: { type: "number", description: "Which instance of textToFind (default: 1)" },
         tabId: { type: "string", description: "Optional. Google Docs only — Tab ID to delete from (from listDocumentTabs). If omitted, deletes from the first/default tab. Not supported on text files." }
       },
@@ -2792,6 +2808,13 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
             return errorResponse(`Text "${a.textToFind}" not found in document`);
           }
           index = a.position === 'before' ? range.startIndex : range.endIndex;
+          // Docs refuses an insert at the segment end (just past the final
+          // paragraph break). A match that runs to the end of the segment
+          // therefore gets its "after" point moved before that break, which is
+          // still visually after the matched text.
+          if (range.segmentEndIndex !== undefined && index >= range.segmentEndIndex) {
+            index = range.segmentEndIndex - 1;
+          }
           targetNote = ` (${a.position} "${a.textToFind}"${a.matchInstance > 1 ? ` match ${a.matchInstance}` : ''})`;
         } else {
           index = a.index!;
@@ -2892,6 +2915,16 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           startIndex = found.startIndex;
           endIndex = found.endIndex;
           targetNote = ` ("${a.textToFind}"${a.matchInstance > 1 ? ` match ${a.matchInstance}` : ''})`;
+          // Docs refuses to delete a segment's final paragraph break. A match
+          // that runs to the segment end is trimmed by one so the break
+          // survives; a match that is only that break has nothing left to delete.
+          if (found.segmentEndIndex !== undefined && endIndex >= found.segmentEndIndex) {
+            endIndex = found.segmentEndIndex - 1;
+            if (endIndex <= startIndex) {
+              return errorResponse(`Text "${a.textToFind}" matches only the document's final paragraph break, which Google Docs does not allow deleting`);
+            }
+            targetNote += ' (trailing paragraph break kept)';
+          }
         } else {
           startIndex = a.startIndex!;
           endIndex = a.endIndex!;

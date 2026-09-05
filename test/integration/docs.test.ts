@@ -334,6 +334,20 @@ describe('Docs tools', () => {
       assert.ok(both.content[0].text!.includes('exactly one'));
     });
 
+    it('textToFind after a match that ends at the final paragraph break inserts before that break', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          body: { content: [{ startIndex: 1, endIndex: 11, paragraph: { elements: [{ textRun: { content: 'keep tail\n' }, startIndex: 1, endIndex: 11 }] } }] },
+        },
+      }));
+      // "tail\n" spans 6-11 and 11 is the segment end, so the insert lands at 10.
+      const res = await callTool(ctx.client, 'insertText', { documentId: 'doc-1', text: '!', textToFind: 'tail\n' });
+      assert.equal(res.isError, false);
+      const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
+      assert.equal(calls[calls.length - 1].args[0].requestBody.requests[0].insertText.location.index, 10);
+    });
+
     it('validation error', async () => {
       const res = await callTool(ctx.client, 'insertText', {});
       assert.equal(res.isError, true);
@@ -395,9 +409,36 @@ describe('Docs tools', () => {
       assert.deepEqual({ startIndex: range.startIndex, endIndex: range.endIndex }, { startIndex: 6, endIndex: 13 });
     });
 
-    it('refuses indices and textToFind together', async () => {
-      const res = await callTool(ctx.client, 'deleteRange', { documentId: 'doc-1', startIndex: 1, endIndex: 3, textToFind: 'x' });
-      assert.equal(res.isError, true);
+    it('textToFind ending at the final paragraph break keeps that break', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1',
+          body: { content: [{ startIndex: 1, endIndex: 11, paragraph: { elements: [{ textRun: { content: 'keep tail\n' }, startIndex: 1, endIndex: 11 }] } }] },
+        },
+      }));
+      // "tail\n" spans 6-11; 11 is the segment end, so the range is trimmed to 6-10.
+      const res = await callTool(ctx.client, 'deleteRange', { documentId: 'doc-1', textToFind: 'tail\n' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text!.includes('paragraph break kept'));
+      const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
+      const range = calls[calls.length - 1].args[0].requestBody.requests[0].deleteContentRange.range;
+      assert.deepEqual({ startIndex: range.startIndex, endIndex: range.endIndex }, { startIndex: 6, endIndex: 10 });
+
+      // A match that is only the final break has nothing left to delete.
+      const onlyBreak = await callTool(ctx.client, 'deleteRange', { documentId: 'doc-1', textToFind: '\n' });
+      assert.equal(onlyBreak.isError, true);
+      assert.ok(onlyBreak.content[0].text!.includes('final paragraph break'));
+      assert.equal(ctx.mocks.docs.tracker.getCalls('documents.batchUpdate').length, calls.length);
+    });
+
+    it('refuses indices and textToFind together, including a single stray index', async () => {
+      for (const extra of [{ startIndex: 1, endIndex: 3 }, { startIndex: 1 }, { endIndex: 3 }]) {
+        const res = await callTool(ctx.client, 'deleteRange', { documentId: 'doc-1', textToFind: 'x', ...extra });
+        assert.equal(res.isError, true, `expected refusal for ${JSON.stringify(extra)}`);
+        assert.ok(res.content[0].text!.includes('not both'), res.content[0].text);
+      }
+      const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
+      assert.equal(calls.length, 0);
     });
 
     it('validation error', async () => {

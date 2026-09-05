@@ -238,11 +238,11 @@ This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and
 - **insertText** - Insert text at an index or relative to found text (doesn't replace entire doc)
   - `documentId`: Document ID
   - `text`: Text to insert
-  - Target (use one): `index` (1-based position) OR `textToFind`+`matchInstance` with `position` (`before`/`after`, default `after`; Google Docs only)
+  - Target (use one): `index` (1-based position) OR `textToFind`+`matchInstance` with `position` (`before`/`after`, default `after`; Google Docs only; exact, case-sensitive match). A match ending at the document's final paragraph break inserts `after` just before that break
 
 - **deleteRange** - Delete an index range or found text
   - `documentId`: Document ID
-  - Target (use one): `startIndex` (1-based, inclusive) + `endIndex` (exclusive) OR `textToFind`+`matchInstance` (Google Docs only)
+  - Target (use one): `startIndex` (1-based, inclusive) + `endIndex` (exclusive) OR `textToFind`+`matchInstance` (Google Docs only; exact, case-sensitive match). A match ending at the document's final paragraph break is trimmed to keep that break
 
 #### Text and Paragraph Styling
 - **applyTextStyle** - Apply text formatting (bold, italic, color, etc.) to a range or found text

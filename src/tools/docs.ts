@@ -8,6 +8,7 @@ import { downloadTextContent, writeTextContent } from './text-content.js';
 import { uploadImageToDrive } from '../utils/driveImageUpload.js';
 import { withRetry } from '../utils/retry.js';
 import { getResponseHeader } from '../utils/streams.js';
+import { paragraphMetaBits } from './styleProjection.js';
 
 // ---------------------------------------------------------------------------
 // Helper functions
@@ -1079,7 +1080,7 @@ export interface DocxContextResult {
  * Build formatted content with indices from a Google Doc document data object.
  * Returns the formatted string and total character length.
  */
-function buildDocFormattedContent(
+export function buildDocFormattedContent(
   docData: any,
   withFormatting: boolean
 ): { formattedContent: string; totalLength: number } {
@@ -1091,6 +1092,9 @@ function buildDocFormattedContent(
     // rules) whose rendered text length is unrelated to their real doc span, so
     // the displayed edit range must use [startIndex, endIndex), not text length.
     atomic?: boolean;
+    // Paragraph-level style annotation: a one-line rendering of the
+    // paragraph's non-default styles over its real span; carries no content.
+    paraMeta?: boolean;
     fontFamily?: string;
     fontSize?: number;
     bold?: boolean;
@@ -1112,7 +1116,11 @@ function buildDocFormattedContent(
       const before = segments.length;
       processContent(cellContent);
       const cellSegs = segments.splice(before);
+      // Paragraph meta is a one-line annotation over a paragraph's span, not
+      // content. Joined into a cell it would render inside the pipe row as
+      // `| ¶ center Header A |` — a regression in the formatted read itself.
       return cellSegs
+        .filter(c => !c.paraMeta)
         .map(s => s.text.replace(/\n$/g, ''))
         .join(' ')
         .replace(/\|/g, '\\|')
@@ -1122,6 +1130,17 @@ function buildDocFormattedContent(
     function processContent(content: any[]) {
       for (const element of content) {
         if (element.paragraph?.elements) {
+          if (withFormatting && element.startIndex != null && element.endIndex != null) {
+            const bits = paragraphMetaBits(element.paragraph);
+            if (bits.length) {
+              segments.push({
+                text: `\u00b6 ${bits.join(', ')}`,
+                startIndex: element.startIndex,
+                endIndex: element.endIndex,
+                paraMeta: true,
+              });
+            }
+          }
           for (const textElement of element.paragraph.elements) {
             if (textElement.textRun?.content && textElement.startIndex != null && textElement.endIndex != null) {
               const seg: Segment = {
@@ -1189,6 +1208,11 @@ function buildDocFormattedContent(
     for (const segment of segments) {
       const hasMeta = withFormatting && hasFormattingInfo(segment);
       const meta = hasMeta ? buildMetaLine(segment) : null;
+      // Paragraph style annotations: one line over the paragraph's real span.
+      if (segment.paraMeta) {
+        result += `[${segment.startIndex}-${segment.endIndex}] ${segment.text}\n`;
+        continue;
+      }
       // Atomic inline replacements occupy exactly [startIndex, endIndex) in the
       // doc regardless of how long their placeholder text is. Emit that real
       // range on one line so index-based edits target the object, not the text

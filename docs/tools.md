@@ -184,12 +184,12 @@ This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and
 
 - **getGoogleDocContent** - Get document content with text indices for formatting
   - `documentId`: Document ID
-  - `includeFormatting`: Include font, style, color, and baseline (superscript/subscript) info for each text span (optional, default: false)
+  - `includeFormatting`: Include font, style, color, and baseline (superscript/subscript) info for each text span, plus one `¶` meta line per paragraph with non-default paragraph styles (named style, alignment, visible borders, shading) over its real index span (optional, default: false)
   - Inline images render as a single-line `[image: objectId=… contentUri=… sourceUri=… size=WxHpt]` token (was a bare `[image]`). Pass the `objectId` to `getGoogleDocImage`.
 
 - **getGoogleDocContentPaginated** - Paginated `getGoogleDocContent`; page ends snap to a line boundary where possible (a single line longer than `limit` is hard-cut to make forward progress)
   - `documentId`: Document ID
-  - `includeFormatting`: Include font, style, color, and baseline (superscript/subscript) info for each text span (optional, default: false)
+  - `includeFormatting`: Include font, style, color, and baseline (superscript/subscript) info for each text span, plus one `¶` meta line per paragraph with non-default paragraph styles (named style, alignment, visible borders, shading) over its real index span (optional, default: false)
   - `offset`: Character offset into the formatted output (optional, default: 0; pass the previous response's `nextOffset`)
   - `limit`: Maximum characters per page (optional, default: 50000, max: 80000)
 

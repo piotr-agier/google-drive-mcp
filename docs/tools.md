@@ -186,8 +186,10 @@ This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `documentId`: Document ID
   - `includeFormatting`: Include font, style, color, and baseline (superscript/subscript) info for each text span (optional, default: false)
   - Inline images render as a single-line `[image: objectId=… contentUri=… sourceUri=… size=WxHpt]` token (was a bare `[image]`). Pass the `objectId` to `getGoogleDocImage`.
+  - Tables emit ONE real `[start-end]` span for the whole table, then the pipe rendering, then a `cells: r0c0 [a-b], r0c1 [c-d]` map of each cell's real index range. Row lines carry no ranges of their own — deriving them from the rendered markdown produced numbers that ran past the table's end into the content after it. Use the cell ranges for `applyTextStyle` / `formatGoogleDocText` inside a cell, and the table's own `startIndex` with `editTableCell` for whole-cell edits
+  - On a multi-tab document the tab header prints its id (`=== Tab: Name (tabId=…) ===`) and the table hint names that id, because index spaces restart per tab and `editTableCell` searches only the first tab when given no `tabId`
 
-- **getGoogleDocContentPaginated** - Paginated `getGoogleDocContent`; page ends snap to a line boundary where possible (a single line longer than `limit` is hard-cut to make forward progress)
+- **getGoogleDocContentPaginated** - Paginated `getGoogleDocContent`; page ends snap to a line boundary where possible (a single line longer than `limit` is hard-cut to make forward progress). A table is kept whole: its `<table …>` header, pipe rows, and `cells:` map move to the next page together rather than being split. A table longer than `limit` still takes a hard cut, but never between the header and its first row
   - `documentId`: Document ID
   - `includeFormatting`: Include font, style, color, and baseline (superscript/subscript) info for each text span (optional, default: false)
   - `offset`: Character offset into the formatted output (optional, default: 0; pass the previous response's `nextOffset`)

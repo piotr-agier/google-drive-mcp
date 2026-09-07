@@ -113,6 +113,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
   deleteComment: write(DRIVE_WRITE_SCOPES),
   insertTable: write(DOCS_WRITE_SCOPES),
   editTableCell: write(DOCS_WRITE_SCOPES),
+  styleDocTable: write(DOCS_WRITE_SCOPES),
   insertImageFromUrl: write(DOCS_WRITE_SCOPES),
   insertLocalImage: write(DOCS_WRITE_SCOPES),
   addDocumentTab: write(DOCS_WRITE_SCOPES),
@@ -172,6 +173,10 @@ export const TOOL_META: Record<string, ToolMeta> = {
   moveSlideElement: write(SLIDES_WRITE_SCOPES),
   deleteSlideElement: write(SLIDES_WRITE_SCOPES),
   insertSlidesLocalImage: write(SLIDES_WRITE_SCOPES),
+  setSlideVisibility: write(SLIDES_WRITE_SCOPES),
+  replaceSlideImage: write(SLIDES_WRITE_SCOPES),
+  setElementZOrder: write(SLIDES_WRITE_SCOPES),
+  setElementText: write(SLIDES_WRITE_SCOPES),
 
   // ---- Calendar ----
   listCalendars: read(CAL_READ_SCOPES),

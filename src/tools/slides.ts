@@ -249,6 +249,41 @@ async function insertImageIntoSlide(
 // Tool Definitions
 // ---------------------------------------------------------------------------
 
+
+const SetSlideVisibilitySchema = z.object({
+  presentationId: z.string().min(1, "Presentation ID is required"),
+  slideObjectIds: z.array(z.string().min(1)).min(1, "At least one slide object ID is required"),
+  skipped: z.boolean(),
+});
+
+const ReplaceSlideImageSchema = z.object({
+  presentationId: z.string().min(1, "Presentation ID is required"),
+  imageObjectId: z.string().min(1, "Image object ID is required"),
+  imageUrl: z.string().url().optional(),
+  localImagePath: z.string().min(1).optional(),
+  replaceMethod: z.enum(['CENTER_INSIDE', 'CENTER_CROP']).optional().default('CENTER_INSIDE'),
+}).refine((d) => (d.imageUrl !== undefined) !== (d.localImagePath !== undefined), {
+  message: "Provide exactly one of imageUrl or localImagePath",
+});
+
+const SetElementZOrderSchema = z.object({
+  presentationId: z.string().min(1, "Presentation ID is required"),
+  pageElementObjectIds: z.array(z.string().min(1)).min(1, "At least one element object ID is required"),
+  operation: z.enum(['BRING_TO_FRONT', 'BRING_FORWARD', 'SEND_BACKWARD', 'SEND_TO_BACK']),
+});
+
+const SetElementTextSchema = z.object({
+  presentationId: z.string().min(1, "Presentation ID is required"),
+  objectId: z.string().min(1, "Object ID is required"),
+  text: z.string(),
+});
+
+const SlidesBatchUpdateSchema = z.object({
+  presentationId: z.string().min(1, "Presentation ID is required"),
+  requests: z.array(z.record(z.unknown())).min(1),
+  ifRevisionId: z.string().optional(),
+});
+
 export const toolDefinitions: ToolDefinition[] = [
   {
     name: "createGoogleSlides",
@@ -635,6 +670,60 @@ export const toolDefinitions: ToolDefinition[] = [
         height: { type: "number", description: "Height in EMU (omit to auto-size)" }
       },
       required: ["presentationId", "pageObjectId", "localImagePath"]
+    }
+  },
+  {
+    name: "setSlideVisibility",
+    description: "Show or hide (skip) slides in one atomic call. Hidden slides are skipped in present mode and PDF export. Ends the manual-unhide dance for slides promoted out of a hidden appendix — pass every promoted slide ID at once.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        presentationId: { type: "string", description: "Presentation ID" },
+        slideObjectIds: { type: "array", items: { type: "string" }, description: "Slide object IDs to change" },
+        skipped: { type: "boolean", description: "true = hide (skip) the slides, false = show them" }
+      },
+      required: ["presentationId", "slideObjectIds", "skipped"]
+    }
+  },
+  {
+    name: "replaceSlideImage",
+    description: "Replace an existing image in place, preserving its layering (z-order), position, size, and crop. The safe way to swap imagery on designed slides where text or panels overlay the image — unlike delete+insert, which lands the new image on top of the stack.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        presentationId: { type: "string", description: "Presentation ID" },
+        imageObjectId: { type: "string", description: "Object ID of the image to replace (from getSlideElementInfo)" },
+        imageUrl: { type: "string", description: "Publicly accessible URL of the replacement image (use this OR localImagePath)" },
+        localImagePath: { type: "string", description: "Absolute path to a local replacement image (uploaded to Drive briefly, then cleaned up)" },
+        replaceMethod: { type: "string", enum: ["CENTER_INSIDE", "CENTER_CROP"], description: "How the new image fits the existing bounds (default: CENTER_INSIDE)" }
+      },
+      required: ["presentationId", "imageObjectId"]
+    }
+  },
+  {
+    name: "setElementZOrder",
+    description: "Change the stacking order of page elements (updatePageElementsZOrder). Inserted images land on top of the stack and can cover overlay text — send them backward or to the back. All elements must be on the same page.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        presentationId: { type: "string", description: "Presentation ID" },
+        pageElementObjectIds: { type: "array", items: { type: "string" }, description: "Element object IDs to reorder (same page)" },
+        operation: { type: "string", enum: ["BRING_TO_FRONT", "BRING_FORWARD", "SEND_BACKWARD", "SEND_TO_BACK"], description: "Z-order operation applied to the elements" }
+      },
+      required: ["presentationId", "pageElementObjectIds", "operation"]
+    }
+  },
+  {
+    name: "setElementText",
+    description: "Replace the entire text of one shape/text box by objectId (element-scoped delete+insert in one atomic call). Unlike replaceAllTextInSlides, this cannot hit other slides, masters, or layouts, and does not depend on matching existing text. Pass empty text to clear the element.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        presentationId: { type: "string", description: "Presentation ID" },
+        objectId: { type: "string", description: "Object ID of the shape or text box (from getSlideElementInfo / getGoogleSlidesContent)" },
+        text: { type: "string", description: "New text content (empty string clears the element)" }
+      },
+      required: ["presentationId", "objectId", "text"]
     }
   },
 ];
@@ -1831,6 +1920,163 @@ export async function handleTool(
         await deleteDriveFile(ctx, fileId).catch(() => {});
         throw err;
       }
+    }
+
+    case "setSlideVisibility": {
+      const validation = SetSlideVisibilitySchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
+      await slidesService.presentations.batchUpdate({
+        presentationId: a.presentationId,
+        requestBody: {
+          requests: a.slideObjectIds.map((objectId) => ({
+            updateSlideProperties: {
+              objectId,
+              slideProperties: { isSkipped: a.skipped },
+              fields: 'isSkipped',
+            },
+          })),
+        },
+      });
+
+      return {
+        content: [{ type: 'text', text: `${a.skipped ? 'Hid' : 'Unhid'} ${a.slideObjectIds.length} slide(s): ${a.slideObjectIds.join(', ')}` }],
+        isError: false,
+      };
+    }
+
+    case "replaceSlideImage": {
+      const validation = ReplaceSlideImageSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
+      const doReplace = async (url: string) => slidesService.presentations.batchUpdate({
+        presentationId: a.presentationId,
+        requestBody: {
+          requests: [{
+            replaceImage: {
+              imageObjectId: a.imageObjectId,
+              url,
+              imageReplaceMethod: a.replaceMethod,
+            },
+          }],
+        },
+      });
+
+      if (a.localImagePath) {
+        // Upload briefly as public so the Slides API can fetch the bytes, then
+        // clean up — Slides stores its own copy once the request returns.
+        const { fileId, webContentLink } = await uploadImageToDrive(ctx, a.localImagePath, {
+          makePublic: true,
+        });
+        try {
+          await doReplace(webContentLink);
+        } finally {
+          await deleteDriveFile(ctx, fileId).catch((err) =>
+            ctx.log(`replaceSlideImage: failed to delete intermediary Drive file ${fileId}`, err),
+          );
+        }
+      } else {
+        await doReplace(a.imageUrl!);
+      }
+
+      return {
+        content: [{ type: 'text', text: `Replaced image ${a.imageObjectId} in place (${a.replaceMethod}) — layering, position, size, and crop preserved` }],
+        isError: false,
+      };
+    }
+
+    case "setElementZOrder": {
+      const validation = SetElementZOrderSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
+      await slidesService.presentations.batchUpdate({
+        presentationId: a.presentationId,
+        requestBody: {
+          requests: [{
+            updatePageElementsZOrder: {
+              pageElementObjectIds: a.pageElementObjectIds,
+              operation: a.operation,
+            },
+          }],
+        },
+      });
+
+      return {
+        content: [{ type: 'text', text: `Applied ${a.operation} to ${a.pageElementObjectIds.length} element(s): ${a.pageElementObjectIds.join(', ')}` }],
+        isError: false,
+      };
+    }
+
+    case "setElementText": {
+      const validation = SetElementTextSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
+
+      // deleteText on an element with no existing text is an API error, so
+      // check whether the shape currently has any. Search slides, layouts, and
+      // masters (recursing into groups) — the setter works on any of them.
+      const pres = await slidesService.presentations.get({
+        presentationId: a.presentationId,
+        fields: 'slides(pageElements(objectId,shape/text,elementGroup)),layouts(pageElements(objectId,shape/text,elementGroup)),masters(pageElements(objectId,shape/text,elementGroup))',
+      });
+
+      let found = false;
+      let hasText = false;
+      const visit = (elements: any[] | undefined) => {
+        for (const el of elements || []) {
+          if (el.objectId === a.objectId) {
+            found = true;
+            const content = (el.shape?.text?.textElements || [])
+              .map((te: any) => te.textRun?.content || '')
+              .join('');
+            hasText = content.replace(/\n$/, '').length > 0;
+            return;
+          }
+          if (el.elementGroup?.children) visit(el.elementGroup.children);
+          if (found) return;
+        }
+      };
+      for (const page of [...(pres.data.slides || []), ...(pres.data.layouts || []), ...(pres.data.masters || [])]) {
+        visit(page.pageElements as any[]);
+        if (found) break;
+      }
+
+      if (!found) {
+        return errorResponse(`Element ${a.objectId} not found in presentation (checked slides, layouts, and masters)`);
+      }
+
+      const requests: any[] = [];
+      if (hasText) {
+        requests.push({ deleteText: { objectId: a.objectId, textRange: { type: 'ALL' } } });
+      }
+      if (a.text.length > 0) {
+        requests.push({ insertText: { objectId: a.objectId, insertionIndex: 0, text: a.text } });
+      }
+      if (requests.length === 0) {
+        return {
+          content: [{ type: 'text', text: `Element ${a.objectId} already has no text — nothing to do` }],
+          isError: false,
+        };
+      }
+
+      await slidesService.presentations.batchUpdate({
+        presentationId: a.presentationId,
+        requestBody: { requests },
+      });
+
+      const action = a.text.length === 0 ? 'Cleared text of' : `Set text of`;
+      return {
+        content: [{ type: 'text', text: `${action} element ${a.objectId}${a.text.length ? ` (${a.text.length} chars)` : ''}` }],
+        isError: false,
+      };
     }
 
     default:

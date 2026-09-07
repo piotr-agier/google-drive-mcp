@@ -266,8 +266,8 @@ This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `indentStart`, `indentEnd`, `indentFirstLine`: Indents in points (optional)
   - `spaceAbove`, `spaceBelow`: Spacing in points (optional)
   - `keepWithNext`, `keepLinesTogether`, `avoidWidowAndOrphan`, `pageBreakBefore`: Pagination controls (optional)
-  - `borderTop`, `borderBottom`, `borderLeft`, `borderRight`, `borderBetween`: Paragraph borders, each `{ color?, width?, padding?, dashStyle? }` — hex color (default `#000000`), width/padding in points (width default 1), `SOLID`/`DOT`/`DASH` (default `SOLID`) (optional)
-  - `removeBorders`: Edges to clear — `top`, `bottom`, `left`, `right`, `between`, or `all`. The update styles every paragraph overlapping the range, so `removeBorders: ["all"]` over the whole body strips every decorative rule in one call (optional)
+  - `borderTop`, `borderBottom`, `borderLeft`, `borderRight`, `borderBetween`: Paragraph borders, each `{ color?, width?, padding?, dashStyle? }` — hex color (default `#000000`), width/padding in points (both default 1), `SOLID`/`DOT`/`DASH` (default `SOLID`) (optional)
+  - `removeBorders`: Edges to clear at the paragraph level — `top`, `bottom`, `left`, `right`, `between`, or `all`. Each cleared edge falls back to the border its named style defines (usually none); `horizontalRule` elements are not affected. The update styles every paragraph overlapping the range, so `removeBorders: ["all"]` over the whole body strips every paragraph border in one call (optional)
   - `shading`: Paragraph background color as hex, e.g., `#F1F3F4`; `removeShading`: clear it (optional)
 
 - **formatGoogleDocText** - Alias for `applyTextStyle` (compatibility helper)

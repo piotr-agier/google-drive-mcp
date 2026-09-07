@@ -26,9 +26,11 @@ function hexToRgbColor(hex: string): { red: number; green: number; blue: number 
   if (hexClean.length === 3) {
     hexClean = hexClean[0] + hexClean[0] + hexClean[1] + hexClean[1] + hexClean[2] + hexClean[2];
   }
-  if (hexClean.length !== 6) return null;
+  // Require every character to be a hex digit. parseInt stops at the first
+  // non-hex character, so "#12345G" would otherwise pass the length check and
+  // silently become #012345.
+  if (!/^[0-9a-fA-F]{6}$/.test(hexClean)) return null;
   const bigint = parseInt(hexClean, 16);
-  if (isNaN(bigint)) return null;
 
   const r = ((bigint >> 16) & 255) / 255;
   const g = ((bigint >> 8) & 255) / 255;
@@ -889,9 +891,13 @@ export interface ParagraphBorderInput {
   dashStyle?: 'SOLID' | 'DOT' | 'DASH';
 }
 
-function borderFieldName(edge: ParagraphBorderEdge): string {
-  return `border${edge.charAt(0).toUpperCase()}${edge.slice(1)}`;
-}
+const PARAGRAPH_BORDER_KEYS = {
+  top: 'borderTop',
+  bottom: 'borderBottom',
+  left: 'borderLeft',
+  right: 'borderRight',
+  between: 'borderBetween',
+} as const satisfies Record<ParagraphBorderEdge, string>;
 
 // Compile a border param into the API's ParagraphBorder. The API refuses a
 // partially-specified border ("Unsupported dimension unit: UNIT_UNSPECIFIED"
@@ -951,13 +957,14 @@ export function buildUpdateParagraphStyleRequest(
   if (style.pageBreakBefore !== undefined) { paragraphStyle.pageBreakBefore = style.pageBreakBefore; fieldsToUpdate.push('pageBreakBefore'); }
 
   // Removal rides the API's FieldMask reset semantics: naming a border field in
-  // `fields` while leaving it unset in paragraphStyle clears that border.
+  // `fields` while leaving it unset in paragraphStyle clears the paragraph-level
+  // border, so the paragraph falls back to whatever its named style defines.
   const removals = new Set<ParagraphBorderEdge>(
     (style.removeBorders ?? []).flatMap((edge) => (edge === 'all' ? PARAGRAPH_BORDER_EDGES : [edge]))
   );
   for (const edge of PARAGRAPH_BORDER_EDGES) {
-    const field = borderFieldName(edge);
-    const input = style[field as 'borderTop'];
+    const field = PARAGRAPH_BORDER_KEYS[edge];
+    const input = style[field];
     if (removals.has(edge)) {
       if (input !== undefined) throw new Error(`Cannot both set and remove the ${edge} border in one call`);
       fieldsToUpdate.push(field);
@@ -2039,11 +2046,11 @@ const CreateFootnoteSchema = z.object({
 function paragraphBorderProperty(edgeDescription: string) {
   return {
     type: "object",
-    description: `${edgeDescription} Omitted subfields default to a rendering border: color #000000, width 1pt, SOLID.`,
+    description: `${edgeDescription} Omitted subfields default to a rendering border: color #000000, width 1pt, padding 1pt, SOLID.`,
     properties: {
       color: { type: "string", description: "Hex color (e.g., #FF0000; default #000000)" },
       width: { type: "number", description: "Line width in points (default: 1)" },
-      padding: { type: "number", description: "Space between the border and the paragraph text, in points" },
+      padding: { type: "number", description: "Space between the border and the paragraph text, in points (default: 1)" },
       dashStyle: { type: "string", enum: ["SOLID", "DOT", "DASH"], description: "Line style (default: SOLID)" }
     }
   };
@@ -2074,7 +2081,7 @@ const applyParagraphStyleInputSchema = {
     borderLeft: paragraphBorderProperty("Border left of the paragraph."),
     borderRight: paragraphBorderProperty("Border right of the paragraph."),
     borderBetween: paragraphBorderProperty("Border between consecutive same-styled paragraphs."),
-    removeBorders: { type: "array", items: { type: "string", enum: ["top", "bottom", "left", "right", "between", "all"] }, description: "Border edges to clear. The update applies to EVERY paragraph overlapping the target range, so removeBorders: [\"all\"] over the whole body strips every decorative rule in one call." },
+    removeBorders: { type: "array", items: { type: "string", enum: ["top", "bottom", "left", "right", "between", "all"] }, description: "Border edges to clear at the paragraph level, so each falls back to the border its named style defines (usually none). Does not touch horizontalRule elements. The update applies to EVERY paragraph overlapping the target range, so removeBorders: [\"all\"] over the whole body strips every paragraph border in one call." },
     shading: { type: "string", description: "Paragraph background color as hex (e.g., #F1F3F4)" },
     removeShading: { type: "boolean", description: "Clear the paragraph background shading" },
     tabId: { type: "string", description: "Optional. Tab ID to format within (from listDocumentTabs). If omitted, operates on the first/default tab." }
@@ -2224,7 +2231,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "applyParagraphStyle",
-    description: "Apply paragraph formatting — alignment, indents, spacing, named styles, borders (top/bottom/left/right/between), shading, and pagination controls. Use EITHER startIndex+endIndex OR textToFind OR indexWithinParagraph for targeting. The update styles EVERY paragraph overlapping the range, so one call over the whole body with removeBorders: [\"all\"] strips every decorative rule from a document.",
+    description: "Apply paragraph formatting — alignment, indents, spacing, named styles, borders (top/bottom/left/right/between), shading, and pagination controls. Use EITHER startIndex+endIndex OR textToFind OR indexWithinParagraph for targeting. The update styles EVERY paragraph overlapping the range, so one call over the whole body with removeBorders: [\"all\"] strips every paragraph border from a document.",
     inputSchema: applyParagraphStyleInputSchema
   },
   {

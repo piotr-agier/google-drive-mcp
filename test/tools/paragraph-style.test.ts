@@ -112,3 +112,19 @@ test('keeps prior behavior: existing params, tabId threading, and null on empty 
 
   assert.equal(buildUpdateParagraphStyleRequest(1, 10, {}), null);
 });
+
+test('rejects hex colors that parseInt would silently truncate', () => {
+  // parseInt('12345G', 16) === 0x12345, so before the strict check this
+  // passed the length test and became #012345.
+  assert.throws(() => buildUpdateParagraphStyleRequest(1, 10, { shading: '#12345G' }), /Invalid shading hex color/);
+  assert.throws(() => buildUpdateParagraphStyleRequest(1, 10, { borderTop: { color: '#GGGGGG' } }), /Invalid border hex color/);
+  assert.throws(() => buildUpdateParagraphStyleRequest(1, 10, { borderTop: { color: '#12G' } }), /Invalid border hex color/);
+
+  // Well-formed 3- and 6-digit forms, with or without '#', still parse.
+  const short = buildUpdateParagraphStyleRequest(1, 10, { shading: 'fff' });
+  assert.ok(short);
+  assert.deepEqual(short.request.updateParagraphStyle.paragraphStyle.shading.backgroundColor.color.rgbColor, { red: 1, green: 1, blue: 1 });
+  const long = buildUpdateParagraphStyleRequest(1, 10, { borderTop: { color: '#00ff00' } });
+  assert.ok(long);
+  assert.deepEqual(long.request.updateParagraphStyle.paragraphStyle.borderTop.color.color.rgbColor, { red: 0, green: 1, blue: 0 });
+});

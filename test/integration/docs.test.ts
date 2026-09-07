@@ -1819,8 +1819,8 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
-      assert.ok(res.content[0].text!.includes('=== Tab: Tab1 ==='));
-      assert.ok(res.content[0].text!.includes('=== Tab: Tab2 ==='));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1 (tabId=tab-1) ==='));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab2 (tabId=tab-2) ==='));
       assert.ok(res.content[0].text!.includes('First tab'));
       assert.ok(res.content[0].text!.includes('Second tab'));
     });
@@ -1832,15 +1832,15 @@ describe('Docs tools', () => {
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
       // Should include all tabs with proper hierarchy
-      assert.ok(res.content[0].text!.includes('=== Tab: Tab1 ==='));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1 (tabId=tab-1) ==='));
       assert.ok(res.content[0].text!.includes('First tab'));
-      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.1 ==='));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.1 (tabId=tab-1-1) ==='));
       assert.ok(res.content[0].text!.includes('First child'));
-      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.2 ==='));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.2 (tabId=tab-1-2) ==='));
       assert.ok(res.content[0].text!.includes('Second child'));
-      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.2.1 ==='));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.2.1 (tabId=tab-1-2-1) ==='));
       assert.ok(res.content[0].text!.includes('First grandchild'));
-      assert.ok(res.content[0].text!.includes('=== Tab: Tab2 ==='));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab2 (tabId=tab-2) ==='));
       assert.ok(res.content[0].text!.includes('Second tab'));
     });
 
@@ -1851,13 +1851,13 @@ describe('Docs tools', () => {
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
       // Should include all tabs with proper hierarchy
-      assert.ok(res.content[0].text!.includes('=== Tab: Tab1 ==='));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1 (tabId=tab-1) ==='));
       assert.ok(res.content[0].text!.includes('First tab'));
-      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.1 ==='));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.1 (tabId=tab-1-1) ==='));
       assert.ok(res.content[0].text!.includes('First child'));
-      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.2 ==='));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.2 (tabId=tab-1-2) ==='));
       assert.ok(res.content[0].text!.includes('Second child'));
-      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.2.1 ==='));
+      assert.ok(res.content[0].text!.includes('=== Tab: Tab1.2.1 (tabId=tab-1-2-1) ==='));
       assert.ok(res.content[0].text!.includes('First grandchild'));
     });
 
@@ -2048,6 +2048,8 @@ describe('Docs tools', () => {
       const res = await callTool(ctx.client, 'getGoogleDocContent', { documentId: 'doc-1', includeFormatting: true });
       assert.equal(res.isError, false);
       const text = res.content[0].text!;
+      // This fixture's tabProperties carry no tabId, so the header advertises
+      // none — the id is only printed when there is one to pass to editTableCell.
       assert.ok(text.includes('=== Tab: Tab1 ==='), 'should have tab headers');
       assert.ok(text.includes('=== Tab: Tab2 ==='), 'should have tab headers');
       assert.ok(text.includes('style=italic'), 'should show italic in Tab1');
@@ -3030,6 +3032,55 @@ describe('Docs tools', () => {
     const oneLongLine = () => ({
       documentId: 'doc-1', title: 'One Long Line',
       body: { content: [{ paragraph: { elements: [{ textRun: { content: 'Q'.repeat(200) + '\n' }, startIndex: 1, endIndex: 202 }] } }] },
+    });
+
+    it('never splits a page inside a table rendering', async () => {
+      // Table rows are bare `| ... |` lines with no index of their own. A page
+      // break between the <table ...> header and its rows opens the next page
+      // with `| gamma | delta |` and nothing saying which table that is.
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-1', title: 'Table Doc',
+          body: { content: [
+            { paragraph: { elements: [{ textRun: { content: 'Intro\n' }, startIndex: 1, endIndex: 7 }] } },
+            {
+              startIndex: 7, endIndex: 20,
+              table: { tableRows: [{ tableCells: [
+                { content: [{ paragraph: { elements: [{ textRun: { content: 'gamma\n' }, startIndex: 9, endIndex: 15 }] } }] },
+                { content: [{ paragraph: { elements: [{ textRun: { content: 'delta\n' }, startIndex: 16, endIndex: 22 }] } }] },
+              ] }] },
+            },
+          ] },
+        },
+      }));
+
+      // Walk every page boundary a caller could land on. Two invariants: a page
+      // never ends on a table header with its rows pushed to the next page, and
+      // when the whole block fits in the limit it is never split at all. A block
+      // longer than the limit still takes a hard cut, so pagination advances.
+      for (const limit of [40, 60, 100, 140, 172, 175, 190, 200, 300]) {
+        let offset = 0;
+        for (let page = 0; page < 30; page++) {
+          const res = await callTool(ctx.client, 'getGoogleDocContentPaginated', {
+            documentId: 'doc-1', offset, limit,
+          });
+          const r = JSON.parse(res.content[0].text!);
+          // A page that ends right after a COMPLETE header line is the bad cut:
+          // the next page then opens with bare `| a | b |` rows. A header split
+          // mid-line is just ordinary long-line pagination and is fine.
+          assert.ok(!/(^|\n)\[\d+-\d+\] <table[^\n]*\n$/.test(r.content),
+            `limit=${limit}: page ends on a complete table header, orphaning its rows`);
+
+          if (limit >= 300 && /\| gamma /.test(r.content)) {
+            assert.match(r.content, /<table/, `limit=${limit}: rows without their header`);
+            assert.match(r.content, /cells: r0c0/, `limit=${limit}: rows without their cell map`);
+          }
+
+          if (!r.hasMore) break;
+          assert.ok(r.nextOffset > offset, 'pagination must advance');
+          offset = r.nextOffset;
+        }
+      }
     });
 
     it('returns indexed content with hasMore and nextOffset', async () => {

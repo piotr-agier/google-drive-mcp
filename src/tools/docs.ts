@@ -1079,7 +1079,7 @@ export interface DocxContextResult {
  * Build formatted content with indices from a Google Doc document data object.
  * Returns the formatted string and total character length.
  */
-function buildDocFormattedContent(
+export function buildDocFormattedContent(
   docData: any,
   withFormatting: boolean
 ): { formattedContent: string; totalLength: number } {
@@ -1091,6 +1091,18 @@ function buildDocFormattedContent(
     // rules) whose rendered text length is unrelated to their real doc span, so
     // the displayed edit range must use [startIndex, endIndex), not text length.
     atomic?: boolean;
+    // True for multi-line renderings (tables) whose text is a *rendering*, not
+    // index-mapped content: emit one real [startIndex-endIndex) span for the
+    // whole element and never derive per-line ranges from rendered lengths.
+    // The old arithmetic started at the table's own real start index and ran
+    // FORWARD past its end into whatever followed, so a table's ranges
+    // collided with the content after it (sometimes a later table); they never
+    // reached backward into an earlier one.
+    spanOnly?: boolean;
+    // Real per-cell index ranges, carried alongside the rendering so text
+    // inside a cell is still addressable by applyTextStyle/formatGoogleDocText.
+    // editTableCell only styles a whole cell.
+    cellSpans?: Array<{ row: number; column: number; startIndex: number; endIndex: number }>;
     fontFamily?: string;
     fontSize?: number;
     bold?: boolean;
@@ -1108,15 +1120,24 @@ function buildDocFormattedContent(
   function extractSegments(bodyContent: any[], inlineObjects?: any): Segment[] {
     const segments: Segment[] = [];
 
-    function getCellText(cellContent: any[]): string {
+    function getCellText(cellContent: any[]): { text: string; startIndex?: number; endIndex?: number } {
       const before = segments.length;
       processContent(cellContent);
       const cellSegs = segments.splice(before);
-      return cellSegs
+      const text = cellSegs
         .map(s => s.text.replace(/\n$/g, ''))
         .join(' ')
         .replace(/\|/g, '\\|')
         .trim();
+      // The spliced segments carry the cell's true indices from the API. They
+      // used to be discarded, which left text inside a table with no range at
+      // all once the fabricated per-row ranges were removed.
+      if (cellSegs.length === 0) return { text };
+      return {
+        text,
+        startIndex: Math.min(...cellSegs.map(c => c.startIndex)),
+        endIndex: Math.max(...cellSegs.map(c => c.endIndex)),
+      };
     }
 
     function processContent(content: any[]) {
@@ -1162,9 +1183,20 @@ function buildDocFormattedContent(
           }
         } else if (element.table?.tableRows) {
           const rows: string[][] = [];
+          const cellSpans: Array<{ row: number; column: number; startIndex: number; endIndex: number }> = [];
+          let rowIndex = 0;
           for (const row of element.table.tableRows) {
             if (!row.tableCells) continue;
-            rows.push(expandRowCells(row, (cell: any) => (cell.content ? getCellText(cell.content) : '')));
+            let columnIndex = 0;
+            rows.push(expandRowCells(row, (cell: any) => {
+              const got = cell.content ? getCellText(cell.content) : { text: '' };
+              if (got.startIndex != null && got.endIndex != null) {
+                cellSpans.push({ row: rowIndex, column: columnIndex, startIndex: got.startIndex, endIndex: got.endIndex });
+              }
+              columnIndex++;
+              return got.text;
+            }));
+            rowIndex++;
           }
           const md = renderPipeTable(rows) + '\n\n';
           if (element.startIndex != null && element.endIndex != null) {
@@ -1172,6 +1204,8 @@ function buildDocFormattedContent(
               text: md,
               startIndex: element.startIndex,
               endIndex: element.endIndex,
+              spanOnly: true,
+              ...(cellSpans.length ? { cellSpans } : {}),
             });
           }
         } else if (element.tableOfContents?.content) {
@@ -1184,7 +1218,13 @@ function buildDocFormattedContent(
     return segments;
   }
 
-  function formatSegments(segments: Segment[]): string {
+  function formatSegments(segments: Segment[], tabId?: string): string {
+    // A table hint that names only tableStartIndex is wrong on a multi-tab
+    // document: index spaces restart per tab, so two tabs can each hold a
+    // table starting at the same index, and editTableCell without a tabId
+    // only searches the first tab. Name the tab too — and the header below
+    // prints the id so the caller can actually supply it.
+    const tabIdHint = tabId ? `, tabId=${tabId}` : '';
     let result = '';
     for (const segment of segments) {
       const hasMeta = withFormatting && hasFormattingInfo(segment);
@@ -1199,6 +1239,25 @@ function buildDocFormattedContent(
           result += meta
             ? `[${segment.startIndex}-${segment.endIndex}] ${meta}\n  ${line}\n`
             : `[${segment.startIndex}-${segment.endIndex}] ${line}\n`;
+        }
+        continue;
+      }
+      // Tables: the markdown below is a rendering, not index-mapped content —
+      // one real span for the element, no fabricated per-row ranges. Cell
+      // indices live in documents.get; targeting a cell needs the table's real
+      // startIndex (this one) with editTableCell's row/column addressing.
+      if (segment.spanOnly) {
+        const body = segment.text.replace(/\n+$/, '');
+        if (body.trim()) {
+          result += `[${segment.startIndex}-${segment.endIndex}] <table — span is the real index range; rows below are a rendering, use editTableCell (tableStartIndex=${segment.startIndex}${tabIdHint}) for cell edits>\n${body}\n`;
+          // Real per-cell ranges, so text inside a cell can still be targeted
+          // by the range-taking tools. editTableCell styles a whole cell.
+          if (segment.cellSpans?.length) {
+            const map = segment.cellSpans
+              .map(c => `r${c.row}c${c.column} [${c.startIndex}-${c.endIndex}]`)
+              .join(', ');
+            result += `cells: ${map}\n`;
+          }
         }
         continue;
       }
@@ -1272,13 +1331,14 @@ function buildDocFormattedContent(
       if (isMultiTab) {
         const title = tab.tabProperties?.title || 'Untitled';
         const indent = '  '.repeat(level);
-        formattedContent += `${indent}=== Tab: ${title} ===\n`;
+        const tabId = tab.tabProperties?.tabId;
+        formattedContent += `${indent}=== Tab: ${title}${tabId ? ` (tabId=${tabId})` : ''} ===\n`;
       }
       if (bodyContent) {
         const tabInlineObjects = tab.documentTab?.inlineObjects;
         const segments = extractSegments(bodyContent, tabInlineObjects);
         trackFonts(segments);
-        formattedContent += formatSegments(segments);
+        formattedContent += formatSegments(segments, tab.tabProperties?.tabId);
         if (segments.length > 0) {
           totalLength += segments[segments.length - 1].endIndex;
         }
@@ -1328,26 +1388,57 @@ function sliceByLine(content: string, offset: number, limit: number): { slice: s
 // its own, but a markdown table spans several lines that only render together:
 // cut between them and the first page ends in a headerless fragment while the
 // next begins with orphaned `| a | b |` rows. Snap the cut back to the start of
-// the table instead. A table longer than `limit` keeps the hard cut, so
-// pagination still makes forward progress.
+// the table instead — including the `[a-b] <table ...>` header the indexed reads
+// print above it, which would otherwise be stranded at the bottom of the
+// previous page. A table longer than `limit` keeps the hard cut so pagination
+// still makes forward progress, but even then the cut never falls between the
+// header and its first row.
 function sliceMarkdownByBlock(content: string, offset: number, limit: number): { slice: string; end: number } {
   const { end } = sliceByLine(content, offset, limit);
   if (end >= content.length) return { slice: content.slice(offset, end), end };
 
-  const isTableLine = (lineStart: number) => content.startsWith('|', lineStart);
+  // Lines that only make sense next to their table: the pipe rows themselves,
+  // and the per-cell index map the indexed reads print underneath them.
+  const isTableBodyLine = (lineStart: number) =>
+    content.startsWith('|', lineStart) || /^cells: r\d+c\d+ \[/.test(content.slice(lineStart, lineStart + 24));
+  // The indexed reads prefix a table with a header line naming its real span.
+  // Walking back over body lines alone would strand that header at the bottom
+  // of the previous page, which is the thing being prevented.
+  const isTableHeaderLine = (lineStart: number) =>
+    /^\[\d+-\d+\] <table/.test(content.slice(lineStart, lineStart + 40));
+  const lineStartBefore = (pos: number) => {
+    const prevBreak = content.lastIndexOf('\n', pos - 2);
+    return prevBreak === -1 ? 0 : prevBreak + 1;
+  };
+
   // `end` sits at the start of the next page's first line.
-  if (!isTableLine(end)) return { slice: content.slice(offset, end), end };
+  if (!isTableBodyLine(end)) return { slice: content.slice(offset, end), end };
 
   let tableStart = end;
   while (tableStart > offset) {
-    const prevBreak = content.lastIndexOf('\n', tableStart - 2);
-    const lineStart = prevBreak === -1 ? 0 : prevBreak + 1;
-    if (lineStart < offset || !isTableLine(lineStart)) break;
+    const lineStart = lineStartBefore(tableStart);
+    if (lineStart < offset || !isTableBodyLine(lineStart)) break;
     tableStart = lineStart;
   }
-  // The table starts at or before this page's own start — it cannot be moved
-  // wholly onto the next page.
-  if (tableStart <= offset) return { slice: content.slice(offset, end), end };
+  // Take the header with the rows it describes.
+  const headerStart = lineStartBefore(tableStart);
+  if (tableStart > offset && headerStart >= offset && isTableHeaderLine(headerStart)) {
+    tableStart = headerStart;
+  }
+  // The table starts at or before this page's own start, so it cannot be moved
+  // wholly onto the next page — the block is longer than `limit`. Keep the hard
+  // cut so pagination still advances, but never cut directly after the header:
+  // that is the split that opens the next page with bare `| a | b |` rows and
+  // nothing naming the table. Carry the first body line across with it.
+  if (tableStart <= offset) {
+    const lastLineStart = lineStartBefore(end);
+    if (isTableHeaderLine(lastLineStart)) {
+      const nextBreak = content.indexOf('\n', end);
+      const extended = nextBreak === -1 ? content.length : nextBreak + 1;
+      return { slice: content.slice(offset, extended), end: extended };
+    }
+    return { slice: content.slice(offset, end), end };
+  }
   return { slice: content.slice(offset, tableStart), end: tableStart };
 }
 
@@ -2672,7 +2763,9 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
 
       const offset = a.offset;
       const limit = a.limit;
-      const { slice: slicedContent, end } = sliceByLine(formattedContent, offset, limit);
+      // Block-aware: table rows and the cell map carry no index of their own, so
+      // a line-wise split can open a page with bare `| ... |` lines.
+      const { slice: slicedContent, end } = sliceMarkdownByBlock(formattedContent, offset, limit);
       const hasMore = end < formattedContent.length;
 
       const result = {

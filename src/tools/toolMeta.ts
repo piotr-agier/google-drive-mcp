@@ -148,6 +148,10 @@ export const TOOL_META: Record<string, ToolMeta> = {
   autoResizeRows: write(SHEETS_WRITE_SCOPES),
   hideSheetDimension: write(SHEETS_WRITE_SCOPES),
   showSheetDimension: write(SHEETS_WRITE_SCOPES),
+  addDimensionGroup: write(SHEETS_WRITE_SCOPES),
+  deleteDimensionGroup: write(SHEETS_WRITE_SCOPES),
+  updateDimensionGroup: write(SHEETS_WRITE_SCOPES),
+  listDimensionGroups: read(SHEETS_READ_SCOPES),
 
   // ---- Slides ----
   getGoogleSlidesContent: read(SLIDES_READ_SCOPES),

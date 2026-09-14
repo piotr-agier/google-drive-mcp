@@ -24,7 +24,42 @@ const UpdateGoogleSheetSchema = z.object({
 
 const GetGoogleSheetContentSchema = z.object({
   spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
-  range: z.string().min(1, "Range is required")
+  range: z.string().min(1, "Range is required"),
+  valueRenderOption: z.enum(["FORMATTED_VALUE", "UNFORMATTED_VALUE", "FORMULA"]).optional().default("FORMATTED_VALUE")
+});
+
+// Dimension groups address whole rows/columns, so they take a DimensionRange
+// (sheetId + index span) rather than the A1 `range` the cell-oriented tools use.
+// Indices follow the same 0-based half-open convention as the other
+// dimension tools.
+const dimensionGroupRangeFields = {
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  sheetId: z.number().int(),
+  dimension: z.enum(["ROWS", "COLUMNS"]),
+  startIndex: z.number().int().min(0),
+  endIndex: z.number().int().min(0)
+};
+
+const startBeforeEnd = {
+  check: (a: { startIndex: number; endIndex: number }) => a.startIndex < a.endIndex,
+  message: "startIndex must be less than endIndex"
+};
+
+const AddDimensionGroupSchema = z.object(dimensionGroupRangeFields)
+  .refine(startBeforeEnd.check, { message: startBeforeEnd.message });
+
+const DeleteDimensionGroupSchema = z.object(dimensionGroupRangeFields)
+  .refine(startBeforeEnd.check, { message: startBeforeEnd.message });
+
+const UpdateDimensionGroupSchema = z.object({
+  ...dimensionGroupRangeFields,
+  depth: z.number().int().min(1, "depth must be at least 1").optional().default(1),
+  collapsed: z.boolean()
+}).refine(startBeforeEnd.check, { message: startBeforeEnd.message });
+
+const ListDimensionGroupsSchema = z.object({
+  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
+  sheetId: z.number().int().optional()
 });
 
 const FormatGoogleSheetCellsSchema = z.object({
@@ -267,12 +302,18 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "getGoogleSheetContent",
-    description: "Get content of a Google Sheet with cell information",
+    description: "Get content of a Google Sheet with cell information. Returns displayed values by default; set valueRenderOption to 'FORMULA' to read the underlying formulas (e.g. '=SUM(A1:A10)') instead of their results, or 'UNFORMATTED_VALUE' for raw numbers without display formatting.",
     inputSchema: {
       type: "object",
       properties: {
         spreadsheetId: { type: "string", description: "Spreadsheet ID" },
-        range: { type: "string", description: "Range to get (e.g., 'Sheet1!A1:C10')" }
+        range: { type: "string", description: "Range to get (e.g., 'Sheet1!A1:C10')" },
+        valueRenderOption: {
+          type: "string",
+          description: "How values are returned: FORMATTED_VALUE (as displayed, default), UNFORMATTED_VALUE (raw values), FORMULA (the formula behind each cell)",
+          enum: ["FORMATTED_VALUE", "UNFORMATTED_VALUE", "FORMULA"],
+          default: "FORMATTED_VALUE"
+        }
       },
       required: ["spreadsheetId", "range"]
     }
@@ -606,6 +647,65 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
   {
+    name: "addDimensionGroup",
+    description: "Group a range of rows or columns in a sheet (creates a collapsible outline group). Indices are 0-based and the interval is half-open [startIndex, endIndex) \u2014 to group rows 5 through 12 as shown in the UI, pass startIndex: 4, endIndex: 12. Nest groups by adding a second group inside the range of the first.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        sheetId: { type: "number", description: "Sheet ID (from getSpreadsheetInfo / listSheets). The default first sheet is usually 0." },
+        dimension: { type: "string", description: "Group rows or columns", enum: ["ROWS", "COLUMNS"] },
+        startIndex: { type: "number", description: "0-based start index (inclusive)" },
+        endIndex: { type: "number", description: "0-based end index (exclusive); must be greater than startIndex" }
+      },
+      required: ["spreadsheetId", "sheetId", "dimension", "startIndex", "endIndex"]
+    }
+  },
+  {
+    name: "deleteDimensionGroup",
+    description: "Remove a row or column group from a sheet. The rows/columns themselves are kept; only the grouping is deleted. Indices are 0-based and the interval is half-open [startIndex, endIndex) \u2014 use listDimensionGroups to read back an existing group\u0027s range.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        sheetId: { type: "number", description: "Sheet ID (from getSpreadsheetInfo / listSheets). The default first sheet is usually 0." },
+        dimension: { type: "string", description: "Group rows or columns", enum: ["ROWS", "COLUMNS"] },
+        startIndex: { type: "number", description: "0-based start index (inclusive)" },
+        endIndex: { type: "number", description: "0-based end index (exclusive); must be greater than startIndex" }
+      },
+      required: ["spreadsheetId", "sheetId", "dimension", "startIndex", "endIndex"]
+    }
+  },
+  {
+    name: "updateDimensionGroup",
+    description: "Collapse or expand an existing row or column group. Indices are 0-based and the interval is half-open [startIndex, endIndex). Use listDimensionGroups first to find the group's range and depth.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        sheetId: { type: "number", description: "Sheet ID (from getSpreadsheetInfo / listSheets). The default first sheet is usually 0." },
+        dimension: { type: "string", description: "Group rows or columns", enum: ["ROWS", "COLUMNS"] },
+        startIndex: { type: "number", description: "0-based start index (inclusive)" },
+        endIndex: { type: "number", description: "0-based end index (exclusive); must be greater than startIndex" },
+        depth: { type: "number", description: "Nesting depth of the group, 1 for an outermost group (default 1)", default: 1 },
+        collapsed: { type: "boolean", description: "true to collapse the group, false to expand it" }
+      },
+      required: ["spreadsheetId", "sheetId", "dimension", "startIndex", "endIndex", "collapsed"]
+    }
+  },
+  {
+    name: "listDimensionGroups",
+    description: "List the row and column groups of a spreadsheet, with each group's range, nesting depth and collapsed state. Ranges are reported as 0-based half-open intervals, exactly as addDimensionGroup, deleteDimensionGroup and updateDimensionGroup take them.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        sheetId: { type: "number", description: "Limit to one sheet by ID; omit to list every sheet" }
+      },
+      required: ["spreadsheetId"]
+    }
+  },
+  {
     name: "listGoogleSheets",
     description: "Lists Google Spreadsheets from your Google Drive with optional filtering",
     inputSchema: {
@@ -753,6 +853,16 @@ async function batchUpdateOne(
   });
 }
 
+function describeDimensionGroup(
+  label: 'rows' | 'columns',
+  group: sheets_v4.Schema$DimensionGroup
+): string {
+  const start = group.range?.startIndex ?? 0;
+  const end = group.range?.endIndex ?? 0;
+  const depth = group.depth ?? 1;
+  return `  - ${label} [${start}, ${end}), depth ${depth}, ${group.collapsed ? 'collapsed' : 'expanded'}`;
+}
+
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
@@ -852,7 +962,8 @@ export async function handleTool(
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
       const response = await sheets.spreadsheets.values.get({
         spreadsheetId: a.spreadsheetId,
-        range: a.range
+        range: a.range,
+        valueRenderOption: a.valueRenderOption
       });
 
       const values = response.data.values || [];
@@ -1513,6 +1624,87 @@ export async function handleTool(
 
       const namedRangeId = response.data.replies?.[0]?.addNamedRange?.namedRange?.namedRangeId;
       return { content: [{ type: 'text', text: `Added named range "${a.name}" for ${a.range}${namedRangeId ? ` (id: ${namedRangeId})` : ''}.` }], isError: false };
+    }
+
+    case "addDimensionGroup": {
+      const validation = AddDimensionGroupSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      await batchUpdateOne(ctx, a.spreadsheetId, {
+        addDimensionGroup: {
+          range: dimensionRange(a.sheetId, a.dimension, a.startIndex, a.endIndex),
+        },
+      });
+
+      const label = a.dimension === 'ROWS' ? 'rows' : 'columns';
+      return { content: [{ type: 'text', text: `Grouped ${label} [${a.startIndex}, ${a.endIndex}) in sheet ${a.sheetId}.` }], isError: false };
+    }
+
+    case "deleteDimensionGroup": {
+      const validation = DeleteDimensionGroupSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      await batchUpdateOne(ctx, a.spreadsheetId, {
+        deleteDimensionGroup: {
+          range: dimensionRange(a.sheetId, a.dimension, a.startIndex, a.endIndex),
+        },
+      });
+
+      const label = a.dimension === 'ROWS' ? 'rows' : 'columns';
+      return { content: [{ type: 'text', text: `Removed the group on ${label} [${a.startIndex}, ${a.endIndex}) in sheet ${a.sheetId}.` }], isError: false };
+    }
+
+    case "updateDimensionGroup": {
+      const validation = UpdateDimensionGroupSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      await batchUpdateOne(ctx, a.spreadsheetId, {
+        updateDimensionGroup: {
+          dimensionGroup: {
+            range: dimensionRange(a.sheetId, a.dimension, a.startIndex, a.endIndex),
+            depth: a.depth,
+            collapsed: a.collapsed,
+          },
+          fields: 'collapsed',
+        },
+      });
+
+      const label = a.dimension === 'ROWS' ? 'rows' : 'columns';
+      return { content: [{ type: 'text', text: `${a.collapsed ? 'Collapsed' : 'Expanded'} the group on ${label} [${a.startIndex}, ${a.endIndex}) at depth ${a.depth} in sheet ${a.sheetId}.` }], isError: false };
+    }
+
+    case "listDimensionGroups": {
+      const validation = ListDimensionGroupsSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      const response = await sheets.spreadsheets.get({
+        spreadsheetId: a.spreadsheetId,
+        fields: 'sheets(properties(sheetId,title),rowGroups,columnGroups)'
+      });
+
+      const allSheets = response.data.sheets || [];
+      const targets = a.sheetId === undefined
+        ? allSheets
+        : allSheets.filter(s => s.properties?.sheetId === a.sheetId);
+      if (a.sheetId !== undefined && targets.length === 0) {
+        return errorResponse(`Sheet ${a.sheetId} not found`);
+      }
+
+      const blocks = targets.map(sheet => {
+        const lines = [
+          ...(sheet.rowGroups || []).map(g => describeDimensionGroup('rows', g)),
+          ...(sheet.columnGroups || []).map(g => describeDimensionGroup('columns', g)),
+        ];
+        const body = lines.length > 0 ? lines.join('\n') : '  (no groups)';
+        return `**${sheet.properties?.title || 'Untitled'}** (sheetId: ${sheet.properties?.sheetId})\n${body}`;
+      });
+
+      return { content: [{ type: 'text', text: blocks.join('\n\n') }], isError: false };
     }
 
     case "listGoogleSheets": {

@@ -529,4 +529,238 @@ describe('Sheets tools', () => {
       assert.equal(res.isError, true);
     });
   });
+
+  // --- getGoogleSheetContent: valueRenderOption ---
+  describe('getGoogleSheetContent valueRenderOption', () => {
+    it('requests formulas when valueRenderOption is FORMULA', async () => {
+      ctx.mocks.sheets.service.spreadsheets.values.get._setImpl(async () => ({
+        data: { values: [['=SUM(A1:A10)']] },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleSheetContent', {
+        spreadsheetId: 'sheet-1', range: 'Sheet1!B1', valueRenderOption: 'FORMULA',
+      });
+      assert.equal(res.isError, false);
+      const call = ctx.mocks.sheets.tracker.getCalls('spreadsheets.values.get')[0];
+      assert.equal(call.args[0].valueRenderOption, 'FORMULA');
+      assert.ok(res.content[0].text!.includes('=SUM(A1:A10)'));
+    });
+
+    it('defaults to FORMATTED_VALUE when omitted', async () => {
+      await callTool(ctx.client, 'getGoogleSheetContent', {
+        spreadsheetId: 'sheet-1', range: 'Sheet1!A1:B2',
+      });
+      const call = ctx.mocks.sheets.tracker.getCalls('spreadsheets.values.get')[0];
+      assert.equal(call.args[0].valueRenderOption, 'FORMATTED_VALUE');
+    });
+
+    it('rejects an unknown render option', async () => {
+      const res = await callTool(ctx.client, 'getGoogleSheetContent', {
+        spreadsheetId: 'sheet-1', range: 'Sheet1!A1:B2', valueRenderOption: 'FORMULAS',
+      });
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- addDimensionGroup ---
+  describe('addDimensionGroup', () => {
+    it('groups rows over the 0-based half-open range it was given', async () => {
+      const res = await callTool(ctx.client, 'addDimensionGroup', {
+        spreadsheetId: 'sheet-1', sheetId: 0,
+        dimension: 'ROWS', startIndex: 4, endIndex: 12,
+      });
+      assert.equal(res.isError, false);
+      const call = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate')[0];
+      assert.deepEqual(call.args[0].requestBody.requests[0], {
+        addDimensionGroup: {
+          range: { sheetId: 0, dimension: 'ROWS', startIndex: 4, endIndex: 12 },
+        },
+      });
+    });
+
+    it('groups columns on a non-zero sheet id', async () => {
+      await callTool(ctx.client, 'addDimensionGroup', {
+        spreadsheetId: 'sheet-1', sheetId: 7,
+        dimension: 'COLUMNS', startIndex: 2, endIndex: 6,
+      });
+      const call = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate')[0];
+      assert.deepEqual(call.args[0].requestBody.requests[0].addDimensionGroup.range, {
+        sheetId: 7, dimension: 'COLUMNS', startIndex: 2, endIndex: 6,
+      });
+    });
+
+    it('rejects an empty range', async () => {
+      const res = await callTool(ctx.client, 'addDimensionGroup', {
+        spreadsheetId: 'sheet-1', sheetId: 0,
+        dimension: 'ROWS', startIndex: 5, endIndex: 5,
+      });
+      assert.equal(res.isError, true);
+      assert.equal(ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate').length, 0);
+    });
+
+    it('rejects a negative start index', async () => {
+      const res = await callTool(ctx.client, 'addDimensionGroup', {
+        spreadsheetId: 'sheet-1', sheetId: 0,
+        dimension: 'ROWS', startIndex: -1, endIndex: 5,
+      });
+      assert.equal(res.isError, true);
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'addDimensionGroup', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- deleteDimensionGroup ---
+  describe('deleteDimensionGroup', () => {
+    it('sends a deleteDimensionGroup request for the range', async () => {
+      const res = await callTool(ctx.client, 'deleteDimensionGroup', {
+        spreadsheetId: 'sheet-1', sheetId: 0,
+        dimension: 'ROWS', startIndex: 4, endIndex: 12,
+      });
+      assert.equal(res.isError, false);
+      const call = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate')[0];
+      assert.deepEqual(call.args[0].requestBody.requests[0], {
+        deleteDimensionGroup: {
+          range: { sheetId: 0, dimension: 'ROWS', startIndex: 4, endIndex: 12 },
+        },
+      });
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'deleteDimensionGroup', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- updateDimensionGroup ---
+  describe('updateDimensionGroup', () => {
+    it('collapses a group at a given depth', async () => {
+      const res = await callTool(ctx.client, 'updateDimensionGroup', {
+        spreadsheetId: 'sheet-1', sheetId: 0,
+        dimension: 'ROWS', startIndex: 4, endIndex: 12, depth: 1, collapsed: true,
+      });
+      assert.equal(res.isError, false);
+      const call = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate')[0];
+      assert.deepEqual(call.args[0].requestBody.requests[0], {
+        updateDimensionGroup: {
+          dimensionGroup: {
+            range: { sheetId: 0, dimension: 'ROWS', startIndex: 4, endIndex: 12 },
+            depth: 1,
+            collapsed: true,
+          },
+          fields: 'collapsed',
+        },
+      });
+    });
+
+    it('expands a group when collapsed is false', async () => {
+      await callTool(ctx.client, 'updateDimensionGroup', {
+        spreadsheetId: 'sheet-1', sheetId: 0,
+        dimension: 'ROWS', startIndex: 4, endIndex: 12, depth: 2, collapsed: false,
+      });
+      const call = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate')[0];
+      const group = call.args[0].requestBody.requests[0].updateDimensionGroup.dimensionGroup;
+      assert.equal(group.collapsed, false);
+      assert.equal(group.depth, 2);
+    });
+
+    it('defaults to depth 1 when depth is omitted', async () => {
+      await callTool(ctx.client, 'updateDimensionGroup', {
+        spreadsheetId: 'sheet-1', sheetId: 0,
+        dimension: 'ROWS', startIndex: 4, endIndex: 12, collapsed: true,
+      });
+      const call = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate')[0];
+      assert.equal(call.args[0].requestBody.requests[0].updateDimensionGroup.dimensionGroup.depth, 1);
+    });
+
+    it('validation error when collapsed is missing', async () => {
+      const res = await callTool(ctx.client, 'updateDimensionGroup', {
+        spreadsheetId: 'sheet-1', sheetId: 0,
+        dimension: 'ROWS', startIndex: 4, endIndex: 12, depth: 1,
+      });
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- listDimensionGroups ---
+  describe('listDimensionGroups', () => {
+    function setupGroupsMock() {
+      ctx.mocks.sheets.service.spreadsheets.get._setImpl(async () => ({
+        data: {
+          spreadsheetId: 'sheet-1',
+          sheets: [
+            {
+              properties: { sheetId: 0, title: 'Sheet1' },
+              rowGroups: [
+                { range: { startIndex: 4, endIndex: 12 }, depth: 1, collapsed: true },
+                { range: { startIndex: 6, endIndex: 9 }, depth: 2, collapsed: false },
+              ],
+              columnGroups: [
+                { range: { startIndex: 2, endIndex: 6 }, depth: 1, collapsed: false },
+              ],
+            },
+          ],
+        },
+      }));
+    }
+
+    it('reports group ranges as 0-based half-open intervals', async () => {
+      setupGroupsMock();
+      const res = await callTool(ctx.client, 'listDimensionGroups', { spreadsheetId: 'sheet-1' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text!.includes('rows [4, 12)'), res.content[0].text!);
+      assert.ok(res.content[0].text!.includes('columns [2, 6)'), res.content[0].text!);
+    });
+
+    it('reports depth and collapsed state', async () => {
+      setupGroupsMock();
+      const res = await callTool(ctx.client, 'listDimensionGroups', { spreadsheetId: 'sheet-1' });
+      assert.ok(res.content[0].text!.includes('depth 2'), res.content[0].text!);
+      assert.ok(/collapsed/i.test(res.content[0].text!));
+    });
+
+    it('reports the sheet id so the range can be fed back to the group tools', async () => {
+      setupGroupsMock();
+      const res = await callTool(ctx.client, 'listDimensionGroups', { spreadsheetId: 'sheet-1' });
+      assert.ok(res.content[0].text!.includes('sheetId: 0'), res.content[0].text!);
+    });
+
+    it('asks the API for the group fields', async () => {
+      setupGroupsMock();
+      await callTool(ctx.client, 'listDimensionGroups', { spreadsheetId: 'sheet-1' });
+      const call = ctx.mocks.sheets.tracker.getCalls('spreadsheets.get')[0];
+      assert.match(call.args[0].fields, /rowGroups/);
+      assert.match(call.args[0].fields, /columnGroups/);
+    });
+
+    it('limits the listing to one sheet id', async () => {
+      setupGroupsMock();
+      const res = await callTool(ctx.client, 'listDimensionGroups', {
+        spreadsheetId: 'sheet-1', sheetId: 0,
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text!.includes('Sheet1'));
+    });
+
+    it('says so when a sheet has no groups', async () => {
+      setupSheetsMock();
+      const res = await callTool(ctx.client, 'listDimensionGroups', { spreadsheetId: 'sheet-1' });
+      assert.equal(res.isError, false);
+      assert.ok(/no groups/i.test(res.content[0].text!), res.content[0].text!);
+    });
+
+    it('reports an unknown sheet id', async () => {
+      setupGroupsMock();
+      const res = await callTool(ctx.client, 'listDimensionGroups', {
+        spreadsheetId: 'sheet-1', sheetId: 42,
+      });
+      assert.equal(res.isError, true);
+    });
+
+    it('validation error', async () => {
+      const res = await callTool(ctx.client, 'listDimensionGroups', {});
+      assert.equal(res.isError, true);
+    });
+  });
 });

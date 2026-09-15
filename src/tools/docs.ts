@@ -8,6 +8,7 @@ import { downloadTextContent, writeTextContent } from './text-content.js';
 import { uploadImageToDrive } from '../utils/driveImageUpload.js';
 import { withRetry } from '../utils/retry.js';
 import { getResponseHeader } from '../utils/streams.js';
+import { paragraphMetaBits, rgbColorToHex } from './styleProjection.js';
 
 // ---------------------------------------------------------------------------
 // Helper functions
@@ -37,16 +38,6 @@ function hexToRgbColor(hex: string): { red: number; green: number; blue: number 
   const b = (bigint & 255) / 255;
 
   return { red: r, green: g, blue: b };
-}
-
-// Inverse of hexToRgbColor – converts Google Docs API color object to hex string
-function rgbColorToHex(color: any): string | null {
-  if (!color?.color?.rgbColor) return null;
-  const rgb = color.color.rgbColor;
-  const r = Math.round((rgb.red || 0) * 255);
-  const g = Math.round((rgb.green || 0) * 255);
-  const b = Math.round((rgb.blue || 0) * 255);
-  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
 }
 
 // Helper to recursively collect all tabs with their nesting level
@@ -1185,6 +1176,9 @@ export function buildDocFormattedContent(
     // inside a cell is still addressable by applyTextStyle/formatGoogleDocText.
     // editTableCell only styles a whole cell.
     cellSpans?: Array<{ row: number; column: number; startIndex: number; endIndex: number }>;
+    // Paragraph-level style annotation: a one-line rendering of the
+    // paragraph's non-default styles over its real span; carries no content.
+    paraMeta?: boolean;
     fontFamily?: string;
     fontSize?: number;
     bold?: boolean;
@@ -1206,7 +1200,12 @@ export function buildDocFormattedContent(
       const before = segments.length;
       processContent(cellContent);
       const cellSegs = segments.splice(before);
+      // Paragraph meta is a one-line annotation over a paragraph's span, not
+      // content. Joined into a cell it would render inside the pipe row as
+      // `| ¶ center Header A |` — a regression in the formatted read itself.
+      // Filtered from the joined text only; the spans still feed the cell range.
       const text = cellSegs
+        .filter(c => !c.paraMeta)
         .map(s => s.text.replace(/\n$/g, ''))
         .join(' ')
         .replace(/\|/g, '\\|')
@@ -1225,6 +1224,17 @@ export function buildDocFormattedContent(
     function processContent(content: any[]) {
       for (const element of content) {
         if (element.paragraph?.elements) {
+          if (withFormatting && element.startIndex != null && element.endIndex != null) {
+            const bits = paragraphMetaBits(element.paragraph);
+            if (bits.length) {
+              segments.push({
+                text: `\u00b6 ${bits.join(', ')}`,
+                startIndex: element.startIndex,
+                endIndex: element.endIndex,
+                paraMeta: true,
+              });
+            }
+          }
           for (const textElement of element.paragraph.elements) {
             if (textElement.textRun?.content && textElement.startIndex != null && textElement.endIndex != null) {
               const seg: Segment = {
@@ -1311,6 +1321,11 @@ export function buildDocFormattedContent(
     for (const segment of segments) {
       const hasMeta = withFormatting && hasFormattingInfo(segment);
       const meta = hasMeta ? buildMetaLine(segment) : null;
+      // Paragraph style annotations: one line over the paragraph's real span.
+      if (segment.paraMeta) {
+        result += `[${segment.startIndex}-${segment.endIndex}] ${segment.text}\n`;
+        continue;
+      }
       // Atomic inline replacements occupy exactly [startIndex, endIndex) in the
       // doc regardless of how long their placeholder text is. Emit that real
       // range on one line so index-based edits target the object, not the text
@@ -2374,7 +2389,7 @@ export const toolDefinitions: ToolDefinition[] = [
       type: "object",
       properties: {
         documentId: { type: "string", description: "Document ID" },
-        includeFormatting: { type: "boolean", description: "Include font, style, and color info for each text span (default: false)" },
+        includeFormatting: { type: "boolean", description: "Include font, style, color, and baseline info for each text span, plus one ¶ line per paragraph with non-default paragraph styles (named style, alignment, visible borders, shading) over its real index span (default: false)" },
       },
       required: ["documentId"]
     }
@@ -2386,7 +2401,7 @@ export const toolDefinitions: ToolDefinition[] = [
       type: "object",
       properties: {
         documentId: { type: "string", description: "Document ID" },
-        includeFormatting: { type: "boolean", description: "Include font, style, and color info for each text span (default: false)" },
+        includeFormatting: { type: "boolean", description: "Include font, style, color, and baseline info for each text span, plus one ¶ line per paragraph with non-default paragraph styles (named style, alignment, visible borders, shading) over its real index span (default: false)" },
         offset: { type: "number", description: "Character offset into the formatted indexed output (not raw doc characters). 0-based, default: 0. Pass the previous response's nextOffset to get the following page." },
         limit: { type: "number", description: "Maximum characters to return per page (default: 50000, max: 80000; kept below the host's ~100K output cap to leave room for the JSON envelope and newline escaping). The page end is snapped back to a line boundary where possible; a single line longer than limit is hard-cut to guarantee forward progress." }
       },

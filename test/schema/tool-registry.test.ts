@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it, before, after } from 'node:test';
 import { setupTestServer, type TestContext } from '../helpers/setup-server.js';
 
-const EXPECTED_TOOL_COUNT = 116;
+const EXPECTED_TOOL_COUNT = 120;
 
 const EXPECTED_TOOLS = [
   'manage_accounts',
@@ -16,6 +16,7 @@ const EXPECTED_TOOLS = [
   'setGoogleSheetBorders', 'mergeGoogleSheetCells', 'addGoogleSheetConditionalFormat',
   'getSpreadsheetInfo', 'appendSpreadsheetRows', 'addSpreadsheetSheet', 'addSheet', 'listSheets', 'renameSheet', 'deleteSheet', 'addDataValidation', 'protectRange', 'addNamedRange',
   'setColumnWidth', 'setRowHeight', 'autoResizeColumns', 'autoResizeRows', 'hideSheetDimension', 'showSheetDimension',
+  'addDimensionGroup', 'deleteDimensionGroup', 'updateDimensionGroup', 'listDimensionGroups',
   'listGoogleSheets', 'copyFile',
   'createGoogleSlides', 'updateGoogleSlides',
   'getGoogleDocContent', 'getGoogleDocContentPaginated', 'getGoogleDocImage', 'getGoogleSlidesContent',

@@ -1,6 +1,6 @@
 # Tool reference
 
-This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
+This server exposes 120 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
 
 ## Available Tools
 
@@ -371,6 +371,7 @@ This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and
 - **getGoogleSheetContent** - Get spreadsheet content with cell information
   - `spreadsheetId`: Spreadsheet ID
   - `range`: Range to get (e.g., 'Sheet1!A1:C10')
+  - `valueRenderOption`: `FORMATTED_VALUE` (default, as displayed), `UNFORMATTED_VALUE` (raw values), or `FORMULA` (the formula behind each cell) (optional)
 
 #### Sheet Management
 - **getSpreadsheetInfo** - Get detailed information about a spreadsheet including all sheets/tabs
@@ -450,6 +451,28 @@ This server exposes 116 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `spreadsheetId`, `sheetId`: Spreadsheet and sheet IDs
   - `dimension`: `COLUMNS` or `ROWS`
   - `startIndex`, `endIndex`: 0-based half-open range
+
+- **addDimensionGroup** - Group rows or columns into a collapsible outline group
+  - `spreadsheetId`, `sheetId`: Spreadsheet and sheet IDs
+  - `dimension`: `COLUMNS` or `ROWS`
+  - `startIndex`, `endIndex`: 0-based half-open range
+  - Nest groups by adding a second group inside the range of the first
+
+- **deleteDimensionGroup** - Remove a row or column group (the rows/columns are kept)
+  - `spreadsheetId`, `sheetId`: Spreadsheet and sheet IDs
+  - `dimension`: `COLUMNS` or `ROWS`
+  - `startIndex`, `endIndex`: 0-based half-open range
+
+- **updateDimensionGroup** - Collapse or expand an existing group
+  - `spreadsheetId`, `sheetId`: Spreadsheet and sheet IDs
+  - `dimension`: `COLUMNS` or `ROWS`
+  - `startIndex`, `endIndex`: 0-based half-open range
+  - `depth`: Nesting depth, 1 for an outermost group (optional, default 1)
+  - `collapsed`: `true` to collapse, `false` to expand
+
+- **listDimensionGroups** - List row and column groups with their range, depth and collapsed state
+  - `spreadsheetId`: Spreadsheet ID
+  - `sheetId`: Limit to one sheet (optional; omit to list every sheet)
 
 #### Formatting
 - **formatGoogleSheetCells** - Format cell properties

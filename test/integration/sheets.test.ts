@@ -559,6 +559,39 @@ describe('Sheets tools', () => {
       });
       assert.equal(res.isError, true);
     });
+
+    // A comma-space separator cannot be told apart from a comma-space inside a
+    // cell, so rows are tab-separated under every render option.
+    it('keeps a formula containing ", " in one cell', async () => {
+      ctx.mocks.sheets.service.spreadsheets.values.get._setImpl(async () => ({
+        data: { values: [['=IF(A1>0, "yes", "no")', '=SUM(A1, B1)']] },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleSheetContent', {
+        spreadsheetId: 'sheet-1', range: 'Sheet1!B1:C1', valueRenderOption: 'FORMULA',
+      });
+      assert.equal(res.isError, false);
+      const row = res.content[0].text!.split('\n').find(l => l.startsWith('Row 1: '))!;
+      assert.deepEqual(row.slice('Row 1: '.length).split('\t'), [
+        '=IF(A1>0, "yes", "no")',
+        '=SUM(A1, B1)',
+      ]);
+    });
+
+    it('keeps a prose cell containing ", " in one cell under the default render option', async () => {
+      ctx.mocks.sheets.service.spreadsheets.values.get._setImpl(async () => ({
+        data: { values: [['North', '$1,234.56', 'Up, but slowing']] },
+      }));
+      const res = await callTool(ctx.client, 'getGoogleSheetContent', {
+        spreadsheetId: 'sheet-1', range: 'Sheet1!A2:C2',
+      });
+      assert.equal(res.isError, false);
+      const row = res.content[0].text!.split('\n').find(l => l.startsWith('Row 1: '))!;
+      assert.deepEqual(row.slice('Row 1: '.length).split('\t'), [
+        'North',
+        '$1,234.56',
+        'Up, but slowing',
+      ]);
+    });
   });
 
   // --- addDimensionGroup ---

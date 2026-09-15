@@ -373,6 +373,8 @@ This server exposes 120 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `spreadsheetId`: Spreadsheet ID
   - `range`: Range to get (e.g., 'Sheet1!A1:C10')
   - `valueRenderOption`: `FORMATTED_VALUE` (default, as displayed), `UNFORMATTED_VALUE` (raw values), or `FORMULA` (the formula behind each cell) (optional)
+  - Cells within a row are separated by a tab, so a value containing a comma stays one cell
+  - Under `UNFORMATTED_VALUE` a date or time cell is returned as a serial number, not a date string
 
 #### Sheet Management
 - **getSpreadsheetInfo** - Get detailed information about a spreadsheet including all sheets/tabs
@@ -463,6 +465,7 @@ This server exposes 120 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `spreadsheetId`, `sheetId`: Spreadsheet and sheet IDs
   - `dimension`: `COLUMNS` or `ROWS`
   - `startIndex`, `endIndex`: 0-based half-open range
+  - The API decrements the depth of every dimension in the range rather than matching a whole group, so a partially overlapping range shrinks a group instead of removing it. Pass the full range reported by `listDimensionGroups` to remove one
 
 - **updateDimensionGroup** - Collapse or expand an existing group
   - `spreadsheetId`, `sheetId`: Spreadsheet and sheet IDs

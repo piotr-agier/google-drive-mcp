@@ -308,14 +308,14 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "batchUpdateGoogleSheetValues",
-    description: "Write many ranges in ONE call via spreadsheets.values.batchUpdate. Ranges may sit on different sheets of the same spreadsheet. Prefer this over repeated updateGoogleSheet calls whenever more than one range changes: N separate writes cost N round trips and N units of the 60-writes-per-minute quota, while one batch costs one of each.",
+    description: "Write many ranges in ONE call via spreadsheets.values.batchUpdate. Ranges may sit on different sheets of the same spreadsheet. Prefer this over repeated updateGoogleSheet calls whenever more than one range changes: N separate writes cost N round trips and N units of the per-minute write quota, while one batch costs one of each.",
     inputSchema: {
       type: "object",
       properties: {
         spreadsheetId: { type: "string", description: "Sheet ID" },
         updates: {
           type: "array",
-          description: "Ranges to write, each a {range, values} pair. Overlapping ranges are applied in order, so a later entry wins.",
+          description: "Ranges to write, each a {range, values} pair. The API does not document precedence for overlapping ranges, so do not overlap them.",
           items: {
             type: "object",
             properties: {

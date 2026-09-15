@@ -1,11 +1,20 @@
 // Compact paragraph-style annotation for the indexed reads: the answer to
 // "what styling is on this paragraph?" without a full-document JSON read.
 
-function hex(color: any): string | null {
-  const rgb = color?.color?.rgbColor ?? color?.rgbColor;
-  if (!rgb) return null;
-  const c = (v: number | undefined) => Math.round((v ?? 0) * 255).toString(16).padStart(2, '0');
-  return `#${c(rgb.red)}${c(rgb.green)}${c(rgb.blue)}`;
+/**
+ * Docs `OptionalColor` (`{ color: { rgbColor } }`) to `#rrggbb`, or null when
+ * the color carries no `rgbColor`. Borders, shading, and text runs all use this
+ * one shape, so rounding stays consistent across every surface that prints a
+ * color. Lives here rather than in `docs.ts` only because `docs.ts` imports
+ * this module; keeping the helper on this side avoids an import cycle.
+ */
+export function rgbColorToHex(color: any): string | null {
+  if (!color?.color?.rgbColor) return null;
+  const rgb = color.color.rgbColor;
+  const r = Math.round((rgb.red || 0) * 255);
+  const g = Math.round((rgb.green || 0) * 255);
+  const b = Math.round((rgb.blue || 0) * 255);
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
 }
 
 const BORDER_KEYS = ['borderTop', 'borderBottom', 'borderLeft', 'borderRight', 'borderBetween'] as const;
@@ -15,10 +24,11 @@ const BORDER_KEYS = ['borderTop', 'borderBottom', 'borderLeft', 'borderRight', '
 function borderVisible(b: any): boolean {
   return !!b && (b.width?.magnitude ?? 0) > 0;
 }
+
 /**
- * Compact non-default paragraph meta bits for formatted reads (R-4):
- * named style, alignment, visible borders, shading. Empty for a plain
- * NORMAL_TEXT paragraph so unformatted content stays annotation-free.
+ * Compact non-default paragraph meta bits for formatted reads: named style,
+ * alignment, visible borders, shading. Empty for a plain NORMAL_TEXT paragraph
+ * so unformatted content stays annotation-free.
  */
 export function paragraphMetaBits(paragraph: any): string[] {
   const style = paragraph?.paragraphStyle ?? {};
@@ -28,12 +38,12 @@ export function paragraphMetaBits(paragraph: any): string[] {
   for (const k of BORDER_KEYS) {
     if (borderVisible(style[k])) {
       const b = style[k];
-      bits.push(`${k}(${hex(b.color) ?? 'auto'} ${b.width?.magnitude ?? '?'}${b.width?.unit ?? ''} ${b.dashStyle ?? ''})`.replace(/\s+\)/, ')'));
+      bits.push(`${k}(${rgbColorToHex(b.color) ?? 'auto'} ${b.width?.magnitude ?? '?'}${b.width?.unit ?? ''} ${b.dashStyle ?? ''})`.replace(/\s+\)/, ')'));
     }
   }
   // Guard on the resolved hex, not the object: a backgroundColor carrying no
   // rgbColor resolves to null and printed the literal `shading(null)`.
-  const shade = hex(style.shading?.backgroundColor);
+  const shade = rgbColorToHex(style.shading?.backgroundColor);
   if (shade) bits.push(`shading(${shade})`);
   return bits;
 }

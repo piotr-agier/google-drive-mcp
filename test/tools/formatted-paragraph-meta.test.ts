@@ -99,7 +99,7 @@ test('paragraph meta never leaks into a table cell rendering', () => {
 });
 
 test('an empty shading color is omitted rather than printed as shading(null)', () => {
-  // The presence check was on the backgroundColor object, but hex() returns
+  // The presence check was on the backgroundColor object, but rgbColorToHex() returns
   // null for a color object carrying no rgbColor — printing the literal
   // "shading(null)". Guard on the resolved hex, the way borders guard on width.
   const emptyShading = paragraphMetaBits({

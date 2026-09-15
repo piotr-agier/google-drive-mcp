@@ -8,7 +8,7 @@ import { downloadTextContent, writeTextContent } from './text-content.js';
 import { uploadImageToDrive } from '../utils/driveImageUpload.js';
 import { withRetry } from '../utils/retry.js';
 import { getResponseHeader } from '../utils/streams.js';
-import { paragraphMetaBits } from './styleProjection.js';
+import { paragraphMetaBits, rgbColorToHex } from './styleProjection.js';
 
 // ---------------------------------------------------------------------------
 // Helper functions
@@ -38,16 +38,6 @@ function hexToRgbColor(hex: string): { red: number; green: number; blue: number 
   const b = (bigint & 255) / 255;
 
   return { red: r, green: g, blue: b };
-}
-
-// Inverse of hexToRgbColor – converts Google Docs API color object to hex string
-function rgbColorToHex(color: any): string | null {
-  if (!color?.color?.rgbColor) return null;
-  const rgb = color.color.rgbColor;
-  const r = Math.round((rgb.red || 0) * 255);
-  const g = Math.round((rgb.green || 0) * 255);
-  const b = Math.round((rgb.blue || 0) * 255);
-  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
 }
 
 // Helper to recursively collect all tabs with their nesting level
@@ -2399,7 +2389,7 @@ export const toolDefinitions: ToolDefinition[] = [
       type: "object",
       properties: {
         documentId: { type: "string", description: "Document ID" },
-        includeFormatting: { type: "boolean", description: "Include font, style, and color info for each text span (default: false)" },
+        includeFormatting: { type: "boolean", description: "Include font, style, color, and baseline info for each text span, plus one ¶ line per paragraph with non-default paragraph styles (named style, alignment, visible borders, shading) over its real index span (default: false)" },
       },
       required: ["documentId"]
     }
@@ -2411,7 +2401,7 @@ export const toolDefinitions: ToolDefinition[] = [
       type: "object",
       properties: {
         documentId: { type: "string", description: "Document ID" },
-        includeFormatting: { type: "boolean", description: "Include font, style, and color info for each text span (default: false)" },
+        includeFormatting: { type: "boolean", description: "Include font, style, color, and baseline info for each text span, plus one ¶ line per paragraph with non-default paragraph styles (named style, alignment, visible borders, shading) over its real index span (default: false)" },
         offset: { type: "number", description: "Character offset into the formatted indexed output (not raw doc characters). 0-based, default: 0. Pass the previous response's nextOffset to get the following page." },
         limit: { type: "number", description: "Maximum characters to return per page (default: 50000, max: 80000; kept below the host's ~100K output cap to leave room for the JSON envelope and newline escaping). The page end is snapped back to a line boundary where possible; a single line longer than limit is hard-cut to guarantee forward progress." }
       },

@@ -194,6 +194,7 @@ This server exposes 120 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `includeFormatting`: Include font, style, color, and baseline (superscript/subscript) info for each text span, plus one `¶` meta line per paragraph with non-default paragraph styles (named style, alignment, visible borders, shading) over its real index span (optional, default: false)
   - `offset`: Character offset into the formatted output (optional, default: 0; pass the previous response's `nextOffset`)
   - `limit`: Maximum characters per page (optional, default: 50000, max: 80000)
+  - Because page ends snap to a line boundary, a page can end on a `¶` meta line whose paragraph text starts the next page. The index prefix on both lines makes them pairable, so no extra call is needed to reunite them.
 
 - **getGoogleDocImage** - Fetch the bytes of an inline image embedded in a Google Doc, keyed by its inline object ID (the doc is re-fetched so the underlying image URL is always fresh). Inline images only; floating/anchored (positioned) images are not supported.
   - `documentId`: Document ID

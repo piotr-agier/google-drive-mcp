@@ -1,6 +1,6 @@
 # Tool reference
 
-This server exposes 120 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
+This server exposes 121 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
 
 ## Available Tools
 
@@ -369,6 +369,10 @@ This server exposes 120 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `data`: 2D array of new values
   - `valueInputOption`: `RAW` (default, safe) or `USER_ENTERED` (evaluates formulas) (optional)
 
+- **batchUpdateGoogleSheetValues** - Write many ranges in one `values.batchUpdate` call, across sheets of the same spreadsheet. Cheaper than repeated `updateGoogleSheet` calls: one round trip and one write-quota unit instead of N.
+  - `spreadsheetId`: Spreadsheet ID
+  - `updates`: Array of `{range, values}` pairs; a later entry wins where ranges overlap
+  - `valueInputOption`: `RAW` (default, safe) or `USER_ENTERED` (evaluates formulas), applied to every range (optional)
 - **getGoogleSheetContent** - Get spreadsheet content with cell information
   - `spreadsheetId`: Spreadsheet ID
   - `range`: Range to get (e.g., 'Sheet1!A1:C10')

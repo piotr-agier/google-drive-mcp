@@ -59,6 +59,75 @@ describe('Sheets tools', () => {
     });
   });
 
+  // --- batchUpdateGoogleSheetValues ---
+  describe('batchUpdateGoogleSheetValues', () => {
+    const twoUpdates = [
+      { range: 'Sheet1!A1:B2', values: [['a', 'b'], ['1', '2']] },
+      { range: 'Sheet2!C1', values: [['=SUM(A1:A10)']] },
+    ];
+
+    it('sends every range in one values.batchUpdate call', async () => {
+      const res = await callTool(ctx.client, 'batchUpdateGoogleSheetValues', {
+        spreadsheetId: 'sheet-1', updates: twoUpdates,
+      });
+      assert.equal(res.isError, false);
+      // The whole point of the tool: N ranges cost one API round trip, not N.
+      assert.equal(ctx.mocks.sheets.tracker.getCalls('spreadsheets.values.update').length, 0);
+      const calls = ctx.mocks.sheets.tracker.getCalls('spreadsheets.values.batchUpdate');
+      assert.equal(calls.length, 1);
+      assert.deepEqual(calls[0].args[0].requestBody.data, twoUpdates);
+    });
+
+    it('passes USER_ENTERED through so formulas land as formulas', async () => {
+      await callTool(ctx.client, 'batchUpdateGoogleSheetValues', {
+        spreadsheetId: 'sheet-1', updates: twoUpdates, valueInputOption: 'USER_ENTERED',
+      });
+      const call = ctx.mocks.sheets.tracker.getCalls('spreadsheets.values.batchUpdate')[0];
+      assert.equal(call.args[0].requestBody.valueInputOption, 'USER_ENTERED');
+    });
+
+    it('defaults to RAW when valueInputOption is omitted', async () => {
+      await callTool(ctx.client, 'batchUpdateGoogleSheetValues', {
+        spreadsheetId: 'sheet-1', updates: twoUpdates,
+      });
+      const call = ctx.mocks.sheets.tracker.getCalls('spreadsheets.values.batchUpdate')[0];
+      assert.equal(call.args[0].requestBody.valueInputOption, 'RAW');
+    });
+
+    it('reports the cell and range counts the API returned', async () => {
+      ctx.mocks.sheets.service.spreadsheets.values.batchUpdate._setImpl(async () => ({
+        data: {
+          totalUpdatedCells: 7,
+          responses: [{ updatedRange: 'Sheet1!A1:B2' }, { updatedRange: 'Sheet2!C1' }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'batchUpdateGoogleSheetValues', {
+        spreadsheetId: 'sheet-1', updates: twoUpdates,
+      });
+      assert.equal(res.isError, false);
+      assert.match(res.content[0].text!, /7 cell/);
+      assert.match(res.content[0].text!, /2 range/);
+    });
+
+    // Asserting on the message, not just isError: an unknown tool also reports
+    // isError, so a bare flag check would pass before the tool even exists.
+    it('rejects an empty updates array', async () => {
+      const res = await callTool(ctx.client, 'batchUpdateGoogleSheetValues', {
+        spreadsheetId: 'sheet-1', updates: [],
+      });
+      assert.equal(res.isError, true);
+      assert.match(res.content[0].text!, /at least one update/i);
+    });
+
+    it('rejects a missing spreadsheetId', async () => {
+      const res = await callTool(ctx.client, 'batchUpdateGoogleSheetValues', {
+        updates: twoUpdates,
+      });
+      assert.equal(res.isError, true);
+      assert.match(res.content[0].text!, /spreadsheet id/i);
+    });
+  });
+
   // --- getGoogleSheetContent ---
   describe('getGoogleSheetContent', () => {
     it('happy path', async () => {

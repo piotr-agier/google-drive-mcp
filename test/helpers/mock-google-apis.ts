@@ -162,6 +162,10 @@ export function createSheetsMock() {
       get: stub(tracker, 'spreadsheets.values.get', { values: [['a', 'b'], ['1', '2']] }),
       update: stub(tracker, 'spreadsheets.values.update', {}),
       append: stub(tracker, 'spreadsheets.values.append', { updates: { updatedCells: 4, updatedRows: 2, updatedRange: 'Sheet1!A1:B2' } }),
+      batchUpdate: stub(tracker, 'spreadsheets.values.batchUpdate', {
+        totalUpdatedCells: 4,
+        responses: [{ updatedRange: 'Sheet1!A1:B2' }, { updatedRange: 'Sheet2!C1' }],
+      }),
     },
   };
   return { service: { spreadsheets }, tracker };

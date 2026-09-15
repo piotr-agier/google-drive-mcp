@@ -28,14 +28,14 @@ const GetGoogleSheetContentSchema = z.object({
   valueRenderOption: z.enum(["FORMATTED_VALUE", "UNFORMATTED_VALUE", "FORMULA"]).optional().default("FORMATTED_VALUE")
 });
 
-// Dimension groups address whole rows/columns, so they take a DimensionRange
-// (sheetId + index span) rather than the A1 `range` the cell-oriented tools use.
-// Indices follow the same 0-based half-open convention as the other
-// dimension tools.
-const dimensionGroupRangeFields = {
+// The dimension tools (hide/show and the outline groups) address whole
+// rows/columns, so they take a DimensionRange (sheetId + index span) rather
+// than the A1 `range` the cell-oriented tools use. Indices are 0-based and the
+// interval is half-open.
+const dimensionRangeFields = {
   spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
   sheetId: z.number().int(),
-  dimension: z.enum(["ROWS", "COLUMNS"]),
+  dimension: z.enum(["COLUMNS", "ROWS"]),
   startIndex: z.number().int().min(0),
   endIndex: z.number().int().min(0)
 };
@@ -45,14 +45,12 @@ const startBeforeEnd = {
   message: "startIndex must be less than endIndex"
 };
 
-const AddDimensionGroupSchema = z.object(dimensionGroupRangeFields)
-  .refine(startBeforeEnd.check, { message: startBeforeEnd.message });
-
-const DeleteDimensionGroupSchema = z.object(dimensionGroupRangeFields)
+/** Shared by hideSheetDimension, showSheetDimension, addDimensionGroup and deleteDimensionGroup. */
+const DimensionRangeSchema = z.object(dimensionRangeFields)
   .refine(startBeforeEnd.check, { message: startBeforeEnd.message });
 
 const UpdateDimensionGroupSchema = z.object({
-  ...dimensionGroupRangeFields,
+  ...dimensionRangeFields,
   depth: z.number().int().min(1, "depth must be at least 1").optional().default(1),
   collapsed: z.boolean()
 }).refine(startBeforeEnd.check, { message: startBeforeEnd.message });
@@ -243,14 +241,6 @@ const AutoResizeRowsSchema = z.object({
   endRow: z.number().int().min(0)
 }).refine(a => a.startRow < a.endRow, { message: "startRow must be less than endRow" });
 
-const HideShowDimensionSchema = z.object({
-  spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
-  sheetId: z.number().int(),
-  dimension: z.enum(["COLUMNS", "ROWS"]),
-  startIndex: z.number().int().min(0),
-  endIndex: z.number().int().min(0)
-}).refine(a => a.startIndex < a.endIndex, { message: "startIndex must be less than endIndex" });
-
 // ---------------------------------------------------------------------------
 // Tool Definitions
 // ---------------------------------------------------------------------------
@@ -302,7 +292,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "getGoogleSheetContent",
-    description: "Get content of a Google Sheet with cell information. Returns displayed values by default; set valueRenderOption to 'FORMULA' to read the underlying formulas (e.g. '=SUM(A1:A10)') instead of their results, or 'UNFORMATTED_VALUE' for raw numbers without display formatting.",
+    description: "Get content of a Google Sheet with cell information. Each row is returned as 'Row N: ' followed by that row's cells separated by tab characters. Returns displayed values by default; set valueRenderOption to 'FORMULA' to read the underlying formulas (e.g. '=SUM(A1:A10)') instead of their results, or 'UNFORMATTED_VALUE' for raw numbers without display formatting. Under UNFORMATTED_VALUE a date or time cell comes back as a spreadsheet serial number (e.g. 45678), not a date string.",
     inputSchema: {
       type: "object",
       properties: {
@@ -310,7 +300,7 @@ export const toolDefinitions: ToolDefinition[] = [
         range: { type: "string", description: "Range to get (e.g., 'Sheet1!A1:C10')" },
         valueRenderOption: {
           type: "string",
-          description: "How values are returned: FORMATTED_VALUE (as displayed, default), UNFORMATTED_VALUE (raw values), FORMULA (the formula behind each cell)",
+          description: "How values are returned: FORMATTED_VALUE (as displayed, default), UNFORMATTED_VALUE (raw values; dates and times come back as serial numbers, not date strings), FORMULA (the formula behind each cell)",
           enum: ["FORMATTED_VALUE", "UNFORMATTED_VALUE", "FORMULA"],
           default: "FORMATTED_VALUE"
         }
@@ -663,7 +653,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "deleteDimensionGroup",
-    description: "Remove a row or column group from a sheet. The rows/columns themselves are kept; only the grouping is deleted. Indices are 0-based and the interval is half-open [startIndex, endIndex) \u2014 use listDimensionGroups to read back an existing group\u0027s range.",
+    description: "Remove a row or column group from a sheet. The rows/columns themselves are kept; only the grouping is removed. Indices are 0-based and the interval is half-open [startIndex, endIndex). Use listDimensionGroups to read back an existing group\u0027s range and pass it in full: the API decrements the group depth of every dimension in the range rather than matching a whole group, so a range that only partially overlaps a group shrinks that group instead of removing it. With a depth-1 group over columns B:E and a depth-2 group over C:D, deleting D:E leaves depth-1 over B:D and depth-2 over C:C.",
     inputSchema: {
       type: "object",
       properties: {
@@ -973,7 +963,7 @@ export async function handleTool(
         content += "(empty range)";
       } else {
         values.forEach((row, rowIndex) => {
-          content += `Row ${rowIndex + 1}: ${row.join(', ')}\n`;
+          content += `Row ${rowIndex + 1}: ${row.join('\t')}\n`;
         });
       }
 
@@ -1627,7 +1617,7 @@ export async function handleTool(
     }
 
     case "addDimensionGroup": {
-      const validation = AddDimensionGroupSchema.safeParse(args);
+      const validation = DimensionRangeSchema.safeParse(args);
       if (!validation.success) return errorResponse(validation.error.errors[0].message);
       const a = validation.data;
 
@@ -1638,11 +1628,11 @@ export async function handleTool(
       });
 
       const label = a.dimension === 'ROWS' ? 'rows' : 'columns';
-      return { content: [{ type: 'text', text: `Grouped ${label} [${a.startIndex}, ${a.endIndex}) in sheet ${a.sheetId}.` }], isError: false };
+      return { content: [{ type: 'text', text: `Grouped ${label} [${a.startIndex}, ${a.endIndex}) on sheet ${a.sheetId}.` }], isError: false };
     }
 
     case "deleteDimensionGroup": {
-      const validation = DeleteDimensionGroupSchema.safeParse(args);
+      const validation = DimensionRangeSchema.safeParse(args);
       if (!validation.success) return errorResponse(validation.error.errors[0].message);
       const a = validation.data;
 
@@ -1653,7 +1643,7 @@ export async function handleTool(
       });
 
       const label = a.dimension === 'ROWS' ? 'rows' : 'columns';
-      return { content: [{ type: 'text', text: `Removed the group on ${label} [${a.startIndex}, ${a.endIndex}) in sheet ${a.sheetId}.` }], isError: false };
+      return { content: [{ type: 'text', text: `Removed the group on ${label} [${a.startIndex}, ${a.endIndex}) on sheet ${a.sheetId}.` }], isError: false };
     }
 
     case "updateDimensionGroup": {
@@ -1673,7 +1663,7 @@ export async function handleTool(
       });
 
       const label = a.dimension === 'ROWS' ? 'rows' : 'columns';
-      return { content: [{ type: 'text', text: `${a.collapsed ? 'Collapsed' : 'Expanded'} the group on ${label} [${a.startIndex}, ${a.endIndex}) at depth ${a.depth} in sheet ${a.sheetId}.` }], isError: false };
+      return { content: [{ type: 'text', text: `${a.collapsed ? 'Collapsed' : 'Expanded'} the group on ${label} [${a.startIndex}, ${a.endIndex}) at depth ${a.depth} on sheet ${a.sheetId}.` }], isError: false };
     }
 
     case "listDimensionGroups": {
@@ -1692,7 +1682,7 @@ export async function handleTool(
         ? allSheets
         : allSheets.filter(s => s.properties?.sheetId === a.sheetId);
       if (a.sheetId !== undefined && targets.length === 0) {
-        return errorResponse(`Sheet ${a.sheetId} not found`);
+        return errorResponse(`Sheet with id ${a.sheetId} not found`);
       }
 
       const blocks = targets.map(sheet => {
@@ -1816,7 +1806,7 @@ export async function handleTool(
 
     case "hideSheetDimension":
     case "showSheetDimension": {
-      const validation = HideShowDimensionSchema.safeParse(args);
+      const validation = DimensionRangeSchema.safeParse(args);
       if (!validation.success) return errorResponse(validation.error.errors[0].message);
       const a = validation.data;
       const hide = toolName === 'hideSheetDimension';

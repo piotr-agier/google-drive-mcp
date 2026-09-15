@@ -11,7 +11,7 @@ const EXPECTED_TOOLS = [
   'createGoogleDoc', 'createDocFromHTML', 'updateGoogleDoc', 'insertText', 'deleteRange',
   'readGoogleDoc', 'readGoogleDocPaginated', 'listDocumentTabs', 'applyTextStyle', 'applyParagraphStyle', 'formatGoogleDocText', 'formatGoogleDocParagraph', 'createParagraphBullets', 'findAndReplaceInDoc',
   'listComments', 'getComment', 'addComment', 'replyToComment', 'deleteComment',
-  'createGoogleSheet', 'updateGoogleSheet', 'getGoogleSheetContent',
+  'createGoogleSheet', 'updateGoogleSheet', 'batchUpdateGoogleSheetValues', 'getGoogleSheetContent',
   'formatGoogleSheetCells', 'formatGoogleSheetText', 'formatGoogleSheetNumbers',
   'setGoogleSheetBorders', 'mergeGoogleSheetCells', 'addGoogleSheetConditionalFormat',
   'getSpreadsheetInfo', 'appendSpreadsheetRows', 'addSpreadsheetSheet', 'addSheet', 'listSheets', 'renameSheet', 'deleteSheet', 'addDataValidation', 'protectRange', 'addNamedRange',

@@ -109,6 +109,21 @@ describe('Sheets tools', () => {
       assert.match(res.content[0].text!, /2 range/);
     });
 
+    it('lists the first 10 ranges and summarises the rest', async () => {
+      const responses = Array.from({ length: 12 }, (_, i) => ({ updatedRange: `Sheet1!A${i + 1}` }));
+      ctx.mocks.sheets.service.spreadsheets.values.batchUpdate._setImpl(async () => ({
+        data: { totalUpdatedCells: 12, responses },
+      }));
+      const res = await callTool(ctx.client, 'batchUpdateGoogleSheetValues', {
+        spreadsheetId: 'sheet-1', updates: twoUpdates,
+      });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      assert.match(text, /12 range/);
+      assert.match(text, /Sheet1!A10, \+2 more/);
+      assert.doesNotMatch(text, /Sheet1!A11/);
+    });
+
     // Asserting on the message, not just isError: an unknown tool also reports
     // isError, so a bare flag check would pass before the tool even exists.
     it('rejects an empty updates array', async () => {

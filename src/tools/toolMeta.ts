@@ -128,6 +128,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
 
   createGoogleSheet: write(SHEETS_WRITE_SCOPES),
   updateGoogleSheet: write(SHEETS_WRITE_SCOPES),
+  batchUpdateGoogleSheetValues: write(SHEETS_WRITE_SCOPES),
   formatGoogleSheetCells: write(SHEETS_WRITE_SCOPES),
   formatGoogleSheetText: write(SHEETS_WRITE_SCOPES),
   formatGoogleSheetNumbers: write(SHEETS_WRITE_SCOPES),

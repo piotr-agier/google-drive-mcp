@@ -22,6 +22,22 @@ const UpdateGoogleSheetSchema = z.object({
   valueInputOption: z.enum(["RAW", "USER_ENTERED"]).optional()
 });
 
+// One call, many ranges. Field names follow the API's own ValueRange shape
+// ({range, values}) rather than updateGoogleSheet's `data`, so the nesting does
+// not read as `data[].data` and matches what the batch endpoint documents.
+const BatchUpdateGoogleSheetValuesSchema = z.object({
+  // required_error as well as min(): on a missing key Zod reports a bare
+  // "Required", which tells a caller nothing about which field it means.
+  spreadsheetId: z.string({ required_error: "Spreadsheet ID is required" })
+    .min(1, "Spreadsheet ID is required"),
+  updates: z.array(z.object({
+    range: z.string({ required_error: "Range is required" }).min(1, "Range is required"),
+    values: z.array(z.array(z.string()), { required_error: "Values are required" })
+  }), { required_error: "At least one update is required" })
+    .min(1, "At least one update is required"),
+  valueInputOption: z.enum(["RAW", "USER_ENTERED"]).optional()
+});
+
 const GetGoogleSheetContentSchema = z.object({
   spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
   range: z.string().min(1, "Range is required"),
@@ -298,6 +314,38 @@ export const toolDefinitions: ToolDefinition[] = [
         }
       },
       required: ["spreadsheetId", "range", "data"]
+    }
+  },
+  {
+    name: "batchUpdateGoogleSheetValues",
+    description: "Write many ranges in ONE call via spreadsheets.values.batchUpdate. Ranges may sit on different sheets of the same spreadsheet. Prefer this over repeated updateGoogleSheet calls whenever more than one range changes: N separate writes cost N round trips and N units of the 60-writes-per-minute quota, while one batch costs one of each.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Sheet ID" },
+        updates: {
+          type: "array",
+          description: "Ranges to write, each a {range, values} pair. Overlapping ranges are applied in order, so a later entry wins.",
+          items: {
+            type: "object",
+            properties: {
+              range: { type: "string", description: "Range to update (e.g., 'Sheet1!A1:C10')" },
+              values: {
+                type: "array",
+                description: "2D array of values to write into this range",
+                items: { type: "array", items: { type: "string" } }
+              }
+            },
+            required: ["range", "values"]
+          }
+        },
+        valueInputOption: {
+          type: "string",
+          enum: ["RAW", "USER_ENTERED"],
+          description: "Applies to every range in the batch. RAW (default): values stored exactly as provided - formulas stored as text strings. Safe for untrusted data. USER_ENTERED: values parsed like the spreadsheet UI - formulas (=SUM, =IF, etc.) are evaluated. SECURITY WARNING: USER_ENTERED can execute formulas, only use with trusted data, never with user-provided input that could contain malicious formulas like =IMPORTDATA() or =IMPORTRANGE()."
+        }
+      },
+      required: ["spreadsheetId", "updates"]
     }
   },
   {
@@ -948,6 +996,43 @@ export async function handleTool(
 
       return {
         content: [{ type: "text", text: `Updated Google Sheet range: ${a.range}` }],
+        isError: false
+      };
+    }
+
+    case "batchUpdateGoogleSheetValues": {
+      const validation = BatchUpdateGoogleSheetValuesSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const a = validation.data;
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      const response = await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: a.spreadsheetId,
+        requestBody: {
+          valueInputOption: a.valueInputOption || 'RAW',
+          data: a.updates
+        }
+      });
+
+      // Report counts and the ranges touched, never the values back: echoing a
+      // large batch would undo the context saving the batch exists for.
+      const d = response.data;
+      const ranges = (d.responses || [])
+        .map(r => r.updatedRange)
+        .filter((r): r is string => Boolean(r));
+      const rangeList = ranges.length
+        ? ` (${ranges.slice(0, 10).join(', ')}${ranges.length > 10 ? `, +${ranges.length - 10} more` : ''})`
+        : '';
+      // The response carries no range count of its own; one reply per requested
+      // range is the API's contract, so fall back to what we asked for.
+      const rangeCount = d.responses?.length || a.updates.length;
+      return {
+        content: [{
+          type: "text",
+          text: `Updated ${d.totalUpdatedCells ?? 0} cell(s) across ${rangeCount} range(s)${rangeList} in one batch.`
+        }],
         isError: false
       };
     }

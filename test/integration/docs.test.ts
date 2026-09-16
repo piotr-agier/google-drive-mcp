@@ -3697,4 +3697,151 @@ describe('Docs tools', () => {
       });
     });
   });
+  // -------------------------------------------------------------------------
+  // Style reads
+  // -------------------------------------------------------------------------
+  describe('style reads', () => {
+    const para = (startIndex: number, endIndex: number, text: string, paragraphStyle: any = {}) => ({
+      startIndex,
+      endIndex,
+      paragraph: { paragraphStyle, elements: [{ startIndex, endIndex, textRun: { content: text, textStyle: {} } }] },
+    });
+    const RULE = { width: { magnitude: 1, unit: 'PT' }, dashStyle: 'SOLID' };
+
+    // A header and a footer each restart indices at 0, separate from the body.
+    // A walk that merged them answered describeGoogleDocRange(startIndex=1) with
+    // three paragraphs carrying overlapping ranges and nothing to tell the
+    // caller which one an index-taking write should target.
+    const withHeaderAndFooter = () => ({
+      documentId: 'doc-1',
+      title: 'Report',
+      revisionId: 'rev-9',
+      body: { content: [para(1, 11, 'Body copy\n', { namedStyleType: 'NORMAL_TEXT' })] },
+      headers: { 'h.1': { content: [para(0, 12, 'Header text\n', { namedStyleType: 'NORMAL_TEXT' })] } },
+      footers: { 'f.1': { content: [para(0, 7, 'Footer\n', { namedStyleType: 'NORMAL_TEXT', alignment: 'CENTER' })] } },
+    });
+
+    const twoTabs = () => ({
+      documentId: 'doc-1',
+      title: 'Two Tabs',
+      revisionId: 'rev-9',
+      tabs: [
+        { tabProperties: { tabId: 'tab-1', title: 'Overview' }, documentTab: { body: { content: [para(1, 9, 'First\n', { namedStyleType: 'HEADING_1', borderBottom: RULE })] } } },
+        { tabProperties: { tabId: 'tab-2', title: 'Appendix' }, documentTab: { body: { content: [para(1, 9, 'Second\n', { namedStyleType: 'HEADING_2', borderBottom: RULE })] } } },
+      ],
+    });
+
+    afterEach(() => ctx.mocks.docs.service.documents.get._resetImpl());
+
+    describe('describeGoogleDocRange', () => {
+      it('describes the body only, never the header or footer index space', async () => {
+        ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: withHeaderAndFooter() }));
+        const res = await callTool(ctx.client, 'describeGoogleDocRange', { documentId: 'doc-1', startIndex: 1 });
+        assert.equal(res.isError, false);
+        const text = res.content[0].text!;
+        assert.ok(text.includes('paragraph [1-11]'));
+        assert.equal(text.includes('Header text'), false);
+        assert.equal(text.includes('Footer'), false);
+        // One paragraph reported, not three.
+        assert.equal((text.match(/^paragraph \[/gm) ?? []).length, 1);
+      });
+
+      it('defaults to the first tab and reports only that tab on a two-tab document', async () => {
+        ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: twoTabs() }));
+        const res = await callTool(ctx.client, 'describeGoogleDocRange', { documentId: 'doc-1', startIndex: 1, endIndex: 3 });
+        assert.equal(res.isError, false);
+        const text = res.content[0].text!;
+        // Both tabs hold a paragraph at [1-9]; reporting both would print two
+        // identical ranges with nothing to choose between them.
+        assert.equal((text.match(/^paragraph \[/gm) ?? []).length, 1);
+        assert.ok(text.includes('HEADING_1'));
+        assert.equal(text.includes('HEADING_2'), false);
+      });
+
+      it('probes the named tab when given one', async () => {
+        ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: twoTabs() }));
+        const res = await callTool(ctx.client, 'describeGoogleDocRange', { documentId: 'doc-1', startIndex: 1, tabId: 'tab-2' });
+        assert.equal(res.isError, false);
+        assert.ok(res.content[0].text!.includes('HEADING_2'));
+      });
+
+      it('reports the revisionId from the same fetch the indices came from', async () => {
+        ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: withHeaderAndFooter() }));
+        const res = await callTool(ctx.client, 'describeGoogleDocRange', { documentId: 'doc-1', startIndex: 1 });
+        assert.ok(res.content[0].text!.startsWith('revisionId: rev-9\n'));
+        // One read, not one for the range and another for the lock.
+        assert.equal(ctx.mocks.docs.tracker.getCalls('documents.get').length, 1);
+      });
+
+      it('says the lock is unavailable rather than printing undefined', async () => {
+        ctx.mocks.docs.service.documents.get._setImpl(async () => {
+          const d: any = withHeaderAndFooter();
+          delete d.revisionId;
+          return { data: d };
+        });
+        const res = await callTool(ctx.client, 'describeGoogleDocRange', { documentId: 'doc-1', startIndex: 1 });
+        assert.ok(res.content[0].text!.includes('revisionId: unavailable (no edit access)'));
+      });
+
+      it('refuses mixed targeting instead of silently ignoring endIndex', async () => {
+        const res = await callTool(ctx.client, 'describeGoogleDocRange', { documentId: 'doc-1', textToFind: 'Body', endIndex: 5 });
+        assert.equal(res.isError, true);
+        assert.ok(res.content[0].text!.includes('not both'));
+      });
+
+      it('refuses an endIndex that is not past startIndex', async () => {
+        const res = await callTool(ctx.client, 'describeGoogleDocRange', { documentId: 'doc-1', startIndex: 5, endIndex: 5 });
+        assert.equal(res.isError, true);
+        assert.ok(res.content[0].text!.includes('endIndex must be greater than startIndex'));
+      });
+
+      it('requires a targeting mode', async () => {
+        const res = await callTool(ctx.client, 'describeGoogleDocRange', { documentId: 'doc-1' });
+        assert.equal(res.isError, true);
+      });
+
+      it('returns the standard not-found error for an unknown tabId', async () => {
+        ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: twoTabs() }));
+        const res = await callTool(ctx.client, 'describeGoogleDocRange', { documentId: 'doc-1', startIndex: 1, tabId: 'missing' });
+        assert.equal(res.isError, true);
+        assert.ok(res.content[0].text!.includes('Tab with ID "missing" not found'));
+      });
+    });
+
+    describe('getGoogleDocStyleSummary', () => {
+      it('summarizes the body only, never the header or footer index space', async () => {
+        ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: withHeaderAndFooter() }));
+        const res = await callTool(ctx.client, 'getGoogleDocStyleSummary', { documentId: 'doc-1' });
+        assert.equal(res.isError, false);
+        // Body holds one paragraph; the header and footer add two more that
+        // would be counted by a merged walk.
+        assert.ok(res.content[0].text!.includes('paragraphs: 1 '));
+      });
+
+      it('prefixes locations with the tab title across tabs and keeps counts whole-document', async () => {
+        ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: twoTabs() }));
+        const res = await callTool(ctx.client, 'getGoogleDocStyleSummary', { documentId: 'doc-1' });
+        const text = res.content[0].text!;
+        assert.ok(text.includes('paragraphs: 2 '));
+        assert.ok(text.includes('bordered paragraphs: 2 (at Overview:1, Appendix:1)'));
+      });
+
+      it('summarizes one tab when given a tabId, without tab prefixes', async () => {
+        ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: twoTabs() }));
+        const res = await callTool(ctx.client, 'getGoogleDocStyleSummary', { documentId: 'doc-1', tabId: 'tab-2' });
+        const text = res.content[0].text!;
+        assert.ok(text.includes('paragraphs: 1 '));
+        assert.ok(text.includes('bordered paragraphs: 1 (at 1)'));
+        assert.equal(text.includes('Appendix:'), false);
+      });
+
+      it('reports the title and the revisionId', async () => {
+        ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: withHeaderAndFooter() }));
+        const res = await callTool(ctx.client, 'getGoogleDocStyleSummary', { documentId: 'doc-1' });
+        const text = res.content[0].text!;
+        assert.ok(text.includes('Style summary for "Report"'));
+        assert.ok(text.includes('revisionId: rev-9'));
+      });
+    });
+  });
 });

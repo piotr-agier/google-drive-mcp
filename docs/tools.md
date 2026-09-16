@@ -1,6 +1,6 @@
 # Tool reference
 
-This server exposes 126 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
+This server exposes 128 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
 
 ## Available Tools
 
@@ -256,6 +256,21 @@ different identifiers; neither is accepted as a lock.
 
 - **getDocumentInfo** - Get detailed metadata about a specific Google Document, including the Docs `revisionId` (distinct from the Drive `version` counter also shown)
   - `documentId`: Document ID
+
+- **getGoogleDocStyleSummary** - Compact whole-document style inventory in a few hundred tokens: fonts with size ladders, named-style counts, text colors, bordered and shaded paragraph locations, a table inventory with real index ranges, and the heading outline. The cheap first read before formatting work, in place of a full document JSON fetch. Reports the `revisionId` for use as [`ifRevisionId`](#ifrevisionid)
+  - `documentId`: Document ID
+  - `tabId`: Summarize only this tab, from `listDocumentTabs` (optional; omit to cover every tab)
+  - Counts and the font inventory aggregate across tabs; locations are prefixed with the tab title on a multi-tab document, because index spaces restart in each tab
+  - Lists longer than 12 entries (20 for the outline) are truncated with an explicit `… (+N more)`, so a clipped list is never mistaken for a short one
+
+- **describeGoogleDocRange** - Style probe for one spot: paragraph styles (named style, alignment, borders, shading, indents, spacing, bullets) and text runs (font, size, bold/italic/underline, colors, links) overlapping a range, each with its real document index so the result feeds straight into `applyParagraphStyle` or `applyTextStyle`. Reports the `revisionId` for use as [`ifRevisionId`](#ifrevisionid)
+  - `documentId`: Document ID
+  - `startIndex`: Start index (1-based) — use this or `textToFind`
+  - `endIndex`: End index (exclusive; defaults to `startIndex` + 1). Only valid alongside `startIndex`, and must be greater than it
+  - `textToFind`: Probe the styling at this exact text, case-sensitive — use this or `startIndex`. Mixing the two targeting modes is refused rather than silently resolved
+  - `matchInstance`: Which occurrence of `textToFind` (1-based, optional, default 1)
+  - `tabId`: Tab to probe, from `listDocumentTabs` (optional; defaults to the first tab)
+  - Describes one tab's body only. Headers, footers, and footnotes each start their own index space at 0, so including them would report several paragraphs with overlapping ranges and no way to tell which an index-taking write should target
 
 #### Surgical Editing
 - **insertText** - Insert text at an index or relative to found text (doesn't replace entire doc). Accepts [`ifRevisionId`](#ifrevisionid) on Google Docs; it is refused on text files rather than ignored

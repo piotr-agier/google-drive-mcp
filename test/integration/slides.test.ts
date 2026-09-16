@@ -461,6 +461,30 @@ describe('Slides tools', () => {
       assert.ok(requests[0].insertText);
     });
 
+    it('treats an autoText-only shape as having text, so the new copy replaces it', async () => {
+      // A slide-number placeholder holds an autoText element and no textRun.
+      // Reading that as empty skips deleteText and inserts the new copy in
+      // front of the auto-text instead of replacing it.
+      ctx.mocks.slides.service.presentations.get._setImpl(async () => ({
+        data: {
+          slides: [{
+            pageElements: [
+              { objectId: 'num-1', shape: { text: { textElements: [{ autoText: { type: 'SLIDE_NUMBER' } }] } } },
+            ],
+          }],
+        },
+      }));
+      const res = await callTool(ctx.client, 'setElementText', {
+        presentationId: 'pres-1', objectId: 'num-1', text: 'Page 4',
+      });
+      assert.equal(res.isError, false);
+
+      const calls = ctx.mocks.slides.tracker.getCalls('presentations.batchUpdate');
+      const requests = calls[calls.length - 1].args[0].requestBody.requests;
+      assert.equal(requests.length, 2);
+      assert.deepEqual(requests[0].deleteText, { objectId: 'num-1', textRange: { type: 'ALL' } });
+    });
+
     it('errors when the element does not exist', async () => {
       ctx.mocks.slides.service.presentations.get._setImpl(async () => ({
         data: { slides: [{ pageElements: [] }] },

@@ -1,6 +1,6 @@
 # Tool reference
 
-This server exposes 121 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
+This server exposes 126 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
 
 ## Available Tools
 
@@ -329,9 +329,9 @@ different identifiers; neither is accepted as a lock.
   - `textContent`: New text content (optional)
   - `bold`, `italic`, `fontSize`, `alignment`: Cell styling (optional)
 
-- **styleDocTable** - Style a Docs table in one atomic call (cell borders, background, padding, content alignment, column widths, row heights)
+- **styleDocTable** - Style a Docs table in one atomic call (cell borders, background, padding, content alignment, column widths, row heights). Accepts [`ifRevisionId`](#ifrevisionid)
   - `documentId`: Document ID
-  - `tableStartIndex`: Start index of the TABLE element — get it from `documentStyleSummary` or `describeRange`, never compute it from text offsets
+  - `tableStartIndex`: Start index of the TABLE element — take it from the table's span line in `readGoogleDoc` / `getGoogleDocContent`, which prints `tableStartIndex=N` (and `tabId=` on a multi-tab document). Never compute it from text offsets
   - Cell subset targeting (optional; default whole table): `rowIndex`+`columnIndex` (0-based) with `rowSpan`/`columnSpan` (default 1)
   - `backgroundColor`: Cell background as hex; `removeBackground`: clear it (optional)
   - `contentAlignment`: `TOP`, `MIDDLE`, or `BOTTOM` (optional)
@@ -340,7 +340,6 @@ different identifiers; neither is accepted as a lock.
   - `removeBorders`: Edges to clear via width-0 borders (`top`, `bottom`, `left`, `right`, or `all`) — `["all"]` unboxes the table in one call (optional)
   - `columnWidth`: Fixed column width in points (min 5), scoped by `columnIndices` (0-based; omit for all columns) (optional)
   - `minRowHeight`: Minimum row height in points, scoped by `rowIndices` (0-based; omit for all rows) (optional)
-  - `ifRevisionId`: Optimistic lock — fail if the document changed since this revision (optional)
 
 - **insertImageFromUrl** - Insert an inline image from a publicly accessible URL
   - `documentId`: Document ID

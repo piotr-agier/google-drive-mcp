@@ -1022,13 +1022,6 @@ function borderFieldName(edge: string): string {
   return `border${edge.charAt(0).toUpperCase()}${edge.slice(1)}`;
 }
 
-// Optimistic lock: thread WriteControl.requiredRevisionId into a batchUpdate
-// body so the write fails cleanly if the document changed since the caller
-// read the indices it targets.
-function writeControlFor(ifRevisionId?: string): { writeControl?: { requiredRevisionId: string } } {
-  return ifRevisionId ? { writeControl: { requiredRevisionId: ifRevisionId } } : {};
-}
-
 const TABLE_BORDER_EDGES = ['top', 'bottom', 'left', 'right'] as const;
 type TableBorderEdge = (typeof TABLE_BORDER_EDGES)[number];
 
@@ -1074,6 +1067,17 @@ export function buildStyleDocTableRequests(a: StyleDocTableArgs): { requests: an
   const requests: any[] = [];
   const applied: string[] = [];
   const tableStartLocation = withTab({ index: a.tableStartIndex }, a.tabId);
+
+  // Cell targeting scopes the cell-style request only. updateTableColumnProperties
+  // and updateTableRowStyle address the table through columnIndices/rowIndices,
+  // so a caller who passes rowIndex/columnIndex alongside columnWidth would get
+  // the cell style scoped to one cell and the width applied to every column —
+  // not what "this cell" reads as. Refuse rather than silently widen.
+  const cellTargeted = a.rowIndex !== undefined || a.columnIndex !== undefined
+    || a.rowSpan !== undefined || a.columnSpan !== undefined;
+  if (cellTargeted && (a.columnWidth !== undefined || a.minRowHeight !== undefined)) {
+    throw new Error('rowIndex/columnIndex/rowSpan/columnSpan scope cell styles only — columnWidth and minRowHeight always apply at table scope, so issue them in a separate call (scoped with columnIndices/rowIndices)');
+  }
 
   // ---- updateTableCellStyle -----------------------------------------------
   const tableCellStyle: any = {};
@@ -1128,7 +1132,7 @@ export function buildStyleDocTableRequests(a: StyleDocTableArgs): { requests: an
   if (setEdges.length > 0) applied.push(`borders set (${setEdges.join(', ')})`);
 
   if (cellFields.length > 0) {
-    const isSubset = a.rowIndex !== undefined || a.columnIndex !== undefined;
+    const isSubset = cellTargeted;
     if (isSubset && (a.rowIndex === undefined || a.columnIndex === undefined)) {
       throw new Error('Cell subset targeting needs both rowIndex and columnIndex (spans optional)');
     }
@@ -1144,9 +1148,8 @@ export function buildStyleDocTableRequests(a: StyleDocTableArgs): { requests: an
     requests.push({
       updateTableCellStyle: { ...target, tableCellStyle, fields: cellFields.join(',') },
     });
-  } else if (a.rowSpan !== undefined || a.columnSpan !== undefined || a.rowIndex !== undefined || a.columnIndex !== undefined) {
-    // Cell targeting scopes only cell styles; columns/rows target via
-    // columnIndices/rowIndices. Refuse rather than silently ignore.
+  } else if (cellTargeted) {
+    // Cell targeting with no cell style to apply: nothing would be sent.
     throw new Error('rowIndex/columnIndex/rowSpan/columnSpan target cell styles only — pass a cell style param, or use columnIndices/rowIndices for column and row updates');
   }
 
@@ -2717,12 +2720,12 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "styleDocTable",
-    description: "Style a Docs table in one atomic call: cell borders/background/padding/content alignment (whole table via tableStartLocation, or a cell range subset), fixed column widths, and minimum row heights. Get the real tableStartIndex from documentStyleSummary or describeRange — never compute it from text offsets. removeBorders: [\"all\"] unboxes the table (width-0 borders). The API resolves shared edges by applying border updates right-to-left then bottom-to-top.",
+    description: "Style a Docs table in one atomic call: cell borders/background/padding/content alignment (whole table via tableStartLocation, or a cell range subset), fixed column widths, and minimum row heights. Get the real tableStartIndex from the table span line readGoogleDoc or getGoogleDocContent prints (tableStartIndex=N) — never compute it from text offsets. removeBorders: [\"all\"] unboxes the table (width-0 borders). The API resolves shared edges by applying border updates right-to-left then bottom-to-top.",
     inputSchema: {
       type: "object",
       properties: {
         documentId: { type: "string", description: "The document ID" },
-        tableStartIndex: { type: "number", description: "Start index of the TABLE element (from documentStyleSummary or describeRange)" },
+        tableStartIndex: { type: "number", description: "Start index of the TABLE element, as printed by readGoogleDoc / getGoogleDocContent on the table's span line (tableStartIndex=N)" },
         rowIndex: { type: "number", description: "Optional cell-subset targeting: first row (0-based); needs columnIndex too" },
         columnIndex: { type: "number", description: "Optional cell-subset targeting: first column (0-based); needs rowIndex too" },
         rowSpan: { type: "number", description: "Rows in the targeted cell range (default: 1)" },
@@ -2741,7 +2744,7 @@ export const toolDefinitions: ToolDefinition[] = [
         rowIndices: { type: "array", items: { type: "number" }, description: "Rows (0-based) for minRowHeight; omit for all rows" },
         minRowHeight: { type: "number", description: "Minimum row height in points" },
         tabId: { type: "string", description: "Optional. Tab ID containing the table (from listDocumentTabs). If omitted, operates on the first/default tab." },
-        ifRevisionId: { type: "string", description: "Optional optimistic lock: fail if the document changed since this revisionId was read" }
+        ifRevisionId: { type: "string", description: "Optional optimistic lock: a revisionId from readGoogleDoc, getGoogleDocContent, getGoogleDocContentPaginated, or getDocumentInfo. The write fails cleanly if the document changed since that read. Valid for 24 hours, and only for the account that read it. Google Docs only." }
       },
       required: ["documentId", "tableStartIndex"]
     }
@@ -4625,14 +4628,10 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         return errorResponse("No table style options provided");
       }
 
-      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-      await docs.documents.batchUpdate({
-        documentId: a.documentId,
-        requestBody: {
-          requests: built.requests,
-          ...writeControlFor(a.ifRevisionId),
-        }
-      });
+      // Same path as insertTable/editTableCell: executeBatchUpdate threads the
+      // lock and maps 404/403 to the server's wording instead of leaking the
+      // raw gaxios error.
+      await executeBatchUpdate(ctx, a.documentId, built.requests, a.ifRevisionId);
 
       return {
         content: [{ type: "text", text: `Styled table at index ${a.tableStartIndex}${a.tabId ? ` in tab ${a.tabId}` : ''}: ${built.applied.join('; ')}` }],

@@ -103,7 +103,27 @@ test('refuses ambiguous or conflicting input', () => {
   );
   assert.throws(
     () => buildStyleDocTableRequests({ tableStartIndex: 1, rowIndex: 0, columnIndex: 0, columnWidth: 40 }),
-    /cell styles only/,
+    /scope cell styles only/,
+  );
+  // Same refusal when a cell style IS present: the cell request would be
+  // scoped to one cell while the width silently widened to every column.
+  assert.throws(
+    () => buildStyleDocTableRequests({
+      tableStartIndex: 1, rowIndex: 0, columnIndex: 0, backgroundColor: '#FFFFFF', columnWidth: 40,
+    }),
+    /scope cell styles only/,
+  );
+  assert.throws(
+    () => buildStyleDocTableRequests({
+      tableStartIndex: 1, rowIndex: 0, columnIndex: 0, backgroundColor: '#FFFFFF', minRowHeight: 20,
+    }),
+    /scope cell styles only/,
+  );
+  // A span with no anchoring cell would otherwise fall through to the
+  // whole-table path and be dropped without a word.
+  assert.throws(
+    () => buildStyleDocTableRequests({ tableStartIndex: 1, rowSpan: 2, backgroundColor: '#FFFFFF' }),
+    /needs both rowIndex and columnIndex/,
   );
   assert.throws(
     () => buildStyleDocTableRequests({ tableStartIndex: 1, columnWidth: 3 }),

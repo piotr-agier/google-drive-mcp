@@ -249,7 +249,6 @@ async function insertImageIntoSlide(
 // Tool Definitions
 // ---------------------------------------------------------------------------
 
-
 const SetSlideVisibilitySchema = z.object({
   presentationId: z.string().min(1, "Presentation ID is required"),
   slideObjectIds: z.array(z.string().min(1)).min(1, "At least one slide object ID is required"),
@@ -276,12 +275,6 @@ const SetElementTextSchema = z.object({
   presentationId: z.string().min(1, "Presentation ID is required"),
   objectId: z.string().min(1, "Object ID is required"),
   text: z.string(),
-});
-
-const SlidesBatchUpdateSchema = z.object({
-  presentationId: z.string().min(1, "Presentation ID is required"),
-  requests: z.array(z.record(z.unknown())).min(1),
-  ifRevisionId: z.string().optional(),
 });
 
 export const toolDefinitions: ToolDefinition[] = [
@@ -674,7 +667,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "setSlideVisibility",
-    description: "Show or hide (skip) slides in one atomic call. Hidden slides are skipped in present mode and PDF export. Ends the manual-unhide dance for slides promoted out of a hidden appendix — pass every promoted slide ID at once.",
+    description: "Show or hide (skip) slides in one atomic call. Hidden slides are skipped in present mode and PDF export.",
     inputSchema: {
       type: "object",
       properties: {
@@ -687,7 +680,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "replaceSlideImage",
-    description: "Replace an existing image in place, preserving its layering (z-order), position, size, and crop. The safe way to swap imagery on designed slides where text or panels overlay the image — unlike delete+insert, which lands the new image on top of the stack.",
+    description: "Replace an existing image in place, preserving its layering (z-order), position, size, and crop. Unlike delete+insert, which lands the new image on top of the stack, this keeps the image under any overlaid text.",
     inputSchema: {
       type: "object",
       properties: {
@@ -2034,10 +2027,13 @@ export async function handleTool(
         for (const el of elements || []) {
           if (el.objectId === a.objectId) {
             found = true;
-            const content = (el.shape?.text?.textElements || [])
-              .map((te: any) => te.textRun?.content || '')
-              .join('');
-            hasText = content.replace(/\n$/, '').length > 0;
+            // autoText elements (slide numbers, dates) carry no textRun but are
+            // still text: counting only textRuns would read the shape as empty,
+            // skip deleteText, and insert the new copy in front of the
+            // auto-text rather than replacing it.
+            const elements: any[] = el.shape?.text?.textElements || [];
+            const content = elements.map((te: any) => te.textRun?.content || '').join('');
+            hasText = content.replace(/\n$/, '').length > 0 || elements.some((te: any) => te.autoText);
             return;
           }
           if (el.elementGroup?.children) visit(el.elementGroup.children);

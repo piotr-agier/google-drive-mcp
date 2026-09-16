@@ -573,8 +573,31 @@ function extractDocText(
   return { text };
 }
 
+// The Docs API `revisionId` is what `WriteControl.requiredRevisionId` expects.
+// It is a different identifier from the Drive `version` integer that
+// getDocumentInfo reports and from the Drive revision ids getRevisions lists;
+// neither of those is accepted as a lock, so the read tools have to surface the
+// Docs one explicitly. Docs populates it only for callers with edit access, so
+// a read-only caller is told why the lock is unavailable rather than silently
+// getting no value and no explanation.
+//
+// Two limits worth knowing, both from the Docs API reference: a revisionId is
+// only guaranteed valid for 24 hours, and it cannot be shared across users. The
+// second matters in this server's multi-account mode — a revisionId read under
+// one `manage_accounts` alias will not lock a write issued under another, so
+// read and write under the same account.
+const REVISION_UNAVAILABLE = 'unavailable (no edit access)';
+
+function revisionIdOf(doc: { revisionId?: string | null } | null | undefined): string {
+  return doc?.revisionId || REVISION_UNAVAILABLE;
+}
+
+function writeControlFor(ifRevisionId?: string): { writeControl?: { requiredRevisionId: string } } {
+  return ifRevisionId ? { writeControl: { requiredRevisionId: ifRevisionId } } : {};
+}
+
 // Execute batch update for Google Docs
-async function executeBatchUpdate(ctx: ToolContext, documentId: string, requests: any[]): Promise<any> {
+async function executeBatchUpdate(ctx: ToolContext, documentId: string, requests: any[], ifRevisionId?: string): Promise<any> {
   if (!requests || requests.length === 0) {
     return {};
   }
@@ -584,7 +607,7 @@ async function executeBatchUpdate(ctx: ToolContext, documentId: string, requests
   try {
     const response = await docs.documents.batchUpdate({
       documentId: documentId,
-      requestBody: { requests },
+      requestBody: { requests, ...writeControlFor(ifRevisionId) },
     });
     return response.data;
   } catch (error: any) {
@@ -1770,7 +1793,8 @@ const CreateDocFromHTMLSchema = z.object({
 const UpdateGoogleDocSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
   content: z.string(),
-  tabId: z.string().optional()
+  tabId: z.string().optional(),
+  ifRevisionId: z.string().optional()
 });
 
 const GetGoogleDocContentSchema = z.object({
@@ -1792,7 +1816,8 @@ const InsertTextSchema = z.object({
   textToFind: z.string().min(1).optional(),
   matchInstance: z.number().int().min(1).optional().default(1),
   position: z.enum(['before', 'after']).optional().default('after'),
-  tabId: z.string().optional()
+  tabId: z.string().optional(),
+  ifRevisionId: z.string().optional()
 }).refine(data => (data.index !== undefined) !== (data.textToFind !== undefined), {
   message: "Provide exactly one of index or textToFind"
 });
@@ -1803,7 +1828,8 @@ const DeleteRangeSchema = z.object({
   endIndex: z.number().int().min(0, "End index must be non-negative").optional(),
   textToFind: z.string().min(1).optional(),
   matchInstance: z.number().int().min(1).optional().default(1),
-  tabId: z.string().optional()
+  tabId: z.string().optional(),
+  ifRevisionId: z.string().optional()
 }).refine(data => {
   // Exactly one targeting mode: both indices and no textToFind, or textToFind
   // and no index at all. A stray single index next to textToFind is refused
@@ -1861,7 +1887,8 @@ const ApplyTextStyleSchema = z.object({
   backgroundColor: z.string().optional(),
   linkUrl: z.string().url().optional(),
   baselineOffset: z.enum(['SUPERSCRIPT', 'SUBSCRIPT', 'NONE']).optional(),
-  tabId: z.string().optional()
+  tabId: z.string().optional(),
+  ifRevisionId: z.string().optional()
 });
 
 const ParagraphBorderParamSchema = z.object({
@@ -1897,7 +1924,8 @@ const ApplyParagraphStyleSchema = z.object({
   removeBorders: z.array(z.enum(['top', 'bottom', 'left', 'right', 'between', 'all'])).optional(),
   shading: z.string().optional(),
   removeShading: z.boolean().optional(),
-  tabId: z.string().optional()
+  tabId: z.string().optional(),
+  ifRevisionId: z.string().optional()
 });
 
 const CreateParagraphBulletsSchema = z.object({
@@ -1922,7 +1950,8 @@ const CreateParagraphBulletsSchema = z.object({
     'NUMBERED_ZERODECIMAL_ALPHA_ROMAN',
     'NONE'
   ]).default('BULLET_DISC_CIRCLE_SQUARE'),
-  tabId: z.string().optional()
+  tabId: z.string().optional(),
+  ifRevisionId: z.string().optional()
 });
 
 const ListCommentsSchema = z.object({
@@ -1967,7 +1996,8 @@ const InsertTableSchema = z.object({
   rows: z.number().int().min(1, "Must have at least 1 row"),
   columns: z.number().int().min(1, "Must have at least 1 column"),
   index: z.number().int().min(1, "Index must be at least 1 (1-based)"),
-  tabId: z.string().optional()
+  tabId: z.string().optional(),
+  ifRevisionId: z.string().optional()
 });
 
 const EditTableCellSchema = z.object({
@@ -1980,7 +2010,8 @@ const EditTableCellSchema = z.object({
   italic: z.boolean().optional(),
   fontSize: z.number().optional(),
   alignment: z.enum(["START", "CENTER", "END", "JUSTIFIED"]).optional(),
-  tabId: z.string().optional()
+  tabId: z.string().optional(),
+  ifRevisionId: z.string().optional()
 });
 
 const InsertImageFromUrlSchema = z.object({
@@ -2019,6 +2050,7 @@ const FindAndReplaceInDocSchema = z.object({
   dryRun: z.boolean().optional().default(false),
   tabId: z.string().optional(),
   expectedCount: z.number().int().min(1).optional(),
+  ifRevisionId: z.string().optional(),
 });
 
 const AddDocumentTabSchema = z.object({
@@ -2038,6 +2070,7 @@ const InsertSmartChipSchema = z.object({
   chipType: z.enum(["person"]),
   personEmail: z.string().email("Valid email is required for person chip"),
   tabId: z.string().optional(),
+  ifRevisionId: z.string().optional(),
 });
 
 const ReadSmartChipsSchema = z.object({
@@ -2050,6 +2083,7 @@ const CreateFootnoteSchema = z.object({
   endOfSegment: z.boolean().optional(),
   content: z.string().optional(),
   tabId: z.string().optional(),
+  ifRevisionId: z.string().optional(),
 }).refine(data => data.index !== undefined || data.endOfSegment === true, {
   message: "Either 'index' or 'endOfSegment: true' must be provided",
 });
@@ -2101,7 +2135,8 @@ const applyParagraphStyleInputSchema = {
     removeBorders: { type: "array", items: { type: "string", enum: ["top", "bottom", "left", "right", "between", "all"] }, description: "Border edges to clear at the paragraph level, so each falls back to the border its named style defines (usually none). Does not touch horizontalRule elements. The update applies to EVERY paragraph overlapping the target range, so removeBorders: [\"all\"] over the whole body strips every paragraph border in one call." },
     shading: { type: "string", description: "Paragraph background color as hex (e.g., #F1F3F4)" },
     removeShading: { type: "boolean", description: "Clear the paragraph background shading" },
-    tabId: { type: "string", description: "Optional. Tab ID to format within (from listDocumentTabs). If omitted, operates on the first/default tab." }
+    tabId: { type: "string", description: "Optional. Tab ID to format within (from listDocumentTabs). If omitted, operates on the first/default tab." },
+    ifRevisionId: { type: "string", description: "Optional optimistic lock: a revisionId from readGoogleDoc, getGoogleDocContent, getGoogleDocContentPaginated, or getDocumentInfo. The write fails cleanly if the document changed since that read. Valid for 24 hours, and only for the account that read it. Google Docs only." }
   },
   required: ["documentId"]
 };
@@ -2135,13 +2170,14 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "updateGoogleDoc",
-    description: "Update an existing Google Doc (replaces all content). For multi-tab docs, specify tabId to replace a single tab's content atomically; leaves other tabs untouched.",
+    description: "Update an existing Google Doc (replaces all content). The replacement is one atomic batchUpdate, so a failure leaves the document unchanged rather than wiped. For multi-tab docs, specify tabId to replace a single tab's content; leaves other tabs untouched.",
     inputSchema: {
       type: "object",
       properties: {
         documentId: { type: "string", description: "Doc ID" },
         content: { type: "string", description: "New content" },
-        tabId: { type: "string", description: "Optional. Tab ID to replace (from listDocumentTabs). If set, delete+insert run in a single atomic batchUpdate scoped to that tab." }
+        tabId: { type: "string", description: "Optional. Tab ID to replace (from listDocumentTabs). If set, delete+insert run in a single atomic batchUpdate scoped to that tab." },
+        ifRevisionId: { type: "string", description: "Optional optimistic lock: a revisionId from readGoogleDoc, getGoogleDocContent, getGoogleDocContentPaginated, or getDocumentInfo. The write fails cleanly if the document changed since that read. Valid for 24 hours, and only for the account that read it. Google Docs only." }
       },
       required: ["documentId", "content"]
     }
@@ -2181,7 +2217,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "readGoogleDoc",
-    description: "Read content of a Google Doc with format options. Supports multi-tab documents.",
+    description: "Read content of a Google Doc with format options. Supports multi-tab documents. Text/markdown output leads with the document's revisionId — pass it as ifRevisionId on write tools for an optimistic lock.",
     inputSchema: {
       type: "object",
       properties: {
@@ -2241,7 +2277,8 @@ export const toolDefinitions: ToolDefinition[] = [
         backgroundColor: { type: "string", description: "Hex background color" },
         linkUrl: { type: "string", description: "URL for hyperlink" },
         baselineOffset: { type: "string", enum: ["SUPERSCRIPT", "SUBSCRIPT", "NONE"], description: "Vertical text offset: SUPERSCRIPT or SUBSCRIPT. Use NONE to reset text to the normal baseline." },
-        tabId: { type: "string", description: "Optional. Tab ID to format within (from listDocumentTabs). If omitted, operates on the first/default tab." }
+        tabId: { type: "string", description: "Optional. Tab ID to format within (from listDocumentTabs). If omitted, operates on the first/default tab." },
+        ifRevisionId: { type: "string", description: "Optional optimistic lock: a revisionId from readGoogleDoc, getGoogleDocContent, getGoogleDocContentPaginated, or getDocumentInfo. The write fails cleanly if the document changed since that read. Valid for 24 hours, and only for the account that read it. Google Docs only." }
       },
       required: ["documentId"]
     }
@@ -2272,7 +2309,8 @@ export const toolDefinitions: ToolDefinition[] = [
         backgroundColor: { type: "string", description: "Hex background color" },
         linkUrl: { type: "string", description: "URL for hyperlink" },
         baselineOffset: { type: "string", enum: ["SUPERSCRIPT", "SUBSCRIPT", "NONE"], description: "Vertical text offset: SUPERSCRIPT or SUBSCRIPT. Use NONE to reset text to the normal baseline." },
-        tabId: { type: "string", description: "Optional. Tab ID to format within (from listDocumentTabs). If omitted, operates on the first/default tab." }
+        tabId: { type: "string", description: "Optional. Tab ID to format within (from listDocumentTabs). If omitted, operates on the first/default tab." },
+        ifRevisionId: { type: "string", description: "Optional optimistic lock: a revisionId from readGoogleDoc, getGoogleDocContent, getGoogleDocContentPaginated, or getDocumentInfo. The write fails cleanly if the document changed since that read. Valid for 24 hours, and only for the account that read it. Google Docs only." }
       },
       required: ["documentId"]
     }
@@ -2294,6 +2332,7 @@ export const toolDefinitions: ToolDefinition[] = [
         textToFind: { type: "string", description: "Text within the target paragraph(s) to bulletize" },
         matchInstance: { type: "number", description: "Which instance of textToFind (default: 1)" },
         bulletPreset: { type: "string", enum: ["BULLET_DISC_CIRCLE_SQUARE", "BULLET_DIAMONDX_ARROW3D_SQUARE", "BULLET_CHECKBOX", "BULLET_ARROW_DIAMOND_DISC", "BULLET_STAR_CIRCLE_SQUARE", "BULLET_ARROW3D_CIRCLE_SQUARE", "BULLET_LEFTTRIANGLE_DIAMOND_DISC", "NUMBERED_DECIMAL_ALPHA_ROMAN", "NUMBERED_DECIMAL_ALPHA_ROMAN_PARENS", "NUMBERED_DECIMAL_NESTED", "NUMBERED_UPPERALPHA_ALPHA_ROMAN", "NUMBERED_UPPERROMAN_UPPERALPHA_DECIMAL", "NUMBERED_ZERODECIMAL_ALPHA_ROMAN", "NONE"], description: "Bullet style preset. Use NONE to remove bullets. Default: BULLET_DISC_CIRCLE_SQUARE" },
+        ifRevisionId: { type: "string", description: "Optional optimistic lock: a revisionId from readGoogleDoc, getGoogleDocContent, getGoogleDocContentPaginated, or getDocumentInfo. The write fails cleanly if the document changed since that read. Valid for 24 hours, and only for the account that read it. Google Docs only." },
         tabId: { type: "string", description: "Optional. Tab ID to operate within (from listDocumentTabs). If omitted, operates on the first/default tab." }
       },
       required: ["documentId"]
@@ -2311,7 +2350,8 @@ export const toolDefinitions: ToolDefinition[] = [
         matchCase: { type: "boolean", description: "Case-sensitive match (default: false)" },
         dryRun: { type: "boolean", description: "Only count matches, do not modify the document (default: false). Respects tabId scoping." },
         tabId: { type: "string", description: "Optional. Tab ID to scope replacements to (from listDocumentTabs). If omitted, replaces across all tabs." },
-        expectedCount: { type: "number", description: "Optional safety guard: the exact number of occurrences you expect to replace. Counted before writing; on a mismatch the call aborts without modifying the document (catches substring collisions and stale assumptions). Costs one extra document read per call, and a zero-match result costs one more to diagnose the likeliest cause — this tool is no longer a single API request when the guard is set." }
+        expectedCount: { type: "number", description: "Optional safety guard: the exact number of occurrences you expect to replace. Counted before writing; on a mismatch the call aborts without modifying the document (catches substring collisions and stale assumptions). Costs one extra document read per call, and a zero-match result costs one more to diagnose the likeliest cause — this tool is no longer a single API request when the guard is set." },
+        ifRevisionId: { type: "string", description: "Optional optimistic lock: a revisionId from readGoogleDoc, getGoogleDocContent, getGoogleDocContentPaginated, or getDocumentInfo. The write fails cleanly if the document changed since that read. Valid for 24 hours, and only for the account that read it. Google Docs only." }
       },
       required: ["documentId", "findText", "replaceText"]
     }
@@ -2434,7 +2474,8 @@ export const toolDefinitions: ToolDefinition[] = [
         rows: { type: "number", description: "Number of rows for the new table" },
         columns: { type: "number", description: "Number of columns for the new table" },
         index: { type: "number", description: "The index (1-based) where the table should be inserted" },
-        tabId: { type: "string", description: "Optional. Tab ID to insert the table into (from listDocumentTabs). If omitted, inserts into the first/default tab." }
+        tabId: { type: "string", description: "Optional. Tab ID to insert the table into (from listDocumentTabs). If omitted, inserts into the first/default tab." },
+        ifRevisionId: { type: "string", description: "Optional optimistic lock: a revisionId from readGoogleDoc, getGoogleDocContent, getGoogleDocContentPaginated, or getDocumentInfo. The write fails cleanly if the document changed since that read. Valid for 24 hours, and only for the account that read it. Google Docs only." }
       },
       required: ["documentId", "rows", "columns", "index"]
     }
@@ -2454,7 +2495,8 @@ export const toolDefinitions: ToolDefinition[] = [
         italic: { type: "boolean", description: "Make text italic" },
         fontSize: { type: "number", description: "Font size in points" },
         alignment: { type: "string", enum: ["START", "CENTER", "END", "JUSTIFIED"], description: "Text alignment" },
-        tabId: { type: "string", description: "Optional. Tab ID containing the table (from listDocumentTabs). If omitted, operates on the first/default tab." }
+        tabId: { type: "string", description: "Optional. Tab ID containing the table (from listDocumentTabs). If omitted, operates on the first/default tab." },
+        ifRevisionId: { type: "string", description: "Optional optimistic lock: a revisionId from readGoogleDoc, getGoogleDocContent, getGoogleDocContentPaginated, or getDocumentInfo. The write fails cleanly if the document changed since that read. Valid for 24 hours, and only for the account that read it. Google Docs only." }
       },
       required: ["documentId", "tableStartIndex", "rowIndex", "columnIndex"]
     }
@@ -2550,6 +2592,7 @@ export const toolDefinitions: ToolDefinition[] = [
         index: { type: "number", description: "Insertion index (1-based)" },
         chipType: { type: "string", enum: ["person"], description: "Smart chip type (only 'person' is supported)" },
         personEmail: { type: "string", description: "Email address for the person mention" },
+        ifRevisionId: { type: "string", description: "Optional optimistic lock: a revisionId from readGoogleDoc, getGoogleDocContent, getGoogleDocContentPaginated, or getDocumentInfo. The write fails cleanly if the document changed since that read. Valid for 24 hours, and only for the account that read it. Google Docs only." },
         tabId: { type: "string", description: "Optional. Tab ID to insert into (from listDocumentTabs). If omitted, inserts into the first/default tab." }
       },
       required: ["documentId", "index", "chipType", "personEmail"]
@@ -2576,6 +2619,7 @@ export const toolDefinitions: ToolDefinition[] = [
         index: { type: "number", description: "1-based character index where the footnote reference should be inserted" },
         endOfSegment: { type: "boolean", description: "If true, insert footnote at the end of the document body (use instead of index)" },
         content: { type: "string", description: "Optional text content for the footnote body" },
+        ifRevisionId: { type: "string", description: "Optional optimistic lock: a revisionId from readGoogleDoc, getGoogleDocContent, getGoogleDocContentPaginated, or getDocumentInfo. The write fails cleanly if the document changed since that read. Valid for 24 hours, and only for the account that read it. Google Docs only." },
         tabId: { type: "string", description: "Optional. Tab ID to insert the footnote into (from listDocumentTabs). If omitted, inserts into the first/default tab." },
       },
       required: ["documentId"]
@@ -2787,7 +2831,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
 
         await docs.documents.batchUpdate({
           documentId: a.documentId,
-          requestBody: { requests }
+          requestBody: { requests, ...writeControlFor(a.ifRevisionId) }
         });
 
         return {
@@ -2802,41 +2846,33 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const endIndex = document.data.body?.content?.[document.data.body.content.length - 1]?.endIndex || 1;
       const deleteEndIndex = Math.max(1, endIndex - 1);
 
+      // One atomic batchUpdate, same as the tabId path above. Splitting the
+      // delete from the insert meant a failed insert left the document wiped,
+      // and it left the lock covering only the first of the two calls — on an
+      // empty document the delete is skipped entirely, so ifRevisionId guarded
+      // nothing at all.
+      const requests: any[] = [];
       if (deleteEndIndex > 1) {
-        await docs.documents.batchUpdate({
-          documentId: a.documentId,
-          requestBody: {
-            requests: [{
-              deleteContentRange: {
-                range: { startIndex: 1, endIndex: deleteEndIndex }
-              }
-            }]
+        requests.push({
+          deleteContentRange: {
+            range: { startIndex: 1, endIndex: deleteEndIndex }
           }
         });
       }
+      requests.push({
+        insertText: { location: { index: 1 }, text: a.content }
+      });
+      requests.push({
+        updateParagraphStyle: {
+          range: { startIndex: 1, endIndex: a.content.length + 1 },
+          paragraphStyle: { namedStyleType: 'NORMAL_TEXT' },
+          fields: 'namedStyleType'
+        }
+      });
 
-      // Insert new content
       await docs.documents.batchUpdate({
         documentId: a.documentId,
-        requestBody: {
-          requests: [
-            {
-              insertText: { location: { index: 1 }, text: a.content }
-            },
-            {
-              updateParagraphStyle: {
-                range: {
-                  startIndex: 1,
-                  endIndex: a.content.length + 1
-                },
-                paragraphStyle: {
-                  namedStyleType: 'NORMAL_TEXT'
-                },
-                fields: 'namedStyleType'
-              }
-            }
-          ]
-        }
+        requestBody: { requests, ...writeControlFor(a.ifRevisionId) }
       });
 
       return {
@@ -2865,10 +2901,15 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
 
       const { formattedContent, totalLength } = buildDocFormattedContent(document.data, withFormatting);
 
+      // This is the read a caller makes immediately before an index-based
+      // write, so the lock has to be obtainable from it — otherwise the indices
+      // come from one fetch and the lock from a later one.
       return {
         content: [{
           type: "text",
-          text: formattedContent + `\nTotal length: ${totalLength} characters`
+          text: formattedContent
+            + `\nTotal length: ${totalLength} characters`
+            + `\nrevisionId: ${revisionIdOf(document.data)}`
         }],
         isError: false
       };
@@ -2904,6 +2945,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         limit,
         nextOffset: end,
         hasMore,
+        revisionId: revisionIdOf(document.data),
         content: slicedContent,
       };
 
@@ -3056,7 +3098,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
                 location,
                 text: a.text
               }
-            }]
+            }],
+            ...writeControlFor(a.ifRevisionId)
           }
         });
 
@@ -3072,6 +3115,11 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         }
         if (a.textToFind !== undefined) {
           return errorResponse('textToFind targeting is only supported on Google Docs — pass a 0-based index for text files');
+        }
+        if (a.ifRevisionId) {
+          // Silently ignoring the lock is worse than refusing it: the caller
+          // believes the write was guarded when nothing checked it.
+          return errorResponse('ifRevisionId is only supported for Google Docs, not text files');
         }
 
         const content = await downloadTextContent(ctx.getDrive(), a.documentId);
@@ -3166,7 +3214,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           requestBody: {
             requests: [{
               deleteContentRange: { range }
-            }]
+            }],
+            ...writeControlFor(a.ifRevisionId)
           }
         });
 
@@ -3182,6 +3231,11 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         }
         if (a.textToFind !== undefined) {
           return errorResponse('textToFind targeting is only supported on Google Docs — pass 0-based startIndex/endIndex for text files');
+        }
+        if (a.ifRevisionId) {
+          // Silently ignoring the lock is worse than refusing it: the caller
+          // believes the write was guarded when nothing checked it.
+          return errorResponse('ifRevisionId is only supported for Google Docs, not text files');
         }
 
         const startIndex = a.startIndex!;
@@ -3247,9 +3301,18 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         resultText = withMarkdownTitle(doc.title, resultText);
       }
 
-      if (a.maxLength && resultText.length > a.maxLength) {
-        resultText = resultText.substring(0, a.maxLength) + '\n... (truncated)';
+      // Surface the revision so callers can optimistically lock their writes
+      // (pass it as ifRevisionId on any Docs write tool). The line is counted
+      // against maxLength and kept whole, so a truncated read is still lockable
+      // and the response still honors the cap the caller asked for.
+      const revisionLine = `revisionId: ${revisionIdOf(doc)}\n`;
+      if (a.maxLength) {
+        const room = Math.max(0, a.maxLength - revisionLine.length);
+        if (resultText.length > room) {
+          resultText = resultText.substring(0, room) + '\n... (truncated)';
+        }
       }
+      resultText = revisionLine + resultText;
 
       return {
         content: [{ type: "text", text: resultText }],
@@ -3451,7 +3514,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       await docs.documents.batchUpdate({
         documentId: a.documentId,
         requestBody: {
-          requests: [styleResult.request]
+          requests: [styleResult.request],
+          ...writeControlFor(a.ifRevisionId)
         }
       });
 
@@ -3562,7 +3626,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       await docs.documents.batchUpdate({
         documentId: a.documentId,
         requestBody: {
-          requests: [styleResult.request]
+          requests: [styleResult.request],
+          ...writeControlFor(a.ifRevisionId)
         }
       });
 
@@ -3616,7 +3681,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           requestBody: {
             requests: [{
               deleteParagraphBullets: { range }
-            }]
+            }],
+            ...writeControlFor(a.ifRevisionId)
           }
         });
         return {
@@ -3633,7 +3699,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
               range,
               bulletPreset: a.bulletPreset
             }
-          }]
+          }],
+          ...writeControlFor(a.ifRevisionId)
         }
       });
 
@@ -3746,6 +3813,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         documentId: a.documentId,
         requestBody: {
           requests: [{ replaceAllText }],
+          ...writeControlFor(a.ifRevisionId),
         },
       });
 
@@ -4150,7 +4218,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         }
       };
 
-      await executeBatchUpdate(ctx, a.documentId, [request_body]);
+      await executeBatchUpdate(ctx, a.documentId, [request_body], a.ifRevisionId);
 
       return {
         content: [{ type: "text", text: `Successfully inserted ${a.rows}x${a.columns} table at index ${a.index}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
@@ -4287,7 +4355,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         return errorResponse("No changes specified for the table cell");
       }
 
-      await executeBatchUpdate(ctx, a.documentId, requests);
+      await executeBatchUpdate(ctx, a.documentId, requests, a.ifRevisionId);
 
       return {
         content: [{ type: "text", text: `Successfully edited cell at row ${a.rowIndex}, column ${a.columnIndex}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
@@ -4409,6 +4477,19 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         return errorResponse(`Document with ID ${a.documentId} not found.`);
       }
 
+      // The Drive `version` above is not a Docs revisionId and WriteControl
+      // rejects it, so fetch the real one. Narrow projection, and non-fatal:
+      // a caller without edit access (or a Drive file that is not a Doc) still
+      // gets the metadata rather than an error from the lock lookup.
+      let docsRevisionId = REVISION_UNAVAILABLE;
+      try {
+        const docMeta = await ctx.google.docs({ version: 'v1', auth: ctx.authClient })
+          .documents.get({ documentId: a.documentId, fields: 'revisionId' });
+        docsRevisionId = revisionIdOf(docMeta.data);
+      } catch {
+        // Leave it unavailable; the metadata below is still worth returning.
+      }
+
       const createdDate = file.createdTime ? new Date(file.createdTime).toLocaleString() : 'Unknown';
       const modifiedDate = file.modifiedTime ? new Date(file.modifiedTime).toLocaleString() : 'Unknown';
       const owner = file.owners?.[0];
@@ -4434,7 +4515,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
 
       result += `**Shared:** ${file.shared ? 'Yes' : 'No'}\n`;
-      result += `**Version:** ${file.version || 'Unknown'}\n`;
+      result += `**Drive Version:** ${file.version || 'Unknown'} (Drive's change counter — not a lock)\n`;
+      result += `**Docs revisionId:** ${docsRevisionId} (pass as ifRevisionId to lock a write)\n`;
       result += `**View Link:** ${file.webViewLink}\n`;
 
       return { content: [{ type: "text", text: result }], isError: false };
@@ -4490,6 +4572,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
             },
           // insertPerson is not yet in the googleapis TypeScript types — cast required
           } as any],
+          ...writeControlFor(a.ifRevisionId),
         },
       });
 
@@ -4539,6 +4622,10 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         documentId: a.documentId,
         requestBody: {
           requests: [{ createFootnote: createFootnoteReq }],
+          // Lock only this creating call: the optional content insert below
+          // targets the new footnote segment, whose revision necessarily
+          // postdates the caller's read.
+          ...writeControlFor(a.ifRevisionId),
         },
       });
 

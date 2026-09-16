@@ -160,9 +160,12 @@ describe('Docs tools', () => {
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text!.includes('Updated Google Doc'));
 
-      // Non-tabId path: still two separate batchUpdate calls (existing behavior).
+      // Non-tabId path is now one atomic batchUpdate, like the tabId path: the
+      // delete and insert can no longer half-apply and leave the doc wiped.
       const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
-      assert.equal(calls.length, 2);
+      assert.equal(calls.length, 1);
+      const kinds = calls[0]!.args[0].requestBody.requests.map((r: any) => Object.keys(r)[0]);
+      assert.deepEqual(kinds, ['deleteContentRange', 'insertText', 'updateParagraphStyle']);
     });
 
     it('with tabId issues a single atomic batchUpdate scoped to the tab', async () => {
@@ -1023,7 +1026,7 @@ describe('Docs tools', () => {
     it('does not repeat the document title when the body carries the same TITLE paragraph', async () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({
         data: {
-          documentId: 'doc-1', title: 'Quarterly Review',
+          documentId: 'doc-1', title: 'Quarterly Review', revisionId: 'rev-1',
           body: {
             content: [
               { paragraph: { paragraphStyle: { namedStyleType: 'TITLE' }, elements: [{ textRun: { content: 'Quarterly Review\n' } }] } },
@@ -1035,13 +1038,13 @@ describe('Docs tools', () => {
       const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', format: 'markdown' });
       assert.equal(res.isError, false);
       const text = res.content[0].text!;
-      assert.equal(text, '# Quarterly Review\n\nBody\n');
+      assert.equal(text, 'revisionId: rev-1\n# Quarterly Review\n\nBody\n');
     });
 
     it('still prepends the document title when the body has no matching TITLE paragraph', async () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({
         data: {
-          documentId: 'doc-1', title: 'Real Title',
+          documentId: 'doc-1', title: 'Real Title', revisionId: 'rev-2',
           body: {
             content: [
               { paragraph: { paragraphStyle: { namedStyleType: 'TITLE' }, elements: [{ textRun: { content: 'Something else\n' } }] } },
@@ -1051,7 +1054,7 @@ describe('Docs tools', () => {
       }));
       const res = await callTool(ctx.client, 'readGoogleDoc', { documentId: 'doc-1', format: 'markdown' });
       assert.equal(res.isError, false);
-      assert.equal(res.content[0].text!, '# Real Title\n\n# Something else\n');
+      assert.equal(res.content[0].text!, 'revisionId: rev-2\n# Real Title\n\n# Something else\n');
     });
 
     it('indents a nested item past an ordered parent marker (format=markdown)', async () => {

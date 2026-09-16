@@ -2473,7 +2473,8 @@ export const toolDefinitions: ToolDefinition[] = [
         textToFind: { type: "string", description: "Google Docs only: locate the insertion point by text instead of index (exact, case-sensitive match). Combine with position (before/after) and matchInstance. If the match ends at the document's final paragraph break, 'after' inserts just before that break." },
         matchInstance: { type: "number", description: "Which instance of textToFind (default: 1)" },
         position: { type: "string", enum: ["before", "after"], description: "Insert before or after the matched text (default: after). Only used with textToFind." },
-        tabId: { type: "string", description: "Optional. Google Docs only — Tab ID to insert into (from listDocumentTabs). If omitted, inserts into the first/default tab. Not supported on text files." }
+        tabId: { type: "string", description: "Optional. Google Docs only — Tab ID to insert into (from listDocumentTabs). If omitted, inserts into the first/default tab. Not supported on text files." },
+        ifRevisionId: { type: "string", description: "Optional optimistic lock: a revisionId from readGoogleDoc, getGoogleDocContent, getGoogleDocContentPaginated, or getDocumentInfo. The write fails cleanly if the document changed since that read. Valid for 24 hours, and only for the account that read it. Google Docs only." }
       },
       required: ["documentId", "text"]
     }
@@ -2489,7 +2490,8 @@ export const toolDefinitions: ToolDefinition[] = [
         endIndex: { type: "number", description: "End index (exclusive). Google Docs: 1-based Docs API structural index. Text files: 0-based Unicode code point (character) offset." },
         textToFind: { type: "string", description: "Google Docs only: delete the matched text instead of an index range (exact, case-sensitive match). Combine with matchInstance. A match that ends with the document's final paragraph break is trimmed to keep that break, since Docs does not allow deleting it." },
         matchInstance: { type: "number", description: "Which instance of textToFind (default: 1)" },
-        tabId: { type: "string", description: "Optional. Google Docs only — Tab ID to delete from (from listDocumentTabs). If omitted, deletes from the first/default tab. Not supported on text files." }
+        tabId: { type: "string", description: "Optional. Google Docs only — Tab ID to delete from (from listDocumentTabs). If omitted, deletes from the first/default tab. Not supported on text files." },
+        ifRevisionId: { type: "string", description: "Optional optimistic lock: a revisionId from readGoogleDoc, getGoogleDocContent, getGoogleDocContentPaginated, or getDocumentInfo. The write fails cleanly if the document changed since that read. Valid for 24 hours, and only for the account that read it. Google Docs only." }
       },
       required: ["documentId"]
     }

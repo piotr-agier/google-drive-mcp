@@ -1,6 +1,6 @@
 # Tool reference
 
-This server exposes 128 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
+This server exposes 129 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
 
 ## Available Tools
 
@@ -428,6 +428,15 @@ different identifiers; neither is accepted as a lock.
   - `valueRenderOption`: `FORMATTED_VALUE` (default, as displayed), `UNFORMATTED_VALUE` (raw values), or `FORMULA` (the formula behind each cell) (optional)
   - Cells within a row are separated by a tab, so a value containing a comma stays one cell
   - Under `UNFORMATTED_VALUE` a date or time cell is returned as a serial number, not a date string
+
+- **getGoogleSheetCells** - Read cells as structured data: one absolute A1 address per cell, the formula and its computed result together, several ranges per call
+  - `spreadsheetId`: Spreadsheet ID
+  - `ranges`: A1 ranges to read, returned separately and in order
+  - `fields`: CellData fields (optional, default `userEnteredValue`, `effectiveValue`, `formattedValue`)
+  - `sheetMetadata`: `merges`, `hiddenRows`, `hiddenColumns`, `frozen`, `dimensionGroups`, `dimensionSizes` (optional)
+  - `includeEmpty`: return cells with none of the requested fields (optional, default false)
+  - `maxCells` / `maxBytes`: response budget; on overflow returns `truncated` and `nextRanges` (optional)
+  - Addresses are absolute to the sheet, not relative to the requested range, and `getGoogleSheetContent` is unchanged
 
 #### Sheet Management
 - **getSpreadsheetInfo** - Get detailed information about a spreadsheet including all sheets/tabs

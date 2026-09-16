@@ -3,6 +3,10 @@ import type { sheets_v4 } from 'googleapis';
 import type { ToolDefinition, ToolResult, ToolContext } from '../types.js';
 import { errorResponse } from '../types.js';
 import { parseA1Range, convertA1ToGridRange, escapeDriveQuery, ALL_DRIVES_LIST_PARAMS, DRIVE_ORDER_BY_VALUES, type GridRange } from '../utils.js';
+import {
+  CELL_FIELDS, DEFAULT_CELL_FIELDS, SHEET_METADATA, buildFieldMask, collectSheetMetadata,
+  extractRanges, matchRangesToGridData, type SheetLike,
+} from './sheetCells.js';
 
 // ---------------------------------------------------------------------------
 // Zod Schemas
@@ -42,6 +46,18 @@ const GetGoogleSheetContentSchema = z.object({
   spreadsheetId: z.string().min(1, "Spreadsheet ID is required"),
   range: z.string().min(1, "Range is required"),
   valueRenderOption: z.enum(["FORMATTED_VALUE", "UNFORMATTED_VALUE", "FORMULA"]).optional().default("FORMATTED_VALUE")
+});
+
+const GetGoogleSheetCellsSchema = z.object({
+  spreadsheetId: z.string({ required_error: "Spreadsheet ID is required" }).min(1, "Spreadsheet ID is required"),
+  ranges: z.array(z.string().min(1), { required_error: "At least one range is required" })
+    .min(1, "At least one range is required"),
+  fields: z.array(z.enum(CELL_FIELDS)).optional()
+    .default([...DEFAULT_CELL_FIELDS]),
+  sheetMetadata: z.array(z.enum(SHEET_METADATA)).optional().default([]),
+  includeEmpty: z.boolean().optional().default(false),
+  maxCells: z.number().int().min(1).max(100000).optional().default(2000),
+  maxBytes: z.number().int().min(1024).max(4 * 1024 * 1024).optional().default(131072)
 });
 
 // The dimension tools (hide/show and the outline groups) address whole
@@ -354,6 +370,35 @@ export const toolDefinitions: ToolDefinition[] = [
         }
       },
       required: ["spreadsheetId", "range"]
+    }
+  },
+  {
+    name: "getGoogleSheetCells",
+    description: "Read Google Sheets cells as structured data instead of joined text: each cell comes back with its own absolute A1 address, and with the formula the user entered AND the value it evaluates to, in one call. Reads several ranges at once and returns them separately. Prefer this over getGoogleSheetContent whenever exact cell addresses matter (getGoogleSheetContent numbers rows relative to the requested range and does not label columns at all), whenever a formula has to be checked against its result (getGoogleSheetContent renders one or the other per call, so that needs two reads), or whenever cell boundaries must survive the values themselves. getGoogleSheetContent remains the right tool for a quick human-readable dump of one range.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        ranges: {
+          type: "array",
+          description: "A1 ranges to read, e.g. [\"'Entity Assumptions'!B52:E52\", \"'Mgmt Fees Calc'!C6:EB13\"]. Returned separately, in this order, each with its own coordinates.",
+          items: { type: "string" }
+        },
+        fields: {
+          type: "array",
+          description: "CellData fields to return. Default ['userEnteredValue','effectiveValue','formattedValue'] gives the formula (userEnteredValue.formulaValue) together with its computed result (effectiveValue, or effectiveValue.errorValue for #REF!/#DIV/0!).",
+          items: { type: "string", enum: [...CELL_FIELDS] }
+        },
+        sheetMetadata: {
+          type: "array",
+          description: "Per-sheet extras returned once per sheet under `sheets`: merges (full extent, even when they leave the range), hiddenRows, hiddenColumns, frozen, dimensionGroups, dimensionSizes.",
+          items: { type: "string", enum: [...SHEET_METADATA] }
+        },
+        includeEmpty: { type: "boolean", description: "Return cells that have none of the requested fields as {a1, empty: true}. Default false - addresses are explicit, so gaps are unambiguous." },
+        maxCells: { type: "number", description: "Cell budget for the whole response (default 2000). On overflow the read stops at a row boundary and returns truncated:true plus nextRanges. On formula-heavy ranges the byte budget (maxBytes) normally binds first - a real spreadsheet of formula cells, reserialized into this tool's own compact per-cell JSON with the three default fields, measured at roughly 130 bytes per cell, exhausting the default maxBytes at around 1000 cells, still well before this default of 2000 - so truncation there is expected, not a sign of a misconfigured maxCells." },
+        maxBytes: { type: "number", description: "Byte budget for the serialized cells (default 131072), measured on this tool's own compact JSON output rather than on the raw Sheets API response (which Google pretty-prints over HTTP, inflating its wire size well above what is actually serialized here). On formula-heavy ranges this is normally the budget that binds, well before maxCells: roughly 130 bytes per cell with the three default fields exhausts the default 131072 around 1000 cells." }
+      },
+      required: ["spreadsheetId", "ranges"]
     }
   },
   {
@@ -1054,6 +1099,48 @@ export async function handleTool(
 
       return {
         content: [{ type: "text", text: content }],
+        isError: false
+      };
+    }
+
+    case "getGoogleSheetCells": {
+      const validation = GetGoogleSheetCellsSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const a = validation.data;
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      // includeGridData is deliberately not passed: a field mask already
+      // selects the grid data, and the flag is ignored when one is present.
+      const response = await sheets.spreadsheets.get({
+        spreadsheetId: a.spreadsheetId,
+        ranges: a.ranges,
+        fields: buildFieldMask(a.fields, a.sheetMetadata)
+      });
+
+      const matched = matchRangesToGridData(a.ranges, (response.data.sheets ?? []) as SheetLike[]);
+      if ('error' in matched) {
+        return errorResponse(matched.error);
+      }
+
+      const extracted = extractRanges(matched.matches, a.fields, {
+        maxCells: a.maxCells, maxBytes: a.maxBytes, includeEmpty: a.includeEmpty
+      });
+      const sheetMeta = collectSheetMetadata(matched.matches, a.sheetMetadata);
+
+      const payload = {
+        spreadsheetId: a.spreadsheetId,
+        spreadsheetTitle: response.data.properties?.title ?? null,
+        results: extracted.results,
+        ...(Object.keys(sheetMeta).length > 0 && { sheets: sheetMeta }),
+        truncated: extracted.truncated,
+        ...(extracted.truncated && { nextRanges: extracted.nextRanges }),
+        returned: extracted.returned
+      };
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(payload) }],
         isError: false
       };
     }

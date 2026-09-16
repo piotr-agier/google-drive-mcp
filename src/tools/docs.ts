@@ -8,7 +8,7 @@ import { downloadTextContent, writeTextContent } from './text-content.js';
 import { uploadImageToDrive } from '../utils/driveImageUpload.js';
 import { withRetry } from '../utils/retry.js';
 import { getResponseHeader } from '../utils/streams.js';
-import { paragraphMetaBits, rgbColorToHex } from './styleProjection.js';
+import { describeRangeStyles, paragraphMetaBits, rgbColorToHex, summarizeDocumentStyles, type StyleSummarySegment } from './styleProjection.js';
 import { collectDocPlainText, countOccurrences, diagnoseZeroMatch, findOccurrenceRanges, buildMultilineReplaceRequests } from './findDiagnostics.js';
 
 // ---------------------------------------------------------------------------
@@ -618,6 +618,45 @@ async function executeBatchUpdate(ctx: ToolContext, documentId: string, requests
     if ((error.status ?? error.code) === 403) throw new Error(`Permission denied for document (ID: ${documentId})`);
     throw new Error(`Google Docs API Error: ${error.message}`);
   }
+}
+
+// Resolve the body segments of an already-fetched document into distinct index
+// spaces. Every tab restarts indices at 1, so a caller that merges them gets
+// several paragraphs with identical ranges and no way to tell which one an
+// index-taking write should target. `label` is set only when the document has
+// more than one tab, so a single-tab document keeps reporting bare indices.
+//
+// Takes the document data rather than fetching: the indices a caller acts on
+// must come from the same read as the revisionId they lock against.
+function resolveBodySegments(
+  docData: any,
+  tabId?: string,
+): { segments: StyleSummarySegment[] } | { error: string } {
+  const tabs = docData?.tabs as any[] | undefined;
+
+  if (!tabs || tabs.length === 0) {
+    if (tabId) {
+      return { error: `Tab with ID "${tabId}" not found. Use listDocumentTabs to see available tabs.` };
+    }
+    return { segments: [{ content: docData?.body?.content }] };
+  }
+
+  if (tabId) {
+    const tab = findTabById(tabs, tabId);
+    if (!tab) {
+      return { error: `Tab with ID "${tabId}" not found. Use listDocumentTabs to see available tabs.` };
+    }
+    return { segments: [{ content: tab.documentTab?.body?.content }] };
+  }
+
+  const all = collectAllTabsWithLevel(tabs);
+  const isMultiTab = all.length > 1;
+  return {
+    segments: all.map(({ tab }) => ({
+      label: isMultiTab ? (tab.tabProperties?.title || 'Untitled') : undefined,
+      content: tab.documentTab?.body?.content,
+    })),
+  };
 }
 
 // Resolve a specific tab's body content array. A narrow `fields` projection
@@ -2246,6 +2285,29 @@ const GetDocumentInfoSchema = z.object({
   documentId: z.string().min(1, "Document ID is required")
 });
 
+const GetGoogleDocStyleSummarySchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  tabId: z.string().optional(),
+});
+
+const DescribeGoogleDocRangeSchema = z.object({
+  documentId: z.string().min(1, "Document ID is required"),
+  startIndex: z.number().int().min(1).optional(),
+  endIndex: z.number().int().min(1).optional(),
+  textToFind: z.string().min(1).optional(),
+  matchInstance: z.number().int().min(1).optional().default(1),
+  tabId: z.string().optional(),
+}).refine((d) => d.startIndex != null || d.textToFind != null, {
+  message: "Provide startIndex (optionally endIndex) or textToFind",
+}).refine((d) => !(d.textToFind != null && (d.startIndex != null || d.endIndex != null)), {
+  // insertText and deleteRange refuse mixed targeting rather than silently
+  // preferring one mode (#183); a silently ignored endIndex reads as a probe
+  // of a range the caller never got.
+  message: "Provide either startIndex/endIndex or textToFind, not both",
+}).refine((d) => !(d.startIndex != null && d.endIndex != null && d.endIndex <= d.startIndex), {
+  message: "endIndex must be greater than startIndex",
+});
+
 const FindAndReplaceInDocSchema = z.object({
   documentId: z.string().min(1, "Document ID is required"),
   findText: z.string().min(1, "findText is required"),
@@ -2801,6 +2863,34 @@ export const toolDefinitions: ToolDefinition[] = [
       type: "object",
       properties: {
         documentId: { type: "string", description: "The ID of the Google Document (from the URL)." }
+      },
+      required: ["documentId"]
+    }
+  },
+  {
+    name: "getGoogleDocStyleSummary",
+    description: "Compact style inventory of a whole document in a few hundred tokens: fonts with their size ladders, named-style counts, text colors, bordered and shaded paragraph locations, a table inventory with real index ranges, and the heading outline. The cheap first read before any formatting work, in place of pulling the full document JSON to answer style questions. Counts cover every tab; locations are prefixed with the tab title on a multi-tab document, since index spaces restart per tab. Reports the document's revisionId, so the same read that gives you the indices gives you the lock to pass as ifRevisionId on the write.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentId: { type: "string", description: "The document ID" },
+        tabId: { type: "string", description: "Optional. Summarize only this tab (from listDocumentTabs). If omitted, covers every tab." }
+      },
+      required: ["documentId"]
+    }
+  },
+  {
+    name: "describeGoogleDocRange",
+    description: "Style probe for one spot: the paragraph styles (named style, alignment, borders, shading, indents, spacing, bullets) and text runs (font, size, bold/italic/underline, colors, links) overlapping a range, with the real document index of every paragraph and run so the result feeds straight into applyParagraphStyle or applyTextStyle. Target it with startIndex (optionally endIndex) or with textToFind, not both. Describes one tab's body; headers, footers, and footnotes are separate index spaces and are not included. Reports the document's revisionId, so the same read that gives you the indices gives you the lock to pass as ifRevisionId on the write.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentId: { type: "string", description: "The document ID" },
+        startIndex: { type: "number", description: "Start index (1-based). Use this or textToFind." },
+        endIndex: { type: "number", description: "End index (exclusive). Defaults to startIndex + 1. Only with startIndex." },
+        textToFind: { type: "string", description: "Describe the styling at this exact text (case-sensitive). Use this or startIndex." },
+        matchInstance: { type: "number", description: "Which occurrence of textToFind (1-based, default 1)" },
+        tabId: { type: "string", description: "Optional. Tab to probe (from listDocumentTabs). If omitted, uses the first/default tab." }
       },
       required: ["documentId"]
     }
@@ -4796,6 +4886,70 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       result += `**View Link:** ${file.webViewLink}\n`;
 
       return { content: [{ type: "text", text: result }], isError: false };
+    }
+
+    case "getGoogleDocStyleSummary": {
+      const validation = GetGoogleDocStyleSummarySchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+      const doc = await docs.documents.get({ documentId: a.documentId, includeTabsContent: true });
+
+      const resolved = resolveBodySegments(doc.data, a.tabId);
+      if ('error' in resolved) return errorResponse(resolved.error);
+
+      const summary = summarizeDocumentStyles(resolved.segments);
+      return {
+        content: [{
+          type: 'text',
+          text: `Style summary for "${doc.data.title}"${a.tabId ? ` (tab ${a.tabId})` : ''}\n`
+            + `revisionId: ${revisionIdOf(doc.data)}\n`
+            + summary
+        }],
+        isError: false,
+      };
+    }
+
+    case "describeGoogleDocRange": {
+      const validation = DescribeGoogleDocRangeSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+
+      const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
+      const doc = await docs.documents.get({ documentId: a.documentId, includeTabsContent: true });
+
+      // Default to the first tab: every other index-taking Docs tool does, and
+      // describing all of them at once would report overlapping ranges.
+      const resolved = resolveBodySegments(doc.data, a.tabId);
+      if ('error' in resolved) return errorResponse(resolved.error);
+      const content = resolved.segments[0]?.content;
+
+      let startIndex: number;
+      let endIndex: number;
+      if (a.textToFind) {
+        // Resolve against the body we already hold, so the indices and the
+        // revisionId below come from one fetch rather than two.
+        const range = await findTextRange(ctx, a.documentId, a.textToFind, a.matchInstance, a.tabId, content ?? []);
+        if (range && 'error' in range) return errorResponse(range.error);
+        if (!range) return errorResponse(`textToFind "${a.textToFind}" not found in document.`);
+        startIndex = range.startIndex;
+        endIndex = range.endIndex;
+      } else {
+        startIndex = a.startIndex!;
+        endIndex = a.endIndex ?? startIndex + 1;
+      }
+
+      const described = describeRangeStyles(content, startIndex, endIndex);
+      return {
+        content: [{
+          type: 'text',
+          text: `revisionId: ${revisionIdOf(doc.data)}\n`
+            + `target range: [${startIndex}-${endIndex})${a.tabId ? ` in tab ${a.tabId}` : ''}\n`
+            + described
+        }],
+        isError: false,
+      };
     }
 
     case "addDocumentTab": {

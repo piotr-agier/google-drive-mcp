@@ -153,6 +153,26 @@ This server exposes 121 MCP tools across Google Drive, Docs, Sheets, Slides, and
 
 ### Google Docs
 
+<a id="ifrevisionid"></a>
+**Optimistic locking with `ifRevisionId`.** Every Google Docs write tool accepts an
+optional `ifRevisionId`. Pass the `revisionId` reported by `readGoogleDoc`,
+`getGoogleDocContent`, `getGoogleDocContentPaginated`, or `getDocumentInfo`, and the
+write is rejected by the API if the document changed since that read — so an agent
+edit cannot silently clobber a concurrent human edit. Omit it and the write applies
+unconditionally, as before.
+
+Three limits to know:
+
+- A `revisionId` is only guaranteed valid for **24 hours**.
+- It **cannot be shared across users**. In multi-account mode a `revisionId` read
+  under one `manage_accounts` alias will not lock a write issued under another, so
+  read and write under the same account.
+- Docs populates it **only for callers with edit access**. A read-only caller sees
+  `revisionId: unavailable (no edit access)` instead of a value.
+
+Note that the Drive `version` integer and the revision ids from `getRevisions` are
+different identifiers; neither is accepted as a lock.
+
 #### Create and Update
 - **createGoogleDoc** - Create a Google Doc
   - `name`: Document name
@@ -164,12 +184,12 @@ This server exposes 121 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `html`: HTML content
   - `parentFolderId`: Parent folder ID (optional)
 
-- **updateGoogleDoc** - Replace all content in a Google Doc. Accepts `ifRevisionId` (with tabId the replacement is one atomic batch; without tabId it is two calls and the lock guards only the delete)
+- **updateGoogleDoc** - Replace all content in a Google Doc. The replacement is one atomic batchUpdate, so a failure leaves the document unchanged rather than wiped. Accepts [`ifRevisionId`](#ifrevisionid)
   - `documentId`: Document ID
   - `content`: New content
 
 #### Reading and Discovery
-- **readGoogleDoc** - Read content of a Google Doc with format options
+- **readGoogleDoc** - Read content of a Google Doc with format options. `text`/`markdown` output leads with a `revisionId:` line (counted against `maxLength`); `json` output is the raw document, which already carries the field
   - `documentId`: Document ID
   - `format`: Output format — `text`, `json`, or `markdown` (optional, default: text)
   - `maxLength`: Maximum characters to return (optional)
@@ -182,14 +202,14 @@ This server exposes 121 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `limit`: Maximum characters per page (optional, default: 50000, max: 80000)
   - `tabId`: Read a specific tab by ID (optional)
 
-- **getGoogleDocContent** - Get document content with text indices for formatting
+- **getGoogleDocContent** - Get document content with text indices for formatting. Trails with `Total length` and a `revisionId:` line, so the indices and the lock come from the same fetch
   - `documentId`: Document ID
   - `includeFormatting`: Include font, style, color, and baseline (superscript/subscript) info for each text span, plus one `¶` meta line per paragraph with non-default paragraph styles (named style, alignment, visible borders, shading) over its real index span (optional, default: false)
   - Inline images render as a single-line `[image: objectId=… contentUri=… sourceUri=… size=WxHpt]` token (was a bare `[image]`). Pass the `objectId` to `getGoogleDocImage`.
   - Tables emit ONE real `[start-end]` span for the whole table, then the pipe rendering, then a `cells: r0c0 [a-b], r0c1 [c-d]` map of each cell's real index range. Row lines carry no ranges of their own — deriving them from the rendered markdown produced numbers that ran past the table's end into the content after it. Use the cell ranges for `applyTextStyle` / `formatGoogleDocText` inside a cell, and the table's own `startIndex` with `editTableCell` for whole-cell edits
   - On a multi-tab document the tab header prints its id (`=== Tab: Name (tabId=…) ===`) and the table hint names that id, because index spaces restart per tab and `editTableCell` searches only the first tab when given no `tabId`
 
-- **getGoogleDocContentPaginated** - Paginated `getGoogleDocContent`; page ends snap to a line boundary where possible (a single line longer than `limit` is hard-cut to make forward progress). A table is kept whole: its `<table …>` header, pipe rows, and `cells:` map move to the next page together rather than being split. A table longer than `limit` still takes a hard cut, but never between the header and its first row
+- **getGoogleDocContentPaginated** - Paginated `getGoogleDocContent`; page ends snap to a line boundary where possible (a single line longer than `limit` is hard-cut to make forward progress). A table is kept whole: its `<table …>` header, pipe rows, and `cells:` map move to the next page together rather than being split. A table longer than `limit` still takes a hard cut, but never between the header and its first row. The JSON result carries a `revisionId` field
   - `documentId`: Document ID
   - `includeFormatting`: Include font, style, color, and baseline (superscript/subscript) info for each text span, plus one `¶` meta line per paragraph with non-default paragraph styles (named style, alignment, visible borders, shading) over its real index span (optional, default: false)
   - `offset`: Character offset into the formatted output (optional, default: 0; pass the previous response's `nextOffset`)
@@ -214,7 +234,7 @@ This server exposes 121 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `tabId`: Tab ID
   - `title`: New tab title
 
-- **insertSmartChip** - Insert a person smart chip (mention) at a document index. Only person chips are supported by the Docs API; date and file chips are read-only. Accepts `ifRevisionId` (optimistic lock)
+- **insertSmartChip** - Insert a person smart chip (mention) at a document index. Only person chips are supported by the Docs API; date and file chips are read-only. Accepts [`ifRevisionId`](#ifrevisionid)
   - `documentId`: Document ID
   - `index`: Insertion index (1-based)
   - `chipType`: `person` (only supported type)
@@ -223,7 +243,7 @@ This server exposes 121 MCP tools across Google Drive, Docs, Sheets, Slides, and
 - **readSmartChips** - Read smart chip-like elements (person mentions, rich links, date chips) from the default tab of a document. Only the default tab is scanned; other tabs are not included.
   - `documentId`: Document ID
 
-- **createFootnote** - Create a footnote in a Google Doc. Footnotes cannot be inserted inside equations, headers, footers, or other footnotes. Accepts `ifRevisionId` (optimistic lock on the creating call)
+- **createFootnote** - Create a footnote in a Google Doc. Footnotes cannot be inserted inside equations, headers, footers, or other footnotes. Accepts [`ifRevisionId`](#ifrevisionid) on the creating call
   - `documentId`: Document ID
   - `index`: 1-based character index where the footnote reference should be inserted (optional — provide this or `endOfSegment`)
   - `endOfSegment`: If true, insert footnote at the end of the document body (optional — provide this or `index`)
@@ -234,21 +254,21 @@ This server exposes 121 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `maxResults`: Maximum documents to return, 1-100 (optional, default: 20)
   - `orderBy`: Sort order — `modifiedTime desc` (default), `modifiedTime`, `createdTime desc`, `createdTime`, `recency desc`, `recency`, `name`, or `name_natural`. Keys without `desc` sort ascending, so plain `modifiedTime` is oldest-first (optional)
 
-- **getDocumentInfo** - Get detailed metadata about a specific Google Document
+- **getDocumentInfo** - Get detailed metadata about a specific Google Document, including the Docs `revisionId` (distinct from the Drive `version` counter also shown)
   - `documentId`: Document ID
 
 #### Surgical Editing
-- **insertText** - Insert text at an index or relative to found text (doesn't replace entire doc)
+- **insertText** - Insert text at an index or relative to found text (doesn't replace entire doc). Accepts [`ifRevisionId`](#ifrevisionid) on Google Docs; it is refused on text files rather than ignored
   - `documentId`: Document ID
   - `text`: Text to insert
   - Target (use one): `index` (1-based position) OR `textToFind`+`matchInstance` with `position` (`before`/`after`, default `after`; Google Docs only; exact, case-sensitive match). A match ending at the document's final paragraph break inserts `after` just before that break
 
-- **deleteRange** - Delete an index range or found text
+- **deleteRange** - Delete an index range or found text. Accepts [`ifRevisionId`](#ifrevisionid) on Google Docs; it is refused on text files rather than ignored
   - `documentId`: Document ID
   - Target (use one): `startIndex` (1-based, inclusive) + `endIndex` (exclusive) OR `textToFind`+`matchInstance` (Google Docs only; exact, case-sensitive match). A match ending at the document's final paragraph break is trimmed to keep that break
 
 #### Text and Paragraph Styling
-- **applyTextStyle** - Apply text formatting (bold, italic, color, etc.) to a range or found text. Accepts `ifRevisionId` (optimistic lock)
+- **applyTextStyle** - Apply text formatting (bold, italic, color, etc.) to a range or found text. Accepts [`ifRevisionId`](#ifrevisionid)
   - `documentId`: Document ID
   - Target (use one): `startIndex`+`endIndex` OR `textToFind`+`matchInstance`
   - `bold`, `italic`, `underline`, `strikethrough`: Text styling (optional)
@@ -259,7 +279,7 @@ This server exposes 121 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `linkUrl`: URL for hyperlink (optional)
   - `baselineOffset`: `SUPERSCRIPT`, `SUBSCRIPT`, or `NONE` to reset to the normal baseline (optional)
 
-- **applyParagraphStyle** - Apply paragraph formatting, including borders and shading
+- **applyParagraphStyle** - Apply paragraph formatting, including borders and shading. Accepts [`ifRevisionId`](#ifrevisionid)
   - `documentId`: Document ID
   - Target (use one): `startIndex`+`endIndex` OR `textToFind`+`matchInstance` OR `indexWithinParagraph`
   - `namedStyleType`: NORMAL_TEXT, TITLE, SUBTITLE, HEADING_1 through HEADING_6 (optional)
@@ -278,7 +298,7 @@ This server exposes 121 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - Same parameters as `applyParagraphStyle`
 
 #### Bullet Points and Lists
-- **createParagraphBullets** - Add or remove bullet points / numbered lists on paragraphs. Accepts `ifRevisionId` (optimistic lock)
+- **createParagraphBullets** - Add or remove bullet points / numbered lists on paragraphs. Accepts [`ifRevisionId`](#ifrevisionid)
   - `documentId`: Document ID
   - Target (use one): `startIndex`+`endIndex` OR `textToFind`+`matchInstance`
   - `bulletPreset`: Bullet style preset (optional, default: `BULLET_DISC_CIRCLE_SQUARE`). Available presets:
@@ -286,7 +306,7 @@ This server exposes 121 MCP tools across Google Drive, Docs, Sheets, Slides, and
     - **Numbered styles**: `NUMBERED_DECIMAL_ALPHA_ROMAN`, `NUMBERED_DECIMAL_ALPHA_ROMAN_PARENS`, `NUMBERED_DECIMAL_NESTED`, `NUMBERED_UPPERALPHA_ALPHA_ROMAN`, `NUMBERED_UPPERROMAN_UPPERALPHA_DECIMAL`, `NUMBERED_ZERODECIMAL_ALPHA_ROMAN`
     - **Remove bullets**: `NONE` — removes existing bullets/numbering from the targeted paragraphs
 
-- **findAndReplaceInDoc** - Find and replace text across a Google Doc. On zero matches, the response names the likeliest lookalike cause (non-breaking spaces, curly quotes, `&amp;` entities, case). A `replaceText` containing `\n` is compiled to exact delete+insert requests in one atomic batch (real paragraph breaks) instead of the API's `replaceAllText`, which does not render an embedded newline as a paragraph break — the surrounding paragraphs flatten into one and characters are dropped. `findText` must stay single-line, since a match cannot span a paragraph break
+- **findAndReplaceInDoc** - Find and replace text across a Google Doc. On zero matches, the response names the likeliest lookalike cause (non-breaking spaces, curly quotes, `&amp;` entities, case). A `replaceText` containing `\n` is compiled to exact delete+insert requests in one atomic batch (real paragraph breaks) instead of the API's `replaceAllText`, which does not render an embedded newline as a paragraph break — the surrounding paragraphs flatten into one and characters are dropped. `findText` must stay single-line, since a match cannot span a paragraph break. Accepts [`ifRevisionId`](#ifrevisionid)
   - `documentId`: Document ID
   - `findText`: Text to find
   - `replaceText`: Replacement text
@@ -295,13 +315,13 @@ This server exposes 121 MCP tools across Google Drive, Docs, Sheets, Slides, and
   - `expectedCount`: Safety guard — the exact number of occurrences you expect. Counted before writing; a mismatch aborts without modifying the document (optional). Costs one extra document read per call, and a zero-match result costs one more to diagnose the likeliest cause
 
 #### Tables and Images
-- **insertTable** - Insert a new table at a given index. Accepts `ifRevisionId` (optimistic lock)
+- **insertTable** - Insert a new table at a given index. Accepts [`ifRevisionId`](#ifrevisionid)
   - `documentId`: Document ID
   - `rows`: Number of rows
   - `columns`: Number of columns
   - `index`: Position to insert at (1-based)
 
-- **editTableCell** - Edit content and/or style of a specific table cell. Accepts `ifRevisionId` (optimistic lock)
+- **editTableCell** - Edit content and/or style of a specific table cell. Accepts [`ifRevisionId`](#ifrevisionid)
   - `documentId`: Document ID
   - `tableStartIndex`: Starting index of the table element
   - `rowIndex`: Row index (0-based)

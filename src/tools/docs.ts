@@ -4107,7 +4107,13 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         const requests = buildMultilineReplaceRequests(ranges, a.replaceText);
         await docs.documents.batchUpdate({
           documentId: a.documentId,
-          requestBody: { requests: requests as any[] },
+          // Lock the batch to the revision the ranges were located against:
+          // the compiled indices are only valid for that revision. An explicit
+          // ifRevisionId wins, so a caller's older read still guards the write.
+          requestBody: {
+            requests: requests as any[],
+            ...writeControlFor(a.ifRevisionId ?? (doc.data.revisionId || undefined)),
+          },
         });
         return {
           content: [{

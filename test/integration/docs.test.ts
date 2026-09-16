@@ -1704,6 +1704,31 @@ describe('Docs tools', () => {
       assert.equal(requests[1].insertText.text, 'line one\nline two');
     });
 
+    it('pins the multi-line batch to the revision it located against', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-pin', title: 'My Doc', revisionId: 'rev-9',
+          body: {
+            content: [{
+              paragraph: { elements: [{ startIndex: 1, textRun: { content: 'Hello World\n' } }] },
+            }],
+          },
+        },
+      }));
+
+      await callTool(ctx.client, 'findAndReplaceInDoc', {
+        documentId: 'doc-pin', findText: 'World', replaceText: 'a\nb',
+      });
+      let calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
+      assert.deepEqual(calls[calls.length - 1]?.args?.[0]?.requestBody.writeControl, { requiredRevisionId: 'rev-9' });
+
+      await callTool(ctx.client, 'findAndReplaceInDoc', {
+        documentId: 'doc-pin', findText: 'World', replaceText: 'a\nb', ifRevisionId: 'rev-caller',
+      });
+      calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
+      assert.deepEqual(calls[calls.length - 1]?.args?.[0]?.requestBody.writeControl, { requiredRevisionId: 'rev-caller' });
+    });
+
     it('refuses a multi-line findText rather than silently mismatching', async () => {
       const res = await callTool(ctx.client, 'findAndReplaceInDoc', {
         documentId: 'doc-1', findText: 'a\nb', replaceText: 'x\ny',

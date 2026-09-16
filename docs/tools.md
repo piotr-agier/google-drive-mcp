@@ -286,7 +286,7 @@ This server exposes 121 MCP tools across Google Drive, Docs, Sheets, Slides, and
     - **Numbered styles**: `NUMBERED_DECIMAL_ALPHA_ROMAN`, `NUMBERED_DECIMAL_ALPHA_ROMAN_PARENS`, `NUMBERED_DECIMAL_NESTED`, `NUMBERED_UPPERALPHA_ALPHA_ROMAN`, `NUMBERED_UPPERROMAN_UPPERALPHA_DECIMAL`, `NUMBERED_ZERODECIMAL_ALPHA_ROMAN`
     - **Remove bullets**: `NONE` — removes existing bullets/numbering from the targeted paragraphs
 
-- **findAndReplaceInDoc** - Find and replace text across a Google Doc. On zero matches, the response names the likeliest lookalike cause (non-breaking spaces, curly quotes, `&amp;` entities, case). A `replaceText` containing `\n` is compiled to exact delete+insert requests in one atomic batch (real paragraph breaks) instead of the API's `replaceAllText`, whose newline handling mangles them — field-verified: the surrounding paragraphs flatten into one and characters are dropped. `findText` must stay single-line, since a match cannot span a paragraph break
+- **findAndReplaceInDoc** - Find and replace text across a Google Doc. On zero matches, the response names the likeliest lookalike cause (non-breaking spaces, curly quotes, `&amp;` entities, case). A `replaceText` containing `\n` is compiled to exact delete+insert requests in one atomic batch (real paragraph breaks) instead of the API's `replaceAllText`, which does not render an embedded newline as a paragraph break — the surrounding paragraphs flatten into one and characters are dropped. `findText` must stay single-line, since a match cannot span a paragraph break
   - `documentId`: Document ID
   - `findText`: Text to find
   - `replaceText`: Replacement text

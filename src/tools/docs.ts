@@ -3667,9 +3667,9 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         };
       }
 
-      // Multi-line replacements: the API's replaceAllText mangles embedded
-      // newlines (field-verified: flattened paragraphs, dropped characters).
-      // Compile to exact deleteContentRange + insertText pairs instead —
+      // Multi-line replacements: replaceAllText does not render an embedded
+      // newline as a paragraph break, so the surrounding paragraphs flatten and
+      // characters are lost. Compile to deleteContentRange + insertText instead —
       // insertText renders \n as real paragraph breaks, descending order keeps
       // every index valid, and the whole batch applies atomically.
       if (a.replaceText.includes('\n')) {

@@ -1,10 +1,10 @@
 // Exact occurrence counting and zero-match diagnosis for find/replace tools.
 //
-// Field motivation: `findAndReplaceInDoc` matches literally, so lookalike text
-// produces a silent "Replaced 0 occurrence(s)" that reads like the text isn't
-// there — non-breaking spaces (how Docs fakes letterspacing), curly vs straight
-// quotes, and literal `&amp;` entities have each burned real sessions. On zero
-// matches we say *why*, with the codepoints named.
+// `findAndReplaceInDoc` matches literally, so lookalike text produces a silent
+// "Replaced 0 occurrence(s)" that reads like the text isn't in the document at
+// all. The common causes are non-breaking spaces (how Docs letterspaces text),
+// curly versus straight quotes, and literal `&amp;` entities. On zero matches
+// the diagnosis names the likeliest cause, with the codepoints spelled out.
 
 import type { docs_v1 } from 'googleapis';
 

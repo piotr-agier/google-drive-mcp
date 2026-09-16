@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it, before, after } from 'node:test';
 import { setupTestServer, type TestContext } from '../helpers/setup-server.js';
+import { TOOL_META } from '../../src/tools/toolMeta.js';
 
 const EXPECTED_TOOL_COUNT = 128;
 
@@ -37,7 +38,7 @@ const EXPECTED_TOOLS = [
 
 describe('Tool Registry', () => {
   let ctx: TestContext;
-  let tools: Array<{ name: string; inputSchema?: any; description?: string }>;
+  let tools: Array<{ name: string; inputSchema?: any; description?: string; annotations?: any }>;
 
   before(async () => {
     ctx = await setupTestServer();
@@ -65,6 +66,45 @@ describe('Tool Registry', () => {
       assert.ok(tool.inputSchema, `Tool "${tool.name}" is missing inputSchema`);
       assert.equal(tool.inputSchema.type, 'object', `Tool "${tool.name}" inputSchema.type must be "object"`);
     }
+  });
+
+  // The MCP spec defaults `destructiveHint` to true, so a server that annotates
+  // nothing has every tool treated as destructive — `search` and `readGoogleDoc`
+  // indistinguishable from `deleteItem`. `readOnlyHint` is projected from the
+  // read/write/admin classification in TOOL_META, so the two cannot drift.
+  it('marks exactly the read tools readOnlyHint, and no others', () => {
+    const expectedReadOnly = Object.entries(TOOL_META)
+      .filter(([, meta]) => meta.opKind === 'read')
+      .map(([name]) => name)
+      .sort();
+
+    const annotatedReadOnly = tools
+      .filter((t) => t.annotations?.readOnlyHint === true)
+      .map((t) => t.name)
+      .sort();
+
+    assert.notEqual(expectedReadOnly.length, 0, 'the server must expose read tools');
+    assert.deepEqual(annotatedReadOnly, expectedReadOnly);
+  });
+
+  it('never claims a write or admin tool is read-only', () => {
+    for (const tool of tools) {
+      const opKind = TOOL_META[tool.name]?.opKind;
+      if (opKind === 'read') continue;
+      assert.notEqual(
+        tool.annotations?.readOnlyHint,
+        true,
+        `Tool "${tool.name}" is ${opKind} but claims readOnlyHint`,
+      );
+    }
+  });
+
+  // destructiveHint defaults to true in the spec. Emitting it as false on a
+  // tool that can in fact destroy data would suppress a confirmation prompt
+  // that should have fired, so it stays unset until a deliberate per-tool pass.
+  it('does not yet assert destructiveHint on any tool', () => {
+    const claimed = tools.filter((t) => t.annotations?.destructiveHint !== undefined).map((t) => t.name);
+    assert.deepEqual(claimed, []);
   });
 
   it('every expected tool is registered', () => {

@@ -492,6 +492,26 @@ function withAccountParam(def: { name: string; description: string; inputSchema:
   };
 }
 
+// MCP tool annotations are hints a client can use to decide whether a call needs
+// a confirmation prompt. The spec defaults `destructiveHint` to true, so a
+// server that annotates nothing has every tool treated as destructive —
+// `search` and `readGoogleDoc` indistinguishable from `deleteItem`. Projecting
+// the read/write/admin classification the account resolver already relies on
+// costs nothing and corrects exactly that.
+//
+// Only `readOnlyHint` is emitted. Marking additive writes (`insertText`,
+// `addComment`) non-destructive takes a per-tool judgement across 92 tools, and
+// a wrong call there suppresses a confirmation prompt that should have fired.
+// The spec default of `true` is the safe posture until that pass happens.
+//
+// Per the spec, clients must treat annotations from an untrusted server as
+// untrusted, so these improve UX in cooperating clients rather than enforcing
+// anything.
+function withAnnotations<T extends { name: string }>(def: T): T {
+  if (TOOL_META[def.name]?.opKind !== 'read') return def;
+  return { ...def, annotations: { readOnlyHint: true } };
+}
+
 function normalizeAccountArg(raw: unknown): string | undefined {
   // `null`/`undefined`/empty → "not provided" (resolve against the default).
   // Check null first: `typeof null === 'object'` would otherwise fall into the
@@ -784,12 +804,12 @@ function createMcpServer(config: RuntimeConfig = runtimeConfig): Server {
       // single-user auth tools are hidden too (they report the server's
       // tokens.json state, which is meaningless for an OAuth-signed-in member).
       return {
-        tools: definitions.filter(
-          (d) => d.name !== 'manage_accounts' && !TEAM_HIDDEN_TOOLS.has(d.name),
-        ),
+        tools: definitions
+          .filter((d) => d.name !== 'manage_accounts' && !TEAM_HIDDEN_TOOLS.has(d.name))
+          .map(withAnnotations),
       };
     }
-    return { tools: definitions.map(withAccountParam) };
+    return { tools: definitions.map(withAccountParam).map(withAnnotations) };
   });
 
   s.setRequestHandler(CallToolRequestSchema, async (request, extra) => {

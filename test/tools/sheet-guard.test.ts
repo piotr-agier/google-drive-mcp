@@ -285,3 +285,90 @@ test('padToDeclaredRange falls back to the observed extent for a bare whole-shee
   assert.equal(block.columns, 1);
   assert.deepEqual(block.cells, [['x']]);
 });
+
+// ---------------------------------------------------------------------------
+// Finding A: convertA1ToGridRange FABRICATES a missing end row (defaulting it
+// to startRow+1, as though a lone anchor were a 1-cell range), so "A1:C" and
+// "A5:A" were previously treated as bounded 1-row rectangles instead of
+// open-ended ranges. That silently discarded every row past the first out of
+// a guard fingerprint and a rollback pre-image alike. declaredRectangle now
+// has its own strict parser and must report NO rectangle for these forms,
+// so padToDeclaredRange falls back to the observed extent and keeps every
+// observed row.
+// ---------------------------------------------------------------------------
+
+test('padToDeclaredRange keeps every observed row for "A1:C" (open row end) instead of fabricating a 1-row rectangle', () => {
+  const observed = [['a1', 'b1', 'c1'], ['a2', 'b2', 'c2'], ['a3', 'b3', 'c3']];
+  const block = padToDeclaredRange('Probe!A1:C', 'Probe', observed, 0, 0);
+  assert.equal(block.rows, 3, 'all three observed rows must survive, not just the first');
+  assert.equal(block.columns, 3);
+  assert.deepEqual(block.cells, observed);
+});
+
+test('padToDeclaredRange keeps every observed row for "A5:A" (open row end on a single column) instead of fabricating a 1-row rectangle', () => {
+  const observed = [['x'], ['y'], ['z']];
+  const block = padToDeclaredRange('Probe!A5:A', 'Probe', observed, 4, 0);
+  assert.equal(block.startRow, 4);
+  assert.equal(block.rows, 3);
+  assert.equal(block.columns, 1);
+  assert.deepEqual(block.cells, observed);
+});
+
+test('padToDeclaredRange still falls back to the observed extent for "A:C" and "1:3" (genuinely open ranges)', () => {
+  const byColumn = padToDeclaredRange('Probe!A:C', 'Probe', [['a', 'b']], 0, 0);
+  assert.equal(byColumn.rows, 1);
+  assert.equal(byColumn.columns, 2);
+
+  const byRow = padToDeclaredRange('Probe!1:3', 'Probe', [['a', 'b', 'c']], 0, 0);
+  assert.equal(byRow.rows, 1);
+  assert.equal(byRow.columns, 3);
+});
+
+// ---------------------------------------------------------------------------
+// Finding B: convertA1ToGridRange's regex is uppercase-only and does not
+// strip '$', so a lowercase or absolute-reference spelling of a perfectly
+// bounded range threw and fell back to the (trimming-dependent) observed
+// extent - exactly the geometry padding was added to eliminate.
+// declaredRectangle now normalizes ($ stripped, upper-cased) before parsing,
+// matching collectSheetMetadata's existing precedent.
+// ---------------------------------------------------------------------------
+
+test('padToDeclaredRange recognizes a lowercase declared range as the same bounded rectangle as its uppercase spelling', () => {
+  const observed = [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9']];
+  const lower = padToDeclaredRange('Probe!a1:c3', 'Probe', observed, 0, 0);
+  const upper = padToDeclaredRange('Probe!A1:C3', 'Probe', observed, 0, 0);
+  assert.deepEqual(lower, upper);
+  assert.equal(lower.rows, 3);
+  assert.equal(lower.columns, 3);
+});
+
+test('padToDeclaredRange recognizes a $-absolute declared range as the same bounded rectangle as its plain spelling', () => {
+  const observed = [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9']];
+  const dollared = padToDeclaredRange('Probe!A$1:C$3', 'Probe', observed, 0, 0);
+  const plain = padToDeclaredRange('Probe!A1:C3', 'Probe', observed, 0, 0);
+  assert.deepEqual(dollared, plain);
+  assert.equal(dollared.rows, 3);
+  assert.equal(dollared.columns, 3);
+});
+
+// ---------------------------------------------------------------------------
+// Finding C (correctness half): the declared rectangle must be capped so an
+// absurd declared area is refused with a clear error instead of being
+// materialized - `Probe!A1:Z100000` is twelve characters of input for 2.6
+// million cells, almost all of which Google trims away in the read but which
+// padToDeclaredRange would otherwise allocate in full.
+// ---------------------------------------------------------------------------
+
+test('padToDeclaredRange refuses an absurdly large declared rectangle instead of materializing it', () => {
+  assert.throws(
+    () => padToDeclaredRange('Probe!A1:Z100000', 'Probe', [['x']], 0, 0),
+    /exceeds the 100000-cell/,
+  );
+});
+
+test('padToDeclaredRange accepts a large-but-ordinary declared rectangle right at the cap', () => {
+  // 1000 rows x 100 columns = 100,000 cells - at the cap, must not throw.
+  const block = padToDeclaredRange('Probe!A1:CV1000', 'Probe', [['x']], 0, 0);
+  assert.equal(block.rows, 1000);
+  assert.equal(block.columns, 100);
+});

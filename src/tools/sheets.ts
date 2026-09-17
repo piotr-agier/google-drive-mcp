@@ -1132,6 +1132,15 @@ export async function handleTool(
       }
       const a = validation.data;
 
+      // padToDeclaredRange (via blockFromMatch, below) throws when a
+      // declared guard/write rectangle is absurdly large - see
+      // MAX_DECLARED_RECTANGLE_CELLS in sheetGuard.ts - rather than
+      // materializing it. That is a plain, user-facing "narrow your range"
+      // condition, exactly like the matchRangesToGridData `{error}` case
+      // just below, so it is handled locally the same way rather than left
+      // to bubble up as a bare thrown exception.
+      try {
+
       const guardRanges = guardRangesFor(a.updates, a.guardRanges);
       const writeRanges = a.updates.map(u => u.range);
       // When the guard set is exactly the write set (the common, default
@@ -1151,7 +1160,17 @@ export async function handleTool(
       // then write ranges, in that order, and slice back apart.
       const sameRanges = guardRanges.length === writeRanges.length
         && guardRanges.every((r, i) => r === writeRanges[i]);
-      const readRanges = sameRanges ? writeRanges : [...guardRanges, ...writeRanges];
+      // dryRun never reaches the write (it returns right after the
+      // fingerprint below), so when the guard set is genuinely distinct from
+      // the write set there is nothing to read the write ranges FOR - yet
+      // concatenating them here would still pull every write target out of
+      // Google only to throw the result away, defeating the documented
+      // "guard a source block while writing a summary elsewhere" pattern
+      // (the write targets may not even exist yet). Request only the guard
+      // ranges in that case.
+      const readRanges = sameRanges ? writeRanges
+        : a.dryRun ? guardRanges
+        : [...guardRanges, ...writeRanges];
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
       const response = await sheets.spreadsheets.get({
@@ -1164,17 +1183,30 @@ export async function handleTool(
       if ('error' in matched) return errorResponse(matched.error);
 
       const guardMatches = sameRanges ? matched.matches : matched.matches.slice(0, guardRanges.length);
-      const writeMatches = sameRanges ? matched.matches : matched.matches.slice(guardRanges.length);
+      // When the guard set equals the write set (the default), guardMatches
+      // and writeMatches are literally the same array: computing
+      // blockFromMatch over it once here and again below for the pre-image
+      // would project and pad the identical matches twice. Compute the guard
+      // pass's blocks once and let the write pass reuse them instead of
+      // recomputing; when the sets genuinely differ writeMatches is a
+      // disjoint slice with its own matches, so its own pass is unavoidable
+      // and unaffected.
+      const guardResults = guardMatches.map(m => blockFromMatch(m));
+      const fingerprint = fingerprintOf(guardResults.map(r => r.block));
 
-      const fingerprint = fingerprintOf(guardMatches.map(m => blockFromMatch(m).block));
-      const guardContents = extractRanges(guardMatches, ['userEnteredValue'],
+      // extractRanges pays a full JSON.stringify + Buffer.byteLength per cell
+      // to build guardContents, which only the dryRun and refusal payloads
+      // below ever read - the success path never touches it. Compute it lazily,
+      // once, only on whichever of those two branches is actually taken.
+      let guardContentsCache: ReturnType<typeof extractRanges> | undefined;
+      const guardContents = () => guardContentsCache ??= extractRanges(guardMatches, ['userEnteredValue'],
         { maxCells: a.maxCells, maxBytes: a.maxBytes, includeEmpty: false });
 
       if (a.dryRun) {
         const cells = a.updates.reduce((n, u) => n + u.values.reduce((m, r) => m + r.length, 0), 0);
         return {
           content: [{ type: "text", text: JSON.stringify({
-            dryRun: true, fingerprint, guardContents,
+            dryRun: true, fingerprint, guardContents: guardContents(),
             wouldWrite: { ranges: writeRanges.length, cells }
           }) }],
           isError: false
@@ -1187,29 +1219,50 @@ export async function handleTool(
             refused: "fingerprint-mismatch",
             expectedFingerprint: a.expectedFingerprint,
             actualFingerprint: fingerprint,
-            guardContents
+            guardContents: guardContents()
           }) }],
           isError: true
         };
       }
 
+      const writeResults = sameRanges ? guardResults : matched.matches.slice(guardRanges.length).map(m => blockFromMatch(m));
+      const writeMatches = sameRanges ? matched.matches : matched.matches.slice(guardRanges.length);
+
       const preImage: PreImageRange[] = [];
       const hazards: Hazard[] = [];
-      writeMatches.forEach((m, i) => {
-        const { block, raw } = blockFromMatch(m);
+      writeResults.forEach(({ block, raw }, i) => {
         preImage.push(buildPreImage(writeRanges[i], block.cells));
         hazards.push(...findHazards(block.startRow, block.startColumn, raw));
       });
 
-      const written = await sheets.spreadsheets.values.batchUpdate({
-        spreadsheetId: a.spreadsheetId,
-        requestBody: {
-          valueInputOption: a.valueInputOption,
-          data: a.updates,
-          includeValuesInResponse: true,
-          responseValueRenderOption: 'FORMULA'
-        }
-      });
+      let written;
+      try {
+        written = await sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: a.spreadsheetId,
+          requestBody: {
+            valueInputOption: a.valueInputOption,
+            data: a.updates,
+            includeValuesInResponse: true,
+            responseValueRenderOption: 'FORMULA'
+          }
+        });
+      } catch (err) {
+        // The request may have reached Google and been applied before the
+        // connection failed - a throw here means the transport broke, not
+        // that the write didn't happen. preImage and hazards were computed
+        // above, before the call, so they survive regardless: this is the
+        // one thing the tool exists to hand back, and a bare transport error
+        // would discard it exactly when it matters most.
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            error: "write-outcome-unknown",
+            message: `The request to write to the spreadsheet failed: ${(err as Error).message}. Whether the write was actually applied by Google before the failure is UNKNOWN - the connection broke before a response could be read, so postFingerprint (and an automated rollback keyed on it) is unavailable. Use preImage below to restore the pre-write state if the write did land, or take a fresh dryRun to check the sheet's current state before retrying.`,
+            preImage,
+            hazards
+          }) }],
+          isError: true
+        };
+      }
 
       // postFingerprint is computed from the write response - there is no
       // second read. The post-write block has to rest on the SAME geometry as
@@ -1262,6 +1315,9 @@ export async function handleTool(
         }) }],
         isError: false
       };
+      } catch (err) {
+        return errorResponse((err as Error).message);
+      }
     }
 
     case "getGoogleSheetContent": {

@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto';
 import { cellA1, splitRange } from './sheetCells.js';
 import type { RangeMatch } from './sheetCells.js';
-import { convertA1ToGridRange, type GridRange } from '../utils.js';
+import { colToIndex } from '../utils.js';
 
 /** The common comparison space. spreadsheets.get returns CellData, while a
  *  write response returns a FORMULA rendering; the two are comparable only
@@ -56,11 +56,23 @@ export function projectResponseValue(v: unknown): CanonicalCell {
   return null;
 }
 
-/** One fingerprint over all the blocks: the canonical forms are joined in
- *  request order and hashed together. A block's origin and dimensions go into
- *  the hash, so inserting a row inside the guarded area changes it. */
+/** One fingerprint over all the blocks: the canonical forms are streamed into
+ *  the hash in request order, separated by '\n', instead of being accumulated
+ *  into an array of lines and joined before hashing - on a declared range of
+ *  a couple million cells (twelve A1 characters, but each cell contributes
+ *  its own array element plus a copy at join time) that doubled peak memory
+ *  for no reason; createHash is already a streaming API. The byte-level form
+ *  is unchanged (the same '\n' between lines, none trailing), so old
+ *  fingerprints stay valid. A block's origin and dimensions go into the
+ *  hash, so inserting a row inside the guarded area changes it. */
 export function fingerprintOf(blocks: CanonicalBlock[]): string {
-  const lines: string[] = [];
+  const hash = createHash('sha256');
+  let first = true;
+  const feed = (line: string) => {
+    if (!first) hash.update('\n', 'utf8');
+    hash.update(line, 'utf8');
+    first = false;
+  };
   for (const b of blocks) {
     // sheetTitle is caller/API-controlled text (Google accepts a sheet title
     // containing a literal newline) and must go through JSON.stringify exactly
@@ -68,15 +80,15 @@ export function fingerprintOf(blocks: CanonicalBlock[]): string {
     // "swallow" the newline-separated lines of another block and forge an
     // identical joined string, i.e. a fingerprint collision between two
     // genuinely different sheet states. See the regression tests below.
-    lines.push(`${JSON.stringify(b.sheetTitle)}!${b.startRow},${b.startColumn}+${b.rows}x${b.columns}`);
+    feed(`${JSON.stringify(b.sheetTitle)}!${b.startRow},${b.startColumn}+${b.rows}x${b.columns}`);
     for (let r = 0; r < b.rows; r++) {
       for (let c = 0; c < b.columns; c++) {
         const cell = b.cells[r]?.[c] ?? null;
-        lines.push(`${r},${c}=${cell === null ? EMPTY : JSON.stringify(cell)}`);
+        feed(`${r},${c}=${cell === null ? EMPTY : JSON.stringify(cell)}`);
       }
     }
   }
-  return 'v1:' + createHash('sha256').update(lines.join('\n'), 'utf8').digest('hex');
+  return 'v1:' + hash.digest('hex');
 }
 
 export interface PreImageRange { range: string; values: string[][] }
@@ -171,30 +183,78 @@ export function guardRangesFor(updates: { range: string }[], declared?: string[]
 // cells as null — fixes both: the canonical form then depends on what was
 // declared, not on what Google felt like trimming.
 
+// A DECLARED rectangle requires BOTH anchors to carry BOTH a column and a
+// row - "A1", or "A1:C3". Anything else (a dangling column-only or row-only
+// side, on either anchor) is open-ended and reports no rectangle: "A1:C" and
+// "A5:A" are the two forms this guards against directly (see finding A below),
+// "1:3" and "A:C" the ones that were already open before it. This is
+// deliberately its OWN parser rather than utils.convertA1ToGridRange, which
+// does not report an open end at all - it fabricates one, defaulting a
+// missing endRowIndex/endColumnIndex to startIndex+1 as though a lone anchor
+// were a 1-cell range. That is correct for a genuinely bare cell ("A1") but
+// silently wrong for "A1:C" (a real, explicit range whose row end was left
+// open) and "A5:A" (whose row end was left open the same way): both would be
+// treated as a single row, so a guard/pre-image padded to that "rectangle"
+// covers only the first observed row and discards the rest - the exact bug
+// this parser exists to close.
+//
+// Normalizes first ($ stripped, upper-cased) - the same tolerance
+// collectSheetMetadata already applies before parsing (see sheetCells.ts) -
+// so "a1:c3" and "A$1:C$3" are recognized as the same bounded 3x3 rectangle
+// "A1:C3" is, rather than falling back to the (trimming-dependent) observed
+// extent merely because of spelling.
+const STRICT_RECT_RE = /^([A-Z]+)([0-9]+)(?::([A-Z]+)([0-9]+))?$/;
+
+// Upper bound on the cell count of a DECLARED rectangle that padToDeclaredRange
+// will materialize. A guard/write range names its rectangle in a handful of
+// A1 characters regardless of how large that rectangle is - `Probe!A1:Z100000`
+// is twelve characters for 2.6 million cells - and Google trims its response
+// to the actual data extent, so the network cost of declaring an absurd range
+// is nearly nil while padding it out here is not: every one of those cells
+// gets allocated (mostly as null) before it can even be hashed. The cap
+// mirrors the 100_000-cell ceiling this file's own maxCells/maxBytes schema
+// (and getGoogleSheetCells's identical one) already impose elsewhere on
+// cell-materializing budgets in this codebase: comfortably above any
+// legitimate guard or write rectangle - a guard is meant to cover the
+// specific block being edited, not tens of thousands of rows - while still
+// refusing the pathological case with room to spare.
+const MAX_DECLARED_RECTANGLE_CELLS = 100_000;
+
 /** The declared A1 rectangle of a range, as a 0-based origin plus size — or
  *  null when the range has no bounded rectangle to pad to: an open-ended
- *  range (`A:C`, `5:9`) or a bare whole-sheet reference (`Probe`). Those are
- *  legitimate inputs with no fixed extent of their own, so callers fall back
- *  to the observed extent for them instead. */
+ *  range (`A1:C`, `A5:A`, `A:C`, `5:9`) or a bare whole-sheet reference
+ *  (`Probe`). Those are legitimate inputs with no fixed extent of their own,
+ *  so callers fall back to the observed extent for them instead.
+ *
+ *  Throws when the declared rectangle IS bounded but absurdly large - see
+ *  MAX_DECLARED_RECTANGLE_CELLS above - rather than materializing it. */
 function declaredRectangle(range: string): { startRow: number; startColumn: number; rows: number; columns: number } | null {
   const { cellRange } = splitRange(range);
-  if (cellRange === null) return null;
+  if (cellRange === null) return null; // bare whole-sheet reference
 
-  let grid: GridRange;
-  try {
-    grid = convertA1ToGridRange(cellRange, 0); // sheetId is irrelevant here - only the rectangle is used.
-  } catch {
-    return null;
+  const normalized = cellRange.replace(/\$/g, '').toUpperCase();
+  const match = normalized.match(STRICT_RECT_RE);
+  if (!match) return null; // open-ended: no rectangle genuinely declared
+
+  const [, startColLetters, startRowDigits, endColLetters, endRowDigits] = match;
+  const startColumn = colToIndex(startColLetters);
+  const startRow = parseInt(startRowDigits, 10) - 1;
+  const endColumn = endColLetters ? colToIndex(endColLetters) + 1 : startColumn + 1;
+  const endRow = endRowDigits ? parseInt(endRowDigits, 10) : startRow + 1;
+
+  const rows = endRow - startRow;
+  const columns = endColumn - startColumn;
+  if (rows <= 0 || columns <= 0) return null; // reversed anchors: no rectangle to pad to
+
+  if (rows * columns > MAX_DECLARED_RECTANGLE_CELLS) {
+    throw new Error(
+      `Declared range "${range}" spans ${rows * columns} cells (${rows} rows x ${columns} columns), ` +
+      `which exceeds the ${MAX_DECLARED_RECTANGLE_CELLS}-cell guard/write limit. Narrow the range to ` +
+      `the block actually being guarded or written.`
+    );
   }
-  const { startRowIndex, endRowIndex, startColumnIndex, endColumnIndex } = grid;
-  if (startRowIndex === undefined || endRowIndex === undefined
-    || startColumnIndex === undefined || endColumnIndex === undefined) {
-    return null; // open-ended: e.g. "A:C" has columns but no row bound, "5:9" the reverse.
-  }
-  return {
-    startRow: startRowIndex, startColumn: startColumnIndex,
-    rows: endRowIndex - startRowIndex, columns: endColumnIndex - startColumnIndex,
-  };
+
+  return { startRow, startColumn, rows, columns };
 }
 
 /** Pads an observed block of cells (top-left anchored at the range's own

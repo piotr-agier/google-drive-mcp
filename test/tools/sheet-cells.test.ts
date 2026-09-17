@@ -95,6 +95,35 @@ test('rangeSheetTitle resolves an unquoted bare sheet name to itself instead of 
   assert.equal(rangeSheetTitle('Probe'), 'Probe');
 });
 
+test('month, year and quarter tab names are sheet names, not bare ranges', () => {
+  // 'Probe' only ever passed because it has five letters. A single-part bare
+  // range must carry BOTH letters and digits to be a cell, so letters alone
+  // ('Jan', 'Dec', 'Log', 'Tax') and digits alone ('2024') are sheet names.
+  assert.deepEqual(splitRange('Jan'), { sheetTitle: 'Jan', cellRange: null });
+  assert.deepEqual(splitRange('Jan!A1:C5'), { sheetTitle: 'Jan', cellRange: 'A1:C5' });
+  assert.deepEqual(splitRange('Dec'), { sheetTitle: 'Dec', cellRange: null });
+  assert.deepEqual(splitRange('Log'), { sheetTitle: 'Log', cellRange: null });
+  assert.deepEqual(splitRange('Tax'), { sheetTitle: 'Tax', cellRange: null });
+  assert.deepEqual(splitRange('2024'), { sheetTitle: '2024', cellRange: null });
+  assert.deepEqual(splitRange('2024!A1:C5'), { sheetTitle: '2024', cellRange: 'A1:C5' });
+  assert.deepEqual(splitRange('Q1!A1:C5'), { sheetTitle: 'Q1', cellRange: 'A1:C5' });
+  assert.equal(rangeSheetTitle('Jan'), 'Jan');
+  assert.equal(rangeSheetTitle('2024'), '2024');
+  // 'Q1' unqualified stays a range: it is a well-formed cell (column Q, row 1)
+  // and Google resolves it against the first sheet, so a tab called Q1 has to
+  // be named with a '!' or quotes, exactly as in Sheets itself.
+  assert.deepEqual(splitRange('Q1'), { sheetTitle: null, cellRange: 'Q1' });
+  assert.deepEqual(splitRange("'Q1'"), { sheetTitle: 'Q1', cellRange: null });
+});
+
+test('the bare-range grammar still admits the real A1 forms', () => {
+  assert.deepEqual(splitRange('C6:E9'), { sheetTitle: null, cellRange: 'C6:E9' });
+  assert.deepEqual(splitRange('C:EB'), { sheetTitle: null, cellRange: 'C:EB' });   // column to column
+  assert.deepEqual(splitRange('6:9'), { sheetTitle: null, cellRange: '6:9' });     // row to row
+  assert.deepEqual(splitRange('A8:9'), { sheetTitle: null, cellRange: 'A8:9' });   // cell to row
+  assert.deepEqual(splitRange('$A$1:$C$5'), { sheetTitle: null, cellRange: '$A$1:$C$5' });
+});
+
 const sheets = [
   { properties: { sheetId: 1, title: 'Alpha' },
     data: [ { startRow: 5, startColumn: 2, rowData: [] }, { startRow: 50, startColumn: 0, rowData: [] } ] },
@@ -128,6 +157,21 @@ test('a bare unquoted sheet name resolves to that sheet even mixed with a range 
   const out = matchRangesToGridData(['Gamma', "'Beta Two'!A1:B2"], sheetsWithGamma);
   assert.ok('matches' in out);
   assert.deepEqual(out.matches.map(m => m.sheetTitle), ['Gamma', 'Beta Two']);
+});
+
+test('a sheet title is matched case-insensitively, the way Google resolves it', () => {
+  // 'jan!A1' is answered by Google with the data of the sheet named 'Jan', so
+  // the lookup must find it - and the reply must carry the sheet's own casing.
+  const janSheets = [
+    { properties: { sheetId: 4, title: 'Jan' },
+      data: [{ startRow: 0, startColumn: 0, rowData: [] }, { startRow: 9, startColumn: 0, rowData: [] }] },
+  ];
+  const out = matchRangesToGridData(['jan!A1', 'JAN!A10'], janSheets);
+  assert.ok('matches' in out, ('error' in out) ? out.error : undefined);
+  if (!('matches' in out)) return;
+  assert.deepEqual(out.matches.map(m => m.sheetTitle), ['Jan', 'Jan']);
+  // One case-folded cursor, so the second range takes the SECOND grid.
+  assert.deepEqual(out.matches.map(m => m.grid.startRow ?? 0), [0, 9]);
 });
 
 test('a range naming an absent sheet is reported, not silently mismatched', () => {
@@ -200,6 +244,82 @@ test('a single row larger than the whole budget is still returned, so paging can
   assert.equal(out.results[0].cells.length, 4);
   assert.equal(out.truncated, true);
   assert.deepEqual(out.nextRanges, ['Alpha!C7:F7']);
+});
+
+test('the first row of a LATER range is not admitted once the budget is spent', () => {
+  // Four ranges of one five-cell row each under maxCells: 1. The per-range
+  // progress rule returned all 20 cells with truncated:false; the guarantee is
+  // per response, so only the first range may overshoot.
+  const row = (startRow: number) => ({
+    startRow, startColumn: 0,
+    rowData: [{ values: Array.from({ length: 5 }, (_, c) => cell(c)) }],
+  });
+  const out = extractRanges(
+    [match('Alpha!A1:E1', row(0)), match('Alpha!A3:E3', row(2)),
+     match('Alpha!A5:E5', row(4)), match('Alpha!A7:E7', row(6))],
+    ['effectiveValue'], { maxCells: 1, maxBytes: 1_000_000, includeEmpty: false });
+
+  assert.equal(out.results.reduce((n, r) => n + r.cells.length, 0), 5);  // the first row only
+  assert.equal(out.returned.cells, 5);
+  assert.equal(out.truncated, true);
+  // The three untouched ranges come back verbatim, ready to be passed straight in.
+  assert.deepEqual(out.nextRanges, ['Alpha!A3:E3', 'Alpha!A5:E5', 'Alpha!A7:E7']);
+});
+
+test('a range that exactly fills the budget stops the next range rather than granting it a free row', () => {
+  // Ten cells fill maxCells: 10 exactly, then a one-row range follows. That
+  // second range used to be admitted whole, for 15 cells and truncated:false.
+  const ten = { startRow: 0, startColumn: 0,
+    rowData: Array.from({ length: 2 }, () => ({ values: Array.from({ length: 5 }, (_, c) => cell(c)) })) };
+  const one = { startRow: 4, startColumn: 0,
+    rowData: [{ values: Array.from({ length: 5 }, (_, c) => cell(c)) }] };
+  const out = extractRanges([match('Alpha!A1:E2', ten), match('Alpha!A5:E5', one)],
+    ['effectiveValue'], { maxCells: 10, maxBytes: 1_000_000, includeEmpty: false });
+
+  assert.equal(out.returned.cells, 10);
+  assert.equal(out.results.length, 1);            // the untouched range gets no result block
+  assert.equal(out.truncated, true);
+  assert.deepEqual(out.nextRanges, ['Alpha!A5:E5']);
+});
+
+test('the byte budget is measured in bytes, not UTF-16 code units', () => {
+  // Non-Latin text costs more bytes than it has code units; counting .length
+  // let a CJK sheet overrun maxBytes by more than 2x.
+  const cjk = { startRow: 0, startColumn: 0, rowData: [
+    { values: [{ effectiveValue: { stringValue: '営業利益の見通し' } }] },
+    { values: [{ effectiveValue: { stringValue: '営業利益の見通し' } }] },
+  ] };
+  const out = extractRanges([match('Alpha!A1:A2', cjk)], ['effectiveValue'],
+    { maxCells: 100, maxBytes: 1_000_000, includeEmpty: false });
+
+  const serialized = out.results[0].cells.map(c => Buffer.byteLength(JSON.stringify(c)) + 1);
+  assert.equal(out.returned.bytes, serialized.reduce((a, b) => a + b, 0));
+  // And it is genuinely the byte count, strictly above the code-unit count the
+  // old .length produced for this same content.
+  const codeUnits = out.results[0].cells.map(c => JSON.stringify(c).length + 1)
+    .reduce((a, b) => a + b, 0);
+  assert.ok(out.returned.bytes > codeUnits,
+    `expected bytes (${out.returned.bytes}) to exceed code units (${codeUnits})`);
+});
+
+test('a maxBytes that code-unit counting would have fitted twice over truncates after one row', () => {
+  const text = '営業利益の見通し';
+  const oneCell = { a1: 'A1', effectiveValue: { stringValue: text } };
+  const codeUnits = JSON.stringify(oneCell).length + 1;
+  const bytes = Buffer.byteLength(JSON.stringify(oneCell)) + 1;
+  const cjk = { startRow: 0, startColumn: 0, rowData: Array.from({ length: 3 }, () => (
+    { values: [{ effectiveValue: { stringValue: text } }] })) };
+
+  // A budget that holds exactly two rows measured in code units, but only one
+  // measured in bytes - so it pins which of the two the tool is charging for.
+  const maxBytes = codeUnits * 2;
+  assert.ok(bytes <= maxBytes && maxBytes < bytes * 2, 'the budget must separate the two readings');
+
+  const out = extractRanges([match('Alpha!A1:A3', cjk)], ['effectiveValue'],
+    { maxCells: 100, maxBytes, includeEmpty: false });
+  assert.deepEqual(out.results[0].cells.map(c => c.a1), ['A1']);
+  assert.equal(out.truncated, true);
+  assert.deepEqual(out.nextRanges, ['Alpha!A2:A3']);
 });
 
 test('remainderRange rebuilds the start anchor and keeps the requested end anchor', () => {

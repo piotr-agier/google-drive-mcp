@@ -77,14 +77,22 @@ export function buildFieldMask(fields: string[], sheetMetadata: string[]): strin
   return `properties.title,sheets(${sheetsParts.join(',')})`;
 }
 
-// Grammar for a bare (sheet-less) A1 range: optional $, up to a few letters,
-// optional $, digits, optionally repeated after a colon. Used only to tell a
-// bare RANGE ("C6:E9", "A1", "C:EB") apart from a bare, unquoted SHEET NAME
-// ("Probe") that also has no '!' of its own — Google itself resolves this
-// exact ambiguity by grammar (a string valid as a range is a range on the
-// first sheet; anything else is a sheet name), so this mirrors that rule
-// rather than inventing a different one.
-const BARE_RANGE_RE = /^\$?[A-Za-z]{0,3}\$?[0-9]*(:\$?[A-Za-z]{0,3}\$?[0-9]*)?$/;
+// Grammar for a bare (sheet-less) A1 range. Used only to tell a bare RANGE
+// ("C6:E9", "A1", "C:EB") apart from a bare, unquoted SHEET NAME ("Probe",
+// "Jan", "2024", "Q1") that also has no '!' of its own — Google itself
+// resolves this exact ambiguity by grammar (a string valid as a range is a
+// range on the first sheet; anything else is a sheet name), so this mirrors
+// that rule rather than inventing a different one.
+//
+// A single-part form must be a full cell: both letters and digits. Letters
+// alone ("Jan") or digits alone ("2024") are NOT ranges, and treating them as
+// such routed month and year tab names to the first sheet. A two-part form
+// needs each side to be a column, a row, or a cell.
+const COL = '\\$?[A-Za-z]{1,3}';
+const ROW = '\\$?[0-9]+';
+const CELL = `${COL}${ROW}`;
+const SIDE = `(?:${CELL}|${COL}|${ROW})`;
+const BARE_RANGE_RE = new RegExp(`^(?:${CELL}|${SIDE}:${SIDE})$`);
 
 function isBareCellRange(s: string): boolean {
   return s.length > 0 && /[A-Za-z0-9]/.test(s) && BARE_RANGE_RE.test(s);
@@ -169,10 +177,15 @@ export function matchRangesToGridData(
   ranges: string[],
   sheets: SheetLike[],
 ): { matches: RangeMatch[] } | { error: string } {
+  // Google resolves sheet titles case-insensitively - 'jan!A1' is answered
+  // with the data of a sheet named 'Jan' - so the lookup and the per-sheet
+  // cursors are keyed on a case-folded title. The sheet's own spelling, as the
+  // API reported it, is what goes into sheetTitle.
+  const fold = (title: string) => title.toLowerCase();
   const byTitle = new Map<string, SheetLike>();
   for (const sheet of sheets) {
     const title = sheet.properties?.title;
-    if (typeof title === 'string') byTitle.set(title, sheet);
+    if (typeof title === 'string') byTitle.set(fold(title), sheet);
   }
   const cursors = new Map<string, number>();
   const matches: RangeMatch[] = [];
@@ -182,18 +195,19 @@ export function matchRangesToGridData(
     const title = requested ?? sheets[0]?.properties?.title ?? null;
     if (title === null) return { error: `Cannot resolve a sheet for range "${range}"` };
 
-    const sheet = byTitle.get(title);
+    const key = fold(title);
+    const sheet = byTitle.get(key);
     if (!sheet) return { error: `Range "${range}" names sheet "${title}", which is not in the response` };
 
-    const index = cursors.get(title) ?? 0;
+    const index = cursors.get(key) ?? 0;
     const grid = sheet.data?.[index];
     if (!grid) return { error: `Sheet "${title}" returned fewer grids than the ranges requested from it` };
-    cursors.set(title, index + 1);
+    cursors.set(key, index + 1);
 
     matches.push({
       range,
       sheetId: sheet.properties?.sheetId ?? -1,
-      sheetTitle: title,
+      sheetTitle: sheet.properties?.title ?? title,
       grid,
       sheet,
     });
@@ -258,6 +272,7 @@ export function extractRanges(
     const cells: CellOut[] = [];
     let rowsConsumed = 0;
     let truncated = false;
+    let untouched = false;
 
     for (let r = 0; r < rows.length; r++) {
       const values = rows[r].values ?? [];
@@ -276,13 +291,21 @@ export function extractRanges(
           out.empty = true;
         }
         rowCells.push(out);
-        rowBytes += JSON.stringify(out).length + 1;
+        // Bytes, not UTF-16 code units: .length under-counts non-Latin text by
+        // more than 2x, so a sheet of CJK content would overrun maxBytes.
+        rowBytes += Buffer.byteLength(JSON.stringify(out)) + 1;
       }
 
       const wouldExceed =
         usedCells + rowCells.length > budget.maxCells || usedBytes + rowBytes > budget.maxBytes;
-      // The first row always goes through: otherwise a range whose single row
-      // does not fit the budget would never advance and the client would loop.
+      // The guarantee is that the RESPONSE makes progress, not that every range
+      // does. An over-budget first row goes through only when nothing has been
+      // returned yet - otherwise a range whose single row does not fit would
+      // never advance and the client would loop. Once something has been
+      // returned, a range that cannot start is left untouched for the
+      // continuation; admitting its first row anyway let a multi-range read
+      // return many times maxCells with truncated:false.
+      if (wouldExceed && rowsConsumed === 0 && usedCells > 0) { untouched = true; break; }
       if (wouldExceed && rowsConsumed > 0) { truncated = true; break; }
 
       cells.push(...rowCells);
@@ -291,6 +314,11 @@ export function extractRanges(
       rowsConsumed = r + 1;
       if (wouldExceed) { truncated = r + 1 < rows.length; break; }
     }
+
+    // Nothing of this range was read: it goes to the continuation verbatim,
+    // exactly like a range the loop never reached, with no result block of its
+    // own to suggest it was looked at.
+    if (untouched) { nextRanges.push(match.range); exhausted = true; continue; }
 
     results.push({ range: match.range, sheetId: match.sheetId, sheetTitle: match.sheetTitle, cells, truncated });
     if (truncated) {

@@ -71,11 +71,18 @@ describe('Tool Registry', () => {
   // The MCP spec defaults `destructiveHint` to true, so a server that annotates
   // nothing has every tool treated as destructive — `search` and `readGoogleDoc`
   // indistinguishable from `deleteItem`. `readOnlyHint` is projected from the
-  // read/write/admin classification in TOOL_META, so the two cannot drift.
-  it('marks exactly the read tools readOnlyHint, and no others', () => {
+  // read/write/admin classification in TOOL_META, corrected at two edges that
+  // are spelled out here independently of the server so a drift is visible:
+  // `downloadFile` needs only a read scope but writes to the host filesystem,
+  // and the auth diagnostics are admin-dispatched but only ever read.
+  const HOST_MUTATING_READS = ['downloadFile'];
+  const READ_ONLY_ADMIN_TOOLS = ['authGetStatus', 'authListScopes', 'authTestFileAccess'];
+
+  it('marks exactly the read-only tools readOnlyHint, and no others', () => {
     const expectedReadOnly = Object.entries(TOOL_META)
-      .filter(([, meta]) => meta.opKind === 'read')
+      .filter(([name, meta]) => meta.opKind === 'read' && !HOST_MUTATING_READS.includes(name))
       .map(([name]) => name)
+      .concat(READ_ONLY_ADMIN_TOOLS)
       .sort();
 
     const annotatedReadOnly = tools
@@ -87,16 +94,15 @@ describe('Tool Registry', () => {
     assert.deepEqual(annotatedReadOnly, expectedReadOnly);
   });
 
-  it('never claims a write or admin tool is read-only', () => {
-    for (const tool of tools) {
-      const opKind = TOOL_META[tool.name]?.opKind;
-      if (opKind === 'read') continue;
-      assert.notEqual(
-        tool.annotations?.readOnlyHint,
-        true,
-        `Tool "${tool.name}" is ${opKind} but claims readOnlyHint`,
-      );
-    }
+  // The spec defines readOnlyHint as "does not modify its environment". A tool
+  // that writes (or with `overwrite`, replaces) a local file must not carry it,
+  // whatever Google scope it needs: a client honouring the hint would skip a
+  // confirmation prompt on exactly the tool that can clobber a host file.
+  it('never claims downloadFile is read-only', () => {
+    const tool = tools.find((t) => t.name === 'downloadFile');
+    assert.ok(tool, 'downloadFile must be registered');
+    assert.equal(TOOL_META.downloadFile.opKind, 'read', 'scope classification is unchanged');
+    assert.notEqual(tool.annotations?.readOnlyHint, true);
   });
 
   // destructiveHint defaults to true in the spec. Emitting it as false on a

@@ -507,8 +507,26 @@ function withAccountParam(def: { name: string; description: string; inputSchema:
 // Per the spec, clients must treat annotations from an untrusted server as
 // untrusted, so these improve UX in cooperating clients rather than enforcing
 // anything.
+//
+// `opKind` answers "which Google scope does this need", not "does this mutate
+// anything", so it is corrected at the edges: `downloadFile` is a Drive read
+// that writes (and with `overwrite` replaces) a file on the host, and the auth
+// diagnostics are admin-dispatched but only ever read.
+const HOST_MUTATING_READS: ReadonlySet<string> = new Set(['downloadFile']);
+const READ_ONLY_ADMIN_TOOLS: ReadonlySet<string> = new Set([
+  'authGetStatus',
+  'authListScopes',
+  'authTestFileAccess',
+]);
+
+function isReadOnlyTool(name: string): boolean {
+  if (HOST_MUTATING_READS.has(name)) return false;
+  if (READ_ONLY_ADMIN_TOOLS.has(name)) return true;
+  return TOOL_META[name]?.opKind === 'read';
+}
+
 function withAnnotations<T extends { name: string }>(def: T): T {
-  if (TOOL_META[def.name]?.opKind !== 'read') return def;
+  if (!isReadOnlyTool(def.name)) return def;
   return { ...def, annotations: { readOnlyHint: true } };
 }
 

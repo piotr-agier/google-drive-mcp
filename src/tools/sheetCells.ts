@@ -421,6 +421,13 @@ export function collectSheetMetadata(
       block.dimensionGroups = { rows: shape(match.sheet.rowGroups), columns: shape(match.sheet.columnGroups) };
     }
 
+    // Deliberate asymmetry with merges/frozen/dimensionGroups above: those come
+    // from the sheet-level lists and describe the whole sheet, while
+    // hiddenRows, hiddenColumns and dimensionSizes are read out of the grid's
+    // rowMetadata/columnMetadata, which the API scopes to the requested window.
+    // An empty hiddenRows therefore means "no hidden rows inside the ranges
+    // that were read", not "this sheet has no hidden rows". The tool
+    // description says the same thing (see sheetMetadata in sheets.ts).
     if (requested.includes('hiddenRows')) {
       const hidden = (block.hiddenRows as number[]) ?? [];
       (grid.rowMetadata ?? []).forEach((meta, i) => {

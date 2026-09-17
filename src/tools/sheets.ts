@@ -374,7 +374,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "getGoogleSheetCells",
-    description: "Read Google Sheets cells as structured data instead of joined text: each cell comes back with its own absolute A1 address, and with the formula the user entered AND the value it evaluates to, in one call. Reads several ranges at once and returns them separately. Prefer this over getGoogleSheetContent whenever exact cell addresses matter (getGoogleSheetContent numbers rows relative to the requested range and does not label columns at all), whenever a formula has to be checked against its result (getGoogleSheetContent renders one or the other per call, so that needs two reads), or whenever cell boundaries must survive the values themselves. getGoogleSheetContent remains the right tool for a quick human-readable dump of one range.",
+    description: "Read Google Sheets cells as structured data instead of joined text: each cell comes back with its own absolute A1 address, and with the formula the user entered AND the value it evaluates to, in one call. Reads several ranges at once and returns them separately. Use getGoogleSheetContent for a quick human-readable dump of one range. Use this tool whenever the result will be written back, compared to a formula, or spans several ranges.",
     inputSchema: {
       type: "object",
       properties: {
@@ -391,12 +391,12 @@ export const toolDefinitions: ToolDefinition[] = [
         },
         sheetMetadata: {
           type: "array",
-          description: "Per-sheet extras returned once per sheet under `sheets`: merges (full extent, even when they leave the range), hiddenRows, hiddenColumns, frozen, dimensionGroups, dimensionSizes.",
+          description: "Per-sheet extras returned once per sheet under `sheets`. `merges`, `frozen` and `dimensionGroups` cover the whole sheet (merges are reported at full extent even when they leave the range). `hiddenRows`, `hiddenColumns` and `dimensionSizes` cover only the rows and columns inside the requested ranges.",
           items: { type: "string", enum: [...SHEET_METADATA] }
         },
         includeEmpty: { type: "boolean", description: "Return cells that have none of the requested fields as {a1, empty: true}. Default false - addresses are explicit, so gaps are unambiguous." },
-        maxCells: { type: "number", description: "Cell budget for the whole response (default 2000). On overflow the read stops at a row boundary and returns truncated:true plus nextRanges. On formula-heavy ranges the byte budget (maxBytes) normally binds first - a real spreadsheet of formula cells, reserialized into this tool's own compact per-cell JSON with the three default fields, measured at roughly 130 bytes per cell, exhausting the default maxBytes at around 1000 cells, still well before this default of 2000 - so truncation there is expected, not a sign of a misconfigured maxCells." },
-        maxBytes: { type: "number", description: "Byte budget for the serialized cells (default 131072), measured on this tool's own compact JSON output rather than on the raw Sheets API response (which Google pretty-prints over HTTP, inflating its wire size well above what is actually serialized here). On formula-heavy ranges this is normally the budget that binds, well before maxCells: roughly 130 bytes per cell with the three default fields exhausts the default 131072 around 1000 cells." }
+        maxCells: { type: "number", description: "Cell budget for the whole response (default 2000). On overflow the read stops at a row boundary and returns truncated:true plus nextRanges." },
+        maxBytes: { type: "number", description: "Byte budget for the serialized cells (default 131072), measured on this tool's output. With the default fields, formula-heavy ranges hit this before maxCells, at roughly 1000 cells." }
       },
       required: ["spreadsheetId", "ranges"]
     }

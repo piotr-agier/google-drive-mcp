@@ -433,7 +433,7 @@ different identifiers; neither is accepted as a lock.
   - `spreadsheetId`: Spreadsheet ID
   - `ranges`: A1 ranges to read, returned separately and in order
   - `fields`: CellData fields (optional, default `userEnteredValue`, `effectiveValue`, `formattedValue`)
-  - `sheetMetadata`: `merges`, `hiddenRows`, `hiddenColumns`, `frozen`, `dimensionGroups`, `dimensionSizes` (optional)
+  - `sheetMetadata`: `merges`, `frozen`, `dimensionGroups` (whole sheet), `hiddenRows`, `hiddenColumns`, `dimensionSizes` (only inside the requested ranges) (optional)
   - `includeEmpty`: return cells with none of the requested fields (optional, default false)
   - `maxCells` / `maxBytes`: response budget; on overflow returns `truncated` and `nextRanges` (optional)
   - Addresses are absolute to the sheet, not relative to the requested range, and `getGoogleSheetContent` is unchanged

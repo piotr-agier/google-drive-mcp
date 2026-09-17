@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import path from 'node:path';
 import test from 'node:test';
 
 import { buildFieldMask, cellA1, columnLetter, extractRanges, GridDataLike, matchRangesToGridData, rangeSheetTitle, remainderRange, collectSheetMetadata, splitRange } from '../../src/tools/sheetCells.js';
@@ -60,7 +59,7 @@ test('buildFieldMask includes rowGroups and columnGroups inside the single sheet
 
 test('buildFieldMask with dimensionGroups + frozen + hiddenRows + fields nests everything under one sheets root', () => {
   const mask = buildFieldMask(['effectiveValue', 'userEnteredValue'], ['dimensionGroups', 'frozen', 'hiddenRows']);
-  // Regression test: verify the defect (two sheets roots) cannot reoccur in any form.
+  // Regression: the mask must have exactly one `sheets(...)` root.
   assert.equal(countSheetsRoots(mask), 1);
   assert.match(mask, /properties\(.*gridProperties\(frozenRowCount,frozenColumnCount\)/);
   assert.match(mask, /rowGroups,columnGroups/);
@@ -184,6 +183,30 @@ test('more ranges than returned grids is reported rather than yielding undefined
   const out = matchRangesToGridData(['Alpha!A1', 'Alpha!A2', 'Alpha!A3'], sheets);
   assert.ok('error' in out);
   assert.match(out.error, /Alpha/);
+});
+
+test('an entirely empty range still occupies its slot in data[], keeping the per-sheet cursor in step', () => {
+  // Verified live against the API: requesting 'Probe!Z90:AA95' (empty) and
+  // 'Probe!A1:B2' together returns TWO elements - the empty one carries
+  // startRow/startColumn and no rowData, and the second elides both offsets
+  // because they are 0. The element is not dropped, so the cursor cannot slip.
+  const sheetsWithEmpty = [
+    { properties: { sheetId: 9, title: 'Probe' },
+      data: [
+        { startRow: 89, startColumn: 25 },
+        { rowData: [{ values: [{ effectiveValue: { stringValue: 'a1' } }] }] },
+      ] },
+  ];
+  const out = matchRangesToGridData(['Probe!Z90:AA95', 'Probe!A1:B2'], sheetsWithEmpty);
+  assert.ok('matches' in out, ('error' in out) ? out.error : undefined);
+  if (!('matches' in out)) return;
+  assert.equal(out.matches[0].grid.rowData, undefined);
+  assert.equal(out.matches[1].grid.startRow, undefined);
+
+  const extracted = extractRanges(out.matches, ['effectiveValue'],
+    { maxCells: 100, maxBytes: 100_000, includeEmpty: false });
+  assert.deepEqual(extracted.results[0].cells, []);                 // the empty range, in order
+  assert.deepEqual(extracted.results[1].cells.map(c => c.a1), ['A1']);  // A1, not Z90
 });
 
 const cell = (v: unknown) => ({ effectiveValue: { numberValue: v } });
@@ -327,6 +350,17 @@ test('remainderRange rebuilds the start anchor and keeps the requested end ancho
   assert.equal(remainderRange(match('Alpha!C:EB', grid(5, 8, 2)), 3, 2), 'Alpha!C9:EB');
 });
 
+test('a row-only range continues as a cell-to-row range, the form the API accepts', () => {
+  // Verified live: 'Probe!A8:9' is accepted and answered with startRow: 7, no
+  // startColumn, and 2 rows - so the cell-to-row anchor this produces for a
+  // row-only request such as 'Alpha!6:9' pages correctly on the second call.
+  const rows = { startRow: 5, startColumn: 0,
+    rowData: Array.from({ length: 4 }, () => ({ values: [cell(1), cell(2)] })) };
+  assert.equal(remainderRange(match('Alpha!6:9', rows), 2, 2), 'Alpha!A8:9');
+  // And that continuation round-trips back through the bare-range grammar.
+  assert.deepEqual(splitRange('Alpha!A8:9'), { sheetTitle: 'Alpha', cellRange: 'A8:9' });
+});
+
 test('remainderRange keeps the sheet prefix for a bare (unquoted) whole-sheet range', () => {
   // 'Probe' names no cell range at all, so there is no original end anchor
   // to reuse — the continuation is bounded to the observed width instead,
@@ -463,11 +497,11 @@ test('accumulating fields merge across multiple ranges on the same sheet', () =>
 // This module's only test against a real, captured Sheets API response
 // (every other test above builds a small synthetic double instead) - runs
 // the actual pipeline (matchRangesToGridData -> extractRanges,
-// collectSheetMetadata) over test/fixtures/sheet-cells-grid.json and
-// asserts values read out of that fixture by hand (see the JSON directly,
-// or Task 1's report, for how each number below was derived).
+// collectSheetMetadata) over test/fixtures/sheet-cells-grid.json. Every
+// value asserted below was read out of that fixture by hand; the fixture is
+// checked in, so each one can be confirmed against the JSON directly.
 test('the real captured spreadsheets.get fixture flows through matchRangesToGridData, extractRanges and collectSheetMetadata correctly', () => {
-  const fixturePath = path.join(process.cwd(), 'test', 'fixtures', 'sheet-cells-grid.json');
+  const fixturePath = new URL('../fixtures/sheet-cells-grid.json', import.meta.url);
   const fixture = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
 
   const ranges = ['Probe!A1:F5', 'Probe!A7:F14', "'Probe 2'!A1:B2"];
@@ -501,7 +535,8 @@ test('the real captured spreadsheets.get fixture flows through matchRangesToGrid
   assert.equal(byA1(probeBlock0, 'A5').formattedValue, '10.00%');
 
   // Probe!A7:F14: response has startRow=6, so this block's own row 0 is
-  // real row 7 - the nonzero-startRow case the design doc calls out.
+  // real row 7 - the nonzero-startRow case, where a range-relative reading
+  // would report these cells six rows too high.
   assert.equal(probeBlock1.sheetTitle, 'Probe');
   assert.equal(byA1(probeBlock1, 'A7').effectiveValue.numberValue, 701);
   assert.equal(byA1(probeBlock1, 'D8').effectiveValue.numberValue, 804);

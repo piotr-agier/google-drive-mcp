@@ -3,6 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { TOOL_META } from '../src/tools/toolMeta.js';
+import { toolDefinitions as calendarTools } from '../src/tools/calendar.js';
+import { toolDefinitions as docsTools } from '../src/tools/docs.js';
+import { toolDefinitions as driveTools } from '../src/tools/drive.js';
+import { toolDefinitions as sheetsTools } from '../src/tools/sheets.js';
+import { toolDefinitions as slidesTools } from '../src/tools/slides.js';
 
 const repositoryRoot = process.cwd();
 
@@ -151,6 +156,66 @@ describe('Documentation reference', () => {
     }
 
     assert.deepEqual(failures, []);
+  });
+
+  // A tool description naming a tool that does not exist costs the model a
+  // failed lookup before it ever reaches the tool it was told to use. #186
+  // shipped `styleDocTable` pointing at `documentStyleSummary` and
+  // `describeRange`, neither of which existed, and it got through review twice
+  // because nothing checked. Descriptions go to every model on every listing,
+  // so this is the surface where a phantom name costs the most.
+  it('never names a tool that is not registered', () => {
+    // Identifiers that look like tool names but are not: JSON Schema keywords,
+    // Google API field names, and API method/request-type names. Descriptions
+    // legitimately mention these to say what a tool reads, writes, or compiles
+    // to. Extend deliberately — an unrecognised name is a phantom until someone
+    // confirms it is real, which is the check this test exists to force.
+    const NOT_TOOL_NAMES = new Set([
+      // JSON Schema
+      'anyOf', 'maxItems',
+      // Google API methods and request types
+      'batchUpdate', 'updatePageElementsZOrder', 'tableStartLocation',
+      // Google API field names
+      'byteLength', 'contentUri', 'createdTime', 'dataBase64', 'externalOnly',
+      'fileOrganizer', 'fullText', 'hangoutsMeet', 'hiddenByUser', 'horizontalRule',
+      'mimeType', 'modifiedTime', 'nextOffset', 'objectId', 'revisionId', 'startTime',
+      // Parameters shared across tools, named in prose by tools that take them
+      'ifRevisionId',
+    ]);
+
+    // A tool may freely name its own parameters; only cross-tool references
+    // are at issue here.
+    function propertyNames(schema: unknown, into: Set<string>): Set<string> {
+      if (!schema || typeof schema !== 'object') return into;
+      const node = schema as Record<string, unknown>;
+      if (node.properties && typeof node.properties === 'object') {
+        for (const [key, value] of Object.entries(node.properties as Record<string, unknown>)) {
+          into.add(key);
+          propertyNames(value, into);
+        }
+      }
+      propertyNames(node.items, into);
+      return into;
+    }
+
+    const allTools = [...docsTools, ...sheetsTools, ...slidesTools, ...driveTools, ...calendarTools];
+    const registered = new Set(Object.keys(TOOL_META));
+    const failures: string[] = [];
+
+    for (const tool of allTools) {
+      const own = propertyNames(tool.inputSchema, new Set<string>());
+      const prose = JSON.stringify({ d: tool.description, s: tool.inputSchema });
+
+      // Any camelCase identifier, not just verb-first: #186 shipped both
+      // `describeRange` and `documentStyleSummary`, and a verb-prefix rule
+      // catches only the first.
+      for (const [, token] of prose.matchAll(/\b([a-z][a-z0-9]*(?:[A-Z][a-zA-Z0-9]*)+)\b/g)) {
+        if (registered.has(token) || own.has(token) || NOT_TOOL_NAMES.has(token)) continue;
+        failures.push(`${tool.name} names "${token}", which is not a registered tool`);
+      }
+    }
+
+    assert.deepEqual([...new Set(failures)].sort(), []);
   });
 
   it('publishes every guide the README links to', () => {

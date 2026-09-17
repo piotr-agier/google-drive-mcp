@@ -1,6 +1,6 @@
 # Tool reference
 
-This server exposes 129 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
+This server exposes 130 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
 
 ## Available Tools
 
@@ -421,6 +421,18 @@ different identifiers; neither is accepted as a lock.
   - `spreadsheetId`: Spreadsheet ID
   - `updates`: Array of `{range, values}` pairs; overlapping ranges have no documented precedence, so avoid them
   - `valueInputOption`: `RAW` (default, safe) or `USER_ENTERED` (evaluates formulas), applied to every range (optional)
+
+- **updateGoogleSheetIfUnchanged** - Write cell values only if the guarded area is unchanged, returning the overwritten contents so the write can be undone
+  - `spreadsheetId`: Spreadsheet ID
+  - `updates`: ranges to write, ValueRange-shaped
+  - `guardRanges`: ranges that must be unchanged (optional, defaults to the ranges in `updates`)
+  - `expectedFingerprint`: fingerprint from a previous `dryRun` call; required unless `dryRun`
+  - `valueInputOption`: `USER_ENTERED` (default) or `RAW` (optional)
+  - `dryRun`: return the fingerprint and guarded contents without writing (optional)
+  - `maxCells` / `maxBytes`: budget for the contents returned on a dryRun or refusal (optional)
+  - Optimistic, not atomic: the Sheets API has no compare-and-swap, so a write landing between the read and the write is not caught
+  - A cell listed in the returned `hazards` cannot be restored through `updates`, which only accepts strings and would silently change the cell's type on rollback - apply its returned `userEnteredValue` verbatim through another tool instead
+  - The hazard list is deliberately not exhaustive: date-shaped text (e.g. `'2024-01-01'`) and other apostrophe-forced text outside the detected cases (formula-, number-, and boolean-looking) are not flagged
 
 - **getGoogleSheetContent** - Get spreadsheet content with cell information
   - `spreadsheetId`: Spreadsheet ID

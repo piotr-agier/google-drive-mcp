@@ -605,10 +605,15 @@ async function executeBatchUpdate(ctx: ToolContext, documentId: string, requests
   const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
 
   try {
-    const response = await docs.documents.batchUpdate({
-      documentId: documentId,
-      requestBody: { requests, ...writeControlFor(ifRevisionId) },
-    });
+    const response = await withRetry(
+      (signal) => docs.documents.batchUpdate({
+        documentId: documentId,
+        requestBody: { requests, ...writeControlFor(ifRevisionId) },
+      }, { signal }),
+      { ...ctx.runtimeConfig, retryMax: 0 },
+      'docs.documents.batchUpdate',
+      ctx.log
+    );
     return response.data;
   } catch (error: any) {
     ctx.log('Google Docs batchUpdate error:', error.message);
@@ -670,7 +675,12 @@ async function getTabBodyContent(
   tabId: string,
 ): Promise<{ content?: any[]; error?: string }> {
   const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-  const res = await docs.documents.get({ documentId, includeTabsContent: true });
+  const res = await withRetry(
+    (signal) => docs.documents.get({ documentId, includeTabsContent: true }, { signal }),
+    ctx.runtimeConfig,
+    'docs.documents.get(tabBody)',
+    ctx.log
+  );
   const tabs = (res.data as any).tabs as any[] | undefined;
   const tab = tabs ? findTabById(tabs, tabId) : null;
   if (!tab) {
@@ -706,10 +716,15 @@ async function findTextRange(ctx: ToolContext, documentId: string, textToFind: s
       if (resolved.error) return { error: resolved.error };
       content = resolved.content!;
     } else {
-      const res = await docs.documents.get({
-        documentId,
-        fields: 'body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,startIndex,endIndex))',
-      });
+      const res = await withRetry(
+        (signal) => docs.documents.get({
+          documentId,
+          fields: 'body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,startIndex,endIndex))',
+        }, { signal }),
+        ctx.runtimeConfig,
+        'docs.documents.get(findTextRange)',
+        ctx.log
+      );
       if (!res.data.body?.content) {
         return null;
       }
@@ -822,10 +837,15 @@ async function getParagraphRange(ctx: ToolContext, documentId: string, indexWith
       if (resolved.error) return { error: resolved.error };
       content = resolved.content!;
     } else {
-      const res = await docs.documents.get({
-        documentId,
-        fields: 'body(content(startIndex,endIndex,paragraph,table))',
-      });
+      const res = await withRetry(
+        (signal) => docs.documents.get({
+          documentId,
+          fields: 'body(content(startIndex,endIndex,paragraph,table))',
+        }, { signal }),
+        ctx.runtimeConfig,
+        'docs.documents.get(paragraphRange)',
+        ctx.log
+      );
       if (!res.data.body?.content) {
         return null;
       }
@@ -2999,15 +3019,20 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       // Create empty doc
       let docResponse;
       try {
-        docResponse = await ctx.getDrive().files.create({
-          requestBody: {
-            name: a.name,
-            mimeType: 'application/vnd.google-apps.document',
-            parents: [parentFolderId]
-          },
-          fields: 'id, name, webViewLink',
-          supportsAllDrives: true
-        });
+        docResponse = await withRetry(
+          (signal) => ctx.getDrive().files.create({
+            requestBody: {
+              name: a.name,
+              mimeType: 'application/vnd.google-apps.document',
+              parents: [parentFolderId]
+            },
+            fields: 'id, name, webViewLink',
+            supportsAllDrives: true
+          }, { signal }),
+          { ...ctx.runtimeConfig, retryMax: 0 },
+          'drive.files.create(googleDoc)',
+          ctx.log
+        );
       } catch (createError: any) {
         ctx.log('Drive files.create error details:', {
           message: createError.message,
@@ -3098,19 +3123,24 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
 
       let fileResponse;
       try {
-        fileResponse = await ctx.getDrive().files.create({
-          requestBody: {
-            name: a.name,
-            mimeType: 'application/vnd.google-apps.document',
-            parents: [parentFolderId]
-          },
-          media: {
-            mimeType: 'text/html',
-            body: Readable.from(htmlBuffer)
-          },
-          fields: 'id, name, webViewLink',
-          supportsAllDrives: true
-        });
+        fileResponse = await withRetry(
+          (signal) => ctx.getDrive().files.create({
+            requestBody: {
+              name: a.name,
+              mimeType: 'application/vnd.google-apps.document',
+              parents: [parentFolderId]
+            },
+            media: {
+              mimeType: 'text/html',
+              body: Readable.from(htmlBuffer)
+            },
+            fields: 'id, name, webViewLink',
+            supportsAllDrives: true
+          }, { signal }),
+          { ...ctx.runtimeConfig, retryMax: 0 },
+          'drive.files.create(docFromHtml)',
+          ctx.log
+        );
       } catch (createError: any) {
         ctx.log('Drive files.create (HTML) error details:', {
           message: createError.message,
@@ -3139,7 +3169,12 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
 
       if (a.tabId) {
         // Tab-scoped path: single atomic batchUpdate so a failed insert can't leave the tab wiped.
-        const document = await docs.documents.get({ documentId: a.documentId, includeTabsContent: true });
+        const document = await withRetry(
+          (signal) => docs.documents.get({ documentId: a.documentId, includeTabsContent: true }, { signal }),
+          ctx.runtimeConfig,
+          'docs.documents.get(updateGoogleDoc.tab)',
+          ctx.log
+        );
         const tabs = (document.data as any).tabs as any[] | undefined;
         const tab = tabs ? findTabById(tabs, a.tabId) : null;
         if (!tab) {
@@ -3169,10 +3204,15 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           }
         });
 
-        await docs.documents.batchUpdate({
-          documentId: a.documentId,
-          requestBody: { requests, ...writeControlFor(a.ifRevisionId) }
-        });
+        await withRetry(
+          (signal) => docs.documents.batchUpdate({
+            documentId: a.documentId,
+            requestBody: { requests, ...writeControlFor(a.ifRevisionId) }
+          }, { signal }),
+          { ...ctx.runtimeConfig, retryMax: 0 },
+          'docs.documents.batchUpdate(updateGoogleDoc.tab)',
+          ctx.log
+        );
 
         return {
           content: [{ type: "text", text: `Updated Google Doc: ${document.data.title} (tab: ${a.tabId})` }],
@@ -3180,7 +3220,12 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         };
       }
 
-      const document = await docs.documents.get({ documentId: a.documentId });
+      const document = await withRetry(
+        (signal) => docs.documents.get({ documentId: a.documentId }, { signal }),
+        ctx.runtimeConfig,
+        'docs.documents.get(updateGoogleDoc)',
+        ctx.log
+      );
 
       // Delete all content
       const endIndex = document.data.body?.content?.[document.data.body.content.length - 1]?.endIndex || 1;
@@ -3210,10 +3255,15 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         }
       });
 
-      await docs.documents.batchUpdate({
-        documentId: a.documentId,
-        requestBody: { requests, ...writeControlFor(a.ifRevisionId) }
-      });
+      await withRetry(
+        (signal) => docs.documents.batchUpdate({
+          documentId: a.documentId,
+          requestBody: { requests, ...writeControlFor(a.ifRevisionId) }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'docs.documents.batchUpdate(updateGoogleDoc.insert)',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Updated Google Doc: ${document.data.title}` }],
@@ -3234,10 +3284,15 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const withFormatting = a.includeFormatting === true;
 
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-      const document = await docs.documents.get({
-        documentId: a.documentId,
-        includeTabsContent: true,
-      });
+      const document = await withRetry(
+        (signal) => docs.documents.get({
+          documentId: a.documentId,
+          includeTabsContent: true,
+        }, { signal }),
+        ctx.runtimeConfig,
+        'docs.documents.get(content)',
+        ctx.log
+      );
 
       const { formattedContent, totalLength } = buildDocFormattedContent(document.data, withFormatting);
 
@@ -3264,10 +3319,15 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const withFormatting = a.includeFormatting === true;
 
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-      const document = await docs.documents.get({
-        documentId: a.documentId,
-        includeTabsContent: true,
-      });
+      const document = await withRetry(
+        (signal) => docs.documents.get({
+          documentId: a.documentId,
+          includeTabsContent: true,
+        }, { signal }),
+        ctx.runtimeConfig,
+        'docs.documents.get(contentPaginated)',
+        ctx.log
+      );
 
       const { formattedContent, totalLength } = buildDocFormattedContent(document.data, withFormatting);
 
@@ -3304,10 +3364,15 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
 
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
       // Re-fetch the doc so the resolved contentUri is fresh (they expire ~30 min).
-      const docResponse = await docs.documents.get({
-        documentId: a.documentId,
-        includeTabsContent: true,
-      });
+      const docResponse = await withRetry(
+        (signal) => docs.documents.get({
+          documentId: a.documentId,
+          includeTabsContent: true,
+        }, { signal }),
+        ctx.runtimeConfig,
+        'docs.documents.get(imageLookup)',
+        ctx.log
+      );
 
       const embedded = findInlineObjectById(docResponse.data, a.inlineObjectId);
       if (!embedded) {
@@ -3336,11 +3401,17 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       // Drive export links elsewhere in this codebase. maxContentLength aborts an
       // oversized body mid-download rather than buffering it all first; the
       // byteLength check below is a backstop for responses lacking Content-Length.
-      const resp = await ctx.authClient.request({
-        url: contentUri,
-        responseType: 'arraybuffer',
-        maxContentLength: MAX_IMAGE_BYTES,
-      });
+      const resp = await withRetry(
+        (signal): Promise<any> => ctx.authClient.request({
+          url: contentUri,
+          responseType: 'arraybuffer',
+          maxContentLength: MAX_IMAGE_BYTES,
+          signal,
+        }),
+        ctx.runtimeConfig,
+        'authClient.request(docImage)',
+        ctx.log
+      );
       const buffer = Buffer.from(resp.data as ArrayBuffer);
 
       if (buffer.byteLength > MAX_IMAGE_BYTES) {
@@ -3386,11 +3457,16 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       let mimeType = '';
       let fileName = 'unknown';
       try {
-        const fileMeta = await ctx.getDrive().files.get({
-          fileId: a.documentId,
-          fields: 'mimeType, name',
-          supportsAllDrives: true
-        });
+        const fileMeta = await withRetry(
+          (signal) => ctx.getDrive().files.get({
+            fileId: a.documentId,
+            fields: 'mimeType, name',
+            supportsAllDrives: true
+          }, { signal }),
+          ctx.runtimeConfig,
+          'drive.files.get(insertText.mimeCheck)',
+          ctx.log
+        );
         mimeType = fileMeta.data.mimeType || '';
         fileName = fileMeta.data.name || 'unknown';
       } catch {
@@ -3430,18 +3506,23 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         if (a.tabId) location.tabId = a.tabId;
 
         const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-        await docs.documents.batchUpdate({
-          documentId: a.documentId,
-          requestBody: {
-            requests: [{
-              insertText: {
-                location,
-                text: a.text
-              }
-            }],
-            ...writeControlFor(a.ifRevisionId)
-          }
-        });
+        await withRetry(
+          (signal) => docs.documents.batchUpdate({
+            documentId: a.documentId,
+            requestBody: {
+              requests: [{
+                insertText: {
+                  location,
+                  text: a.text
+                }
+              }],
+              ...writeControlFor(a.ifRevisionId)
+            }
+          }, { signal }),
+          { ...ctx.runtimeConfig, retryMax: 0 },
+          'docs.documents.batchUpdate(insertText)',
+          ctx.log
+        );
 
         return {
           content: [{ type: "text", text: `Successfully inserted ${a.text.length} characters at index ${index}${targetNote}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
@@ -3496,11 +3577,16 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       let mimeType = '';
       let fileName = 'unknown';
       try {
-        const fileMeta = await ctx.getDrive().files.get({
-          fileId: a.documentId,
-          fields: 'mimeType, name',
-          supportsAllDrives: true
-        });
+        const fileMeta = await withRetry(
+          (signal) => ctx.getDrive().files.get({
+            fileId: a.documentId,
+            fields: 'mimeType, name',
+            supportsAllDrives: true
+          }, { signal }),
+          ctx.runtimeConfig,
+          'drive.files.get(deleteRange.mimeCheck)',
+          ctx.log
+        );
         mimeType = fileMeta.data.mimeType || '';
         fileName = fileMeta.data.name || 'unknown';
       } catch {
@@ -3549,15 +3635,20 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         if (a.tabId) range.tabId = a.tabId;
 
         const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-        await docs.documents.batchUpdate({
-          documentId: a.documentId,
-          requestBody: {
-            requests: [{
-              deleteContentRange: { range }
-            }],
-            ...writeControlFor(a.ifRevisionId)
-          }
-        });
+        await withRetry(
+          (signal) => docs.documents.batchUpdate({
+            documentId: a.documentId,
+            requestBody: {
+              requests: [{
+                deleteContentRange: { range }
+              }],
+              ...writeControlFor(a.ifRevisionId)
+            }
+          }, { signal }),
+          { ...ctx.runtimeConfig, retryMax: 0 },
+          'docs.documents.batchUpdate(deleteRange)',
+          ctx.log
+        );
 
         return {
           content: [{ type: "text", text: `Successfully deleted content from index ${startIndex} to ${endIndex}${targetNote}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
@@ -3612,10 +3703,15 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const a = validation.data;
 
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-      const docResponse = await docs.documents.get({
-        documentId: a.documentId,
-        includeTabsContent: true,
-      });
+      const docResponse = await withRetry(
+        (signal) => docs.documents.get({
+          documentId: a.documentId,
+          includeTabsContent: true,
+        }, { signal }),
+        ctx.runtimeConfig,
+        'docs.documents.get(readGoogleDoc)',
+        ctx.log
+      );
 
       const doc = docResponse.data;
       const format = a.format || 'text';
@@ -3668,10 +3764,15 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const a = validation.data;
 
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-      const docResponse = await docs.documents.get({
-        documentId: a.documentId,
-        includeTabsContent: true,
-      });
+      const docResponse = await withRetry(
+        (signal) => docs.documents.get({
+          documentId: a.documentId,
+          includeTabsContent: true,
+        }, { signal }),
+        ctx.runtimeConfig,
+        'docs.documents.get(readGoogleDocPaginated)',
+        ctx.log
+      );
 
       const doc = docResponse.data;
       const format = a.format || 'text';
@@ -3718,10 +3819,15 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
 
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
       // Use includeTabsContent to get the new tabs structure
-      const docResponse = await docs.documents.get({
-        documentId: a.documentId,
-        includeTabsContent: true
-      });
+      const docResponse = await withRetry(
+        (signal) => docs.documents.get({
+          documentId: a.documentId,
+          includeTabsContent: true
+        }, { signal }),
+        ctx.runtimeConfig,
+        'docs.documents.get(listDocumentTabs)',
+        ctx.log
+      );
 
       const doc = docResponse.data;
 
@@ -3851,13 +3957,18 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
 
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-      await docs.documents.batchUpdate({
-        documentId: a.documentId,
-        requestBody: {
-          requests: [styleResult.request],
-          ...writeControlFor(a.ifRevisionId)
-        }
-      });
+      await withRetry(
+        (signal) => docs.documents.batchUpdate({
+          documentId: a.documentId,
+          requestBody: {
+            requests: [styleResult.request],
+            ...writeControlFor(a.ifRevisionId)
+          }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'docs.documents.batchUpdate(textStyle)',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Successfully applied text style to range ${startIndex}-${endIndex}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
@@ -3963,13 +4074,18 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
 
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-      await docs.documents.batchUpdate({
-        documentId: a.documentId,
-        requestBody: {
-          requests: [styleResult.request],
-          ...writeControlFor(a.ifRevisionId)
-        }
-      });
+      await withRetry(
+        (signal) => docs.documents.batchUpdate({
+          documentId: a.documentId,
+          requestBody: {
+            requests: [styleResult.request],
+            ...writeControlFor(a.ifRevisionId)
+          }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'docs.documents.batchUpdate(paragraphStyle)',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Successfully applied paragraph style to range ${startIndex}-${endIndex}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
@@ -4016,33 +4132,43 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
 
       if (a.bulletPreset === 'NONE') {
-        await docs.documents.batchUpdate({
-          documentId: a.documentId,
-          requestBody: {
-            requests: [{
-              deleteParagraphBullets: { range }
-            }],
-            ...writeControlFor(a.ifRevisionId)
-          }
-        });
+        await withRetry(
+          (signal) => docs.documents.batchUpdate({
+            documentId: a.documentId,
+            requestBody: {
+              requests: [{
+                deleteParagraphBullets: { range }
+              }],
+              ...writeControlFor(a.ifRevisionId)
+            }
+          }, { signal }),
+          { ...ctx.runtimeConfig, retryMax: 0 },
+          'docs.documents.batchUpdate(deleteParagraphBullets)',
+          ctx.log
+        );
         return {
           content: [{ type: "text", text: `Removed bullets from range ${startIndex}-${endIndex}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
           isError: false
         };
       }
 
-      await docs.documents.batchUpdate({
-        documentId: a.documentId,
-        requestBody: {
-          requests: [{
-            createParagraphBullets: {
-              range,
-              bulletPreset: a.bulletPreset
-            }
-          }],
-          ...writeControlFor(a.ifRevisionId)
-        }
-      });
+      await withRetry(
+        (signal) => docs.documents.batchUpdate({
+          documentId: a.documentId,
+          requestBody: {
+            requests: [{
+              createParagraphBullets: {
+                range,
+                bulletPreset: a.bulletPreset
+              }
+            }],
+            ...writeControlFor(a.ifRevisionId)
+          }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'docs.documents.batchUpdate(createParagraphBullets)',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Applied ${a.bulletPreset} bullets to range ${startIndex}-${endIndex}${a.tabId ? ` in tab ${a.tabId}` : ''}` }],
@@ -4060,7 +4186,12 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
 
       if (a.dryRun) {
-        const doc = await docs.documents.get({ documentId: a.documentId, includeTabsContent: true });
+        const doc = await withRetry(
+          (signal) => docs.documents.get({ documentId: a.documentId, includeTabsContent: true }, { signal }),
+          ctx.runtimeConfig,
+          'docs.documents.get(findAndReplaceDryRun)',
+          ctx.log
+        );
         const text = collectDocPlainText(doc.data, a.tabId);
         const count = countOccurrences(text, a.findText, a.matchCase);
         let message = `Dry run: found ${count} occurrence(s) of "${a.findText}"${a.tabId ? ` in tab ${a.tabId}` : ''} (counted across body, tables, headers, footers, and footnotes).`;
@@ -4085,8 +4216,12 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
             'Multi-line findText is not supported: matches cannot span paragraph breaks. Use a single-line findText (the replacement may contain \\n).',
           );
         }
-        const doc = await docs.documents.get({ documentId: a.documentId, includeTabsContent: true });
-        const text = collectDocPlainText(doc.data, a.tabId);
+        const doc = await withRetry(
+          (signal) => docs.documents.get({ documentId: a.documentId, includeTabsContent: true }, { signal }),
+          ctx.runtimeConfig,
+          'docs.documents.get(findAndReplaceInDoc.multiline)',
+          ctx.log
+        );        const text = collectDocPlainText(doc.data, a.tabId);
         const plainCount = countOccurrences(text, a.findText, a.matchCase);
         const ranges = findOccurrenceRanges(doc.data, a.findText, a.matchCase, a.tabId);
         if (ranges.length === 0) {
@@ -4114,13 +4249,18 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         // actually carried a lock.
         const lock = a.ifRevisionId ?? (doc.data.revisionId || undefined);
         try {
-          await docs.documents.batchUpdate({
-            documentId: a.documentId,
-            requestBody: {
-              requests: requests as any[],
-              ...writeControlFor(lock),
-            },
-          });
+          await withRetry(
+            (signal) => docs.documents.batchUpdate({
+              documentId: a.documentId,
+              requestBody: {
+                requests: requests as any[],
+                ...writeControlFor(lock),
+              },
+            }, { signal }),
+            { ...ctx.runtimeConfig, retryMax: 0 },
+            'docs.documents.batchUpdate(findAndReplaceInDoc.multiline)',
+            ctx.log
+          );
         } catch (error: any) {
           ctx.log('Error in multi-line findAndReplaceInDoc batch:', error.message);
           // A 400 on a locked write is the lock failing: these requests were
@@ -4153,8 +4293,12 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       // write on a mismatch (substring collisions become a refused call, not a
       // revert). The count walks the same text surface replaceAllText targets.
       if (a.expectedCount !== undefined) {
-        const doc = await docs.documents.get({ documentId: a.documentId, includeTabsContent: true });
-        const text = collectDocPlainText(doc.data, a.tabId);
+        const doc = await withRetry(
+          (signal) => docs.documents.get({ documentId: a.documentId, includeTabsContent: true }, { signal }),
+          ctx.runtimeConfig,
+          'docs.documents.get(findAndReplaceInDoc.expectedCount)',
+          ctx.log
+        );        const text = collectDocPlainText(doc.data, a.tabId);
         const preCount = countOccurrences(text, a.findText, a.matchCase);
         if (preCount !== a.expectedCount) {
           let message = `Aborted without writing: expectedCount=${a.expectedCount} but found ${preCount} occurrence(s) of "${a.findText}"${a.tabId ? ` in tab ${a.tabId}` : ''}.`;
@@ -4178,13 +4322,18 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       };
       if (a.tabId) replaceAllText.tabsCriteria = { tabIds: [a.tabId] };
 
-      const response = await docs.documents.batchUpdate({
-        documentId: a.documentId,
-        requestBody: {
-          requests: [{ replaceAllText }],
-          ...writeControlFor(a.ifRevisionId),
-        },
-      });
+      const response = await withRetry(
+        (signal) => docs.documents.batchUpdate({
+          documentId: a.documentId,
+          requestBody: {
+            requests: [{ replaceAllText }],
+            ...writeControlFor(a.ifRevisionId),
+          },
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'docs.documents.batchUpdate(replaceAllText)',
+        ctx.log
+      );
 
       const occurrences = response.data.replies?.[0]?.replaceAllText?.occurrencesChanged ?? 0;
       let message = `Replaced ${occurrences} occurrence(s) of "${a.findText}"${a.tabId ? ` in tab ${a.tabId}` : ''}.`;
@@ -4192,8 +4341,12 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         // A zero-match silent no-op has repeatedly hidden lookalike-character
         // problems; spend one read explaining why nothing matched.
         try {
-          const doc = await docs.documents.get({ documentId: a.documentId, includeTabsContent: true });
-          const hint = diagnoseZeroMatch(collectDocPlainText(doc.data, a.tabId), a.findText, a.matchCase);
+          const doc = await withRetry(
+            (signal) => docs.documents.get({ documentId: a.documentId, includeTabsContent: true }, { signal }),
+            ctx.runtimeConfig,
+            'docs.documents.get(findAndReplaceInDoc.diagnose)',
+            ctx.log
+          );          const hint = diagnoseZeroMatch(collectDocPlainText(doc.data, a.tabId), a.findText, a.matchCase);
           if (hint) message += `\nLikely cause: ${hint}.`;
         } catch {
           // diagnosis is best-effort; the zero count already stands on its own
@@ -4218,13 +4371,18 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
       const a = validation.data;
 
-      const response = await ctx.getDrive().comments.list({
-        fileId: a.documentId,
-        fields: 'comments(id,content,quotedFileContent,author,createdTime,resolved,replies(id,content,author,createdTime)),nextPageToken',
-        pageSize: a.pageSize || 100,
-        pageToken: a.pageToken,
-        includeDeleted: a.includeDeleted || false,
-      });
+      const response = await withRetry(
+        (signal) => ctx.getDrive().comments.list({
+          fileId: a.documentId,
+          fields: 'comments(id,content,quotedFileContent,author,createdTime,resolved,replies(id,content,author,createdTime)),nextPageToken',
+          pageSize: a.pageSize || 100,
+          pageToken: a.pageToken,
+          includeDeleted: a.includeDeleted || false,
+        }, { signal }),
+        ctx.runtimeConfig,
+        'drive.comments.list',
+        ctx.log
+      );
 
       const comments = response.data.comments || [];
       const nextPageToken = response.data.nextPageToken;
@@ -4250,11 +4408,16 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       let needsDocxFallback = false;
       let isGoogleDoc = false;
       try {
-        const fileInfo = await ctx.getDrive().files.get({
-          fileId: a.documentId,
-          fields: 'mimeType',
-          supportsAllDrives: true,
-        });
+        const fileInfo = await withRetry(
+          (signal) => ctx.getDrive().files.get({
+            fileId: a.documentId,
+            fields: 'mimeType',
+            supportsAllDrives: true,
+          }, { signal }),
+          ctx.runtimeConfig,
+          'drive.files.get(listComments.mimeCheck)',
+          ctx.log
+        );
         isGoogleDoc = fileInfo.data.mimeType === 'application/vnd.google-apps.document';
       } catch (err) {
         ctx.log('Failed to check file MIME type:', err);
@@ -4263,10 +4426,15 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       if (isGoogleDoc) {
         try {
           const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-          const docResponse = await docs.documents.get({
-            documentId: a.documentId,
-            includeTabsContent: true,
-          });
+          const docResponse = await withRetry(
+            (signal) => docs.documents.get({
+              documentId: a.documentId,
+              includeTabsContent: true,
+            }, { signal }),
+            ctx.runtimeConfig,
+            'docs.documents.get(listComments.tier1)',
+            ctx.log
+          );
 
           const result = buildFlatTextFromDoc(docResponse.data);
           flatText = result.flatText;
@@ -4334,10 +4502,15 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
 
         if (unresolved.length > 0) {
           try {
-            const docxResponse = await ctx.getDrive().files.export({
-              fileId: a.documentId,
-              mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            }, { responseType: 'arraybuffer' });
+            const docxResponse = await withRetry(
+              (signal) => ctx.getDrive().files.export({
+                fileId: a.documentId,
+                mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+              }, { responseType: 'arraybuffer', signal }),
+              ctx.runtimeConfig,
+              'drive.files.export(listComments.tier2)',
+              ctx.log
+            );
 
             const docxResult = await resolveContextFromDocx(docxResponse.data as ArrayBuffer);
             if (docxResult) {
@@ -4403,11 +4576,16 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
       const a = validation.data;
 
-      const response = await ctx.getDrive().comments.get({
-        fileId: a.documentId,
-        commentId: a.commentId,
-        fields: 'id,content,quotedFileContent,author,createdTime,resolved,replies(id,content,author,createdTime)'
-      });
+      const response = await withRetry(
+        (signal) => ctx.getDrive().comments.get({
+          fileId: a.documentId,
+          commentId: a.commentId,
+          fields: 'id,content,quotedFileContent,author,createdTime,resolved,replies(id,content,author,createdTime)'
+        }, { signal }),
+        ctx.runtimeConfig,
+        'drive.comments.get',
+        ctx.log
+      );
 
       const comment = response.data;
       const author = comment.author?.displayName || 'Unknown';
@@ -4453,7 +4631,12 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         }
         content = resolved.content!;
       } else {
-        const doc = await docs.documents.get({ documentId: a.documentId });
+        const doc = await withRetry(
+          (signal) => docs.documents.get({ documentId: a.documentId }, { signal }),
+          ctx.runtimeConfig,
+          'docs.documents.get(addComment)',
+          ctx.log
+        );
         content = doc.data.body?.content || [];
       }
 
@@ -4503,17 +4686,22 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       // comment reads as if the passage it refers to had been removed.
       // quotedFileContent is what ties the comment to its passage, and is what
       // listComments matches on to report character positions.
-      const response = await ctx.getDrive().comments.create({
-        fileId: a.documentId,
-        fields: 'id,content,quotedFileContent,author,createdTime',
-        requestBody: {
-          content: a.commentText,
-          quotedFileContent: {
-            value: quotedText,
-            mimeType: 'text/plain'
+      const response = await withRetry(
+        (signal) => ctx.getDrive().comments.create({
+          fileId: a.documentId,
+          fields: 'id,content,quotedFileContent,author,createdTime',
+          requestBody: {
+            content: a.commentText,
+            quotedFileContent: {
+              value: quotedText,
+              mimeType: 'text/plain'
+            }
           }
-        }
-      });
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'drive.comments.create',
+        ctx.log
+      );
 
       const snippet = quotedText.length > 60 ? `${quotedText.slice(0, 60)}...` : quotedText;
       return {
@@ -4529,15 +4717,20 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
       const a = validation.data;
 
-      const response = await ctx.getDrive().replies.create({
-        fileId: a.documentId,
-        commentId: a.commentId,
-        fields: 'id,content,author,createdTime',
-        requestBody: {
-          content: a.replyText,
-          ...(a.resolve && { action: "resolve" })
-        }
-      });
+      const response = await withRetry(
+        (signal) => ctx.getDrive().replies.create({
+          fileId: a.documentId,
+          commentId: a.commentId,
+          fields: 'id,content,author,createdTime',
+          requestBody: {
+            content: a.replyText,
+            ...(a.resolve && { action: "resolve" })
+          }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'drive.replies.create',
+        ctx.log
+      );
 
       const resolveNote = a.resolve ? ' Comment thread resolved.' : '';
       return {
@@ -4553,10 +4746,15 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
       const a = validation.data;
 
-      await ctx.getDrive().comments.delete({
-        fileId: a.documentId,
-        commentId: a.commentId
-      });
+      await withRetry(
+        (signal) => ctx.getDrive().comments.delete({
+          fileId: a.documentId,
+          commentId: a.commentId
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'drive.comments.delete',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Comment ${a.commentId} has been deleted.` }],
@@ -4615,10 +4813,15 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         }
         docContent = resolved.content;
       } else {
-        const docRes = await docs.documents.get({
-          documentId: a.documentId,
-          fields: 'body(content)'
-        });
+        const docRes = await withRetry(
+          (signal) => docs.documents.get({
+            documentId: a.documentId,
+            fields: 'body(content)'
+          }, { signal }),
+          ctx.runtimeConfig,
+          'docs.documents.get(editTableCell)',
+          ctx.log
+        );
         docContent = docRes.data.body?.content ?? undefined;
       }
 
@@ -4785,11 +4988,16 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       // Get the document's parent folder if uploadToSameFolder is true
       let parentFolderId: string | undefined;
       if (a.uploadToSameFolder !== false) {
-        const fileInfo = await ctx.getDrive().files.get({
-          fileId: a.documentId,
-          fields: 'parents',
-          supportsAllDrives: true
-        });
+        const fileInfo = await withRetry(
+          (signal) => ctx.getDrive().files.get({
+            fileId: a.documentId,
+            fields: 'parents',
+            supportsAllDrives: true
+          }, { signal }),
+          ctx.runtimeConfig,
+          'drive.files.get(insertLocalImage.parent)',
+          ctx.log
+        );
         parentFolderId = fileInfo.data.parents?.[0];
       }
 
@@ -4826,13 +5034,18 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         queryString += ` and (name contains '${escapedQuery}' or fullText contains '${escapedQuery}')`;
       }
 
-      const response = await ctx.getDrive().files.list({
-        q: queryString,
-        pageSize: a.maxResults,
-        orderBy: a.orderBy,
-        fields: 'files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress))',
-        ...ALL_DRIVES_LIST_PARAMS
-      });
+      const response = await withRetry(
+        (signal) => ctx.getDrive().files.list({
+          q: queryString,
+          pageSize: a.maxResults,
+          orderBy: a.orderBy,
+          fields: 'files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress))',
+          ...ALL_DRIVES_LIST_PARAMS
+        }, { signal }),
+        ctx.runtimeConfig,
+        'drive.files.list(listGoogleDocs)',
+        ctx.log
+      );
 
       const files = response.data.files || [];
 
@@ -4862,11 +5075,16 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       }
       const a = validation.data;
 
-      const response = await ctx.getDrive().files.get({
-        fileId: a.documentId,
-        fields: 'id,name,description,mimeType,size,createdTime,modifiedTime,webViewLink,owners(displayName,emailAddress),lastModifyingUser(displayName,emailAddress),shared,parents,version',
-        supportsAllDrives: true,
-      });
+      const response = await withRetry(
+        (signal) => ctx.getDrive().files.get({
+          fileId: a.documentId,
+          fields: 'id,name,description,mimeType,size,createdTime,modifiedTime,webViewLink,owners(displayName,emailAddress),lastModifyingUser(displayName,emailAddress),shared,parents,version',
+          supportsAllDrives: true,
+        }, { signal }),
+        ctx.runtimeConfig,
+        'drive.files.get(getDocumentInfo)',
+        ctx.log
+      );
 
       const file = response.data;
 
@@ -4925,8 +5143,12 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const a = validation.data;
 
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-      const doc = await docs.documents.get({ documentId: a.documentId, includeTabsContent: true });
-
+      const doc = await withRetry(
+        (signal) => docs.documents.get({ documentId: a.documentId, includeTabsContent: true }, { signal }),
+        ctx.runtimeConfig,
+        'docs.documents.get(styleSummary)',
+        ctx.log
+      );
       const resolved = resolveBodySegments(doc.data, a.tabId);
       if ('error' in resolved) return errorResponse(resolved.error);
 
@@ -4948,8 +5170,12 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const a = validation.data;
 
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-      const doc = await docs.documents.get({ documentId: a.documentId, includeTabsContent: true });
-
+      const doc = await withRetry(
+        (signal) => docs.documents.get({ documentId: a.documentId, includeTabsContent: true }, { signal }),
+        ctx.runtimeConfig,
+        'docs.documents.get(describeRange)',
+        ctx.log
+      );
       // Default to the first tab: every other index-taking Docs tool does, and
       // describing all of them at once would report overlapping ranges.
       const resolved = resolveBodySegments(doc.data, a.tabId);
@@ -4989,11 +5215,16 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const a = validation.data;
 
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-      await docs.documents.batchUpdate({
-        documentId: a.documentId,
-        // addDocumentTab is not yet in the googleapis TypeScript types — cast required
-        requestBody: { requests: [{ addDocumentTab: { tabProperties: { title: a.title } } } as any] }
-      });
+      await withRetry(
+        (signal) => docs.documents.batchUpdate({
+          documentId: a.documentId,
+          // addDocumentTab is not yet in the googleapis TypeScript types — cast required
+          requestBody: { requests: [{ addDocumentTab: { tabProperties: { title: a.title } } } as any] }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'docs.documents.batchUpdate(addDocumentTab)',
+        ctx.log
+      );
 
       return { content: [{ type: 'text', text: `Requested creation of tab "${a.title}" in document ${a.documentId}.` }], isError: false };
     }
@@ -5004,13 +5235,18 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const a = validation.data;
 
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-      await docs.documents.batchUpdate({
-        documentId: a.documentId,
-        // updateDocumentTabProperties is not yet in the googleapis TypeScript types — cast required.
-        // Per Google Docs API spec: tabId lives INSIDE tabProperties (it's the tab identifier),
-        // and `fields` is a FieldMask for which properties to update (excludes tabId).
-        requestBody: { requests: [{ updateDocumentTabProperties: { tabProperties: { tabId: a.tabId, title: a.title }, fields: 'title' } } as any] }
-      });
+      await withRetry(
+        (signal) => docs.documents.batchUpdate({
+          documentId: a.documentId,
+          // updateDocumentTabProperties is not yet in the googleapis TypeScript types — cast required.
+          // Per Google Docs API spec: tabId lives INSIDE tabProperties (it's the tab identifier),
+          // and `fields` is a FieldMask for which properties to update (excludes tabId).
+          requestBody: { requests: [{ updateDocumentTabProperties: { tabProperties: { tabId: a.tabId, title: a.title }, fields: 'title' } } as any] }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'docs.documents.batchUpdate(renameDocumentTab)',
+        ctx.log
+      );
 
       return { content: [{ type: 'text', text: `Renamed tab ${a.tabId} to "${a.title}".` }], isError: false };
     }
@@ -5023,19 +5259,24 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       // tabId passed through unvalidated by design (see insertTable): no GET on
       // this pure batchUpdate path, so a bad tabId yields the raw Google error.
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-      await docs.documents.batchUpdate({
-        documentId: a.documentId,
-        requestBody: {
-          requests: [{
-            insertPerson: {
-              personProperties: { email: a.personEmail },
-              location: withTab({ index: a.index }, a.tabId),
-            },
-          // insertPerson is not yet in the googleapis TypeScript types — cast required
-          } as any],
-          ...writeControlFor(a.ifRevisionId),
-        },
-      });
+      await withRetry(
+        (signal) => docs.documents.batchUpdate({
+          documentId: a.documentId,
+          requestBody: {
+            requests: [{
+              insertPerson: {
+                personProperties: { email: a.personEmail },
+                location: withTab({ index: a.index }, a.tabId),
+              },
+            // insertPerson is not yet in the googleapis TypeScript types — cast required
+            } as any],
+            ...writeControlFor(a.ifRevisionId),
+          },
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'docs.documents.batchUpdate(insertSmartChip)',
+        ctx.log
+      );
 
       return { content: [{ type: 'text', text: `Inserted person smart chip for ${a.personEmail} at index ${a.index}${a.tabId ? ` in tab ${a.tabId}` : ''}.` }], isError: false };
     }
@@ -5046,7 +5287,12 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       const a = validation.data;
 
       const docs = ctx.google.docs({ version: 'v1', auth: ctx.authClient });
-      const doc = await docs.documents.get({ documentId: a.documentId });
+      const doc = await withRetry(
+        (signal) => docs.documents.get({ documentId: a.documentId }, { signal }),
+        ctx.runtimeConfig,
+        'docs.documents.get(readSmartChips)',
+        ctx.log
+      );
       const body = (doc.data as any).body?.content || [];
       const hits: string[] = [];
       for (const block of body) {
@@ -5079,16 +5325,21 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
         createFootnoteReq.endOfSegmentLocation = withTab({ segmentId: "" }, a.tabId);
       }
 
-      const res = await docs.documents.batchUpdate({
-        documentId: a.documentId,
-        requestBody: {
-          requests: [{ createFootnote: createFootnoteReq }],
-          // Lock only this creating call: the optional content insert below
-          // targets the new footnote segment, whose revision necessarily
-          // postdates the caller's read.
-          ...writeControlFor(a.ifRevisionId),
-        },
-      });
+      const res = await withRetry(
+        (signal) => docs.documents.batchUpdate({
+          documentId: a.documentId,
+          requestBody: {
+            requests: [{ createFootnote: createFootnoteReq }],
+            // Lock only this creating call: the optional content insert below
+            // targets the new footnote segment, whose revision necessarily
+            // postdates the caller's read.
+            ...writeControlFor(a.ifRevisionId),
+          },
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'docs.documents.batchUpdate(createFootnote)',
+        ctx.log
+      );
 
       const footnoteId = res.data.replies?.[0]?.createFootnote?.footnoteId;
       if (!footnoteId) {
@@ -5100,17 +5351,22 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       // Optionally insert text content into the footnote body
       if (a.content) {
         try {
-          await docs.documents.batchUpdate({
-            documentId: a.documentId,
-            requestBody: {
-              requests: [{
-                insertText: {
-                  location: withTab({ segmentId: footnoteId, index: 0 }, a.tabId),
-                  text: a.content,
-                },
-              }],
-            },
-          });
+          await withRetry(
+            (signal) => docs.documents.batchUpdate({
+              documentId: a.documentId,
+              requestBody: {
+                requests: [{
+                  insertText: {
+                    location: withTab({ segmentId: footnoteId, index: 0 }, a.tabId),
+                    text: a.content,
+                  },
+                }],
+              },
+            }, { signal }),
+            { ...ctx.runtimeConfig, retryMax: 0 },
+            'docs.documents.batchUpdate(footnoteContent)',
+            ctx.log
+          );
         } catch (err: any) {
           return { content: [{ type: 'text', text: `Created footnote ${footnoteId} ${locationDesc}, but failed to insert content: ${err.message}` }], isError: true };
         }

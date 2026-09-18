@@ -4105,16 +4105,26 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           };
         }
         const requests = buildMultilineReplaceRequests(ranges, a.replaceText);
-        await docs.documents.batchUpdate({
-          documentId: a.documentId,
-          // Lock the batch to the revision the ranges were located against:
-          // the compiled indices are only valid for that revision. An explicit
-          // ifRevisionId wins, so a caller's older read still guards the write.
-          requestBody: {
-            requests: requests as any[],
-            ...writeControlFor(a.ifRevisionId ?? (doc.data.revisionId || undefined)),
-          },
-        });
+        try {
+          await docs.documents.batchUpdate({
+            documentId: a.documentId,
+            // Lock the batch to the revision the ranges were located against:
+            // the compiled indices are only valid for that revision. An explicit
+            // ifRevisionId wins, so a caller's older read still guards the write.
+            requestBody: {
+              requests: requests as any[],
+              ...writeControlFor(a.ifRevisionId ?? (doc.data.revisionId || undefined)),
+            },
+          });
+        } catch (error: any) {
+          ctx.log('Error in multi-line findAndReplaceInDoc batch:', error.message);
+          if ((error.status ?? error.code) === 400 && /revision/i.test(error.message)) {
+            throw new Error(
+              'The document changed between the read and the write (revision mismatch). Re-read the document and retry.',
+            );
+          }
+          throw error;
+        }
         return {
           content: [{
             type: 'text',

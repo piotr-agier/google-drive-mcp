@@ -1729,6 +1729,54 @@ describe('Docs tools', () => {
       assert.deepEqual(calls[calls.length - 1]?.args?.[0]?.requestBody.writeControl, { requiredRevisionId: 'rev-caller' });
     });
 
+    it('sends no writeControl when the locating read has no revisionId', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-no-rev', title: 'My Doc',
+          body: {
+            content: [{
+              paragraph: { elements: [{ startIndex: 1, textRun: { content: 'Hello World\n' } }] },
+            }],
+          },
+        },
+      }));
+
+      await callTool(ctx.client, 'findAndReplaceInDoc', {
+        documentId: 'doc-no-rev', findText: 'World', replaceText: 'a\nb',
+      });
+      const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
+      const writeControl = calls[calls.length - 1]?.args?.[0]?.requestBody.writeControl;
+      assert.equal(writeControl, undefined, 'no revisionId to lock against means no writeControl at all, not { requiredRevisionId: undefined }');
+    });
+
+    it('maps a stale-revision batchUpdate failure to a message telling the caller to re-read and retry', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId: 'doc-stale', title: 'My Doc', revisionId: 'rev-9',
+          body: {
+            content: [{
+              paragraph: { elements: [{ startIndex: 1, textRun: { content: 'Hello World\n' } }] },
+            }],
+          },
+        },
+      }));
+      ctx.mocks.docs.service.documents.batchUpdate._setImpl(async () => {
+        throw Object.assign(
+          new Error("The provided revision doesn't match the document's current revision."),
+          { status: 400 },
+        );
+      });
+
+      const res = await callTool(ctx.client, 'findAndReplaceInDoc', {
+        documentId: 'doc-stale', findText: 'World', replaceText: 'a\nb',
+      });
+      assert.equal(res.isError, true);
+      assert.match(res.content[0].text!, /document changed between the read and the write/);
+      assert.match(res.content[0].text!, /[Rr]e-read the document and retry/);
+
+      ctx.mocks.docs.service.documents.batchUpdate._resetImpl();
+    });
+
     it('refuses a multi-line findText rather than silently mismatching', async () => {
       const res = await callTool(ctx.client, 'findAndReplaceInDoc', {
         documentId: 'doc-1', findText: 'a\nb', replaceText: 'x\ny',

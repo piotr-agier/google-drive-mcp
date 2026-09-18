@@ -4,6 +4,7 @@ import type { slides_v1 } from 'googleapis';
 import type { ToolDefinition, ToolResult, ToolContext } from '../types.js';
 import { errorResponse } from '../types.js';
 import { uploadImageToDrive, deleteDriveFile } from '../utils/driveImageUpload.js';
+import { withRetry } from '../utils/retry.js';
 
 // ---------------------------------------------------------------------------
 // Zod Schemas
@@ -230,14 +231,19 @@ async function insertImageIntoSlide(
     };
   }
 
-  await slidesService.presentations.batchUpdate({
-    presentationId,
-    requestBody: {
-      requests: [{
-        createImage: { objectId, url: imageUrl, elementProperties },
-      }],
-    },
-  });
+  await withRetry(
+    (signal) => slidesService.presentations.batchUpdate({
+      presentationId,
+      requestBody: {
+        requests: [{
+          createImage: { objectId, url: imageUrl, elementProperties },
+        }],
+      },
+    }, { signal }),
+    { ...ctx.runtimeConfig, retryMax: 0 },
+    'slides.presentations.batchUpdate(createImage)',
+    ctx.log
+  );
 
   return {
     content: [{ type: 'text', text: `Inserted image into slide ${pageObjectId} (objectId: ${objectId})` }],
@@ -751,35 +757,55 @@ export async function handleTool(
       }
 
       const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
-      const presentation = await slidesService.presentations.create({
-        requestBody: { title: a.name },
-      });
+      const presentation = await withRetry(
+        (signal) => slidesService.presentations.create({
+          requestBody: { title: a.name },
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'slides.presentations.create',
+        ctx.log
+      );
 
-      await ctx.getDrive().files.update({
-        fileId: presentation.data.presentationId!,
-        addParents: parentFolderId,
-        removeParents: 'root',
-        supportsAllDrives: true
-      });
+      await withRetry(
+        (signal) => ctx.getDrive().files.update({
+          fileId: presentation.data.presentationId!,
+          addParents: parentFolderId,
+          removeParents: 'root',
+          supportsAllDrives: true
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'drive.files.update(reparent)',
+        ctx.log
+      );
 
       for (const slide of a.slides) {
         const slideObjectId = `slide_${uuidv4().substring(0, 8)}`;
-        await slidesService.presentations.batchUpdate({
-          presentationId: presentation.data.presentationId!,
-          requestBody: {
-            requests: [{
-              createSlide: {
-                objectId: slideObjectId,
-                slideLayoutReference: { predefinedLayout: 'TITLE_AND_BODY' },
-              }
-            }]
-          },
-        });
+        await withRetry(
+          (signal) => slidesService.presentations.batchUpdate({
+            presentationId: presentation.data.presentationId!,
+            requestBody: {
+              requests: [{
+                createSlide: {
+                  objectId: slideObjectId,
+                  slideLayoutReference: { predefinedLayout: 'TITLE_AND_BODY' },
+                }
+              }]
+            },
+          }, { signal }),
+          { ...ctx.runtimeConfig, retryMax: 0 },
+          'slides.presentations.batchUpdate(createSlide)',
+          ctx.log
+        );
 
-        const slidePage = await slidesService.presentations.pages.get({
-          presentationId: presentation.data.presentationId!,
-          pageObjectId: slideObjectId,
-        });
+        const slidePage = await withRetry(
+          (signal) => slidesService.presentations.pages.get({
+            presentationId: presentation.data.presentationId!,
+            pageObjectId: slideObjectId,
+          }, { signal }),
+          ctx.runtimeConfig,
+          'slides.presentations.pages.get',
+          ctx.log
+        );
 
         let titlePlaceholderId = '';
         let bodyPlaceholderId = '';
@@ -791,15 +817,20 @@ export async function handleTool(
           }
         });
 
-        await slidesService.presentations.batchUpdate({
-          presentationId: presentation.data.presentationId!,
-          requestBody: {
-            requests: [
-              { insertText: { objectId: titlePlaceholderId, text: slide.title, insertionIndex: 0 } },
-              { insertText: { objectId: bodyPlaceholderId, text: slide.content, insertionIndex: 0 } }
-            ]
-          },
-        });
+        await withRetry(
+          (signal) => slidesService.presentations.batchUpdate({
+            presentationId: presentation.data.presentationId!,
+            requestBody: {
+              requests: [
+                { insertText: { objectId: titlePlaceholderId, text: slide.title, insertionIndex: 0 } },
+                { insertText: { objectId: bodyPlaceholderId, text: slide.content, insertionIndex: 0 } }
+              ]
+            },
+          }, { signal }),
+          { ...ctx.runtimeConfig, retryMax: 0 },
+          'slides.presentations.batchUpdate(insertText)',
+          ctx.log
+        );
       }
 
       return {
@@ -821,9 +852,14 @@ export async function handleTool(
       const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
 
       // Get current presentation details
-      const currentPresentation = await slidesService.presentations.get({
-        presentationId: a.presentationId
-      });
+      const currentPresentation = await withRetry(
+        (signal) => slidesService.presentations.get({
+          presentationId: a.presentationId
+        }, { signal }),
+        ctx.runtimeConfig,
+        'slides.presentations.get',
+        ctx.log
+      );
 
       if (!currentPresentation.data.slides) {
         return errorResponse("No slides found in presentation");
@@ -922,19 +958,29 @@ export async function handleTool(
       }
 
       // Execute the batch update
-      await slidesService.presentations.batchUpdate({
-        presentationId: a.presentationId,
-        requestBody: { requests }
-      });
+      await withRetry(
+        (signal) => slidesService.presentations.batchUpdate({
+          presentationId: a.presentationId,
+          requestBody: { requests }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'slides.presentations.batchUpdate(rebuildSlides)',
+        ctx.log
+      );
 
       // If we have additional slides, add their content
       if (a.slides.length > 1) {
         const contentRequests: any[] = [];
 
         // Get updated presentation to find the new slide IDs
-        const updatedPresentation = await slidesService.presentations.get({
-          presentationId: a.presentationId
-        });
+        const updatedPresentation = await withRetry(
+          (signal) => slidesService.presentations.get({
+            presentationId: a.presentationId
+          }, { signal }),
+          ctx.runtimeConfig,
+          'slides.presentations.get',
+          ctx.log
+        );
 
         // Add content to the new slides (starting from the second slide in our args)
         for (let i = 1; i < a.slides.length && updatedPresentation.data.slides; i++) {
@@ -967,10 +1013,15 @@ export async function handleTool(
         }
 
         if (contentRequests.length > 0) {
-          await slidesService.presentations.batchUpdate({
-            presentationId: a.presentationId,
-            requestBody: { requests: contentRequests }
-          });
+          await withRetry(
+            (signal) => slidesService.presentations.batchUpdate({
+              presentationId: a.presentationId,
+              requestBody: { requests: contentRequests }
+            }, { signal }),
+            { ...ctx.runtimeConfig, retryMax: 0 },
+            'slides.presentations.batchUpdate(newSlideContent)',
+            ctx.log
+          );
         }
       }
 
@@ -991,9 +1042,14 @@ export async function handleTool(
       const a = validation.data;
 
       const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
-      const presentation = await slidesService.presentations.get({
-        presentationId: a.presentationId
-      });
+      const presentation = await withRetry(
+        (signal) => slidesService.presentations.get({
+          presentationId: a.presentationId
+        }, { signal }),
+        ctx.runtimeConfig,
+        'slides.presentations.get',
+        ctx.log
+      );
 
       if (!presentation.data.slides) {
         return errorResponse("No slides found in presentation");
@@ -1123,10 +1179,15 @@ export async function handleTool(
         updateRequest.updateTextStyle.textRange = { type: 'ALL' };
       }
 
-      await slidesService.presentations.batchUpdate({
-        presentationId: a.presentationId,
-        requestBody: { requests: [updateRequest] }
-      });
+      await withRetry(
+        (signal) => slidesService.presentations.batchUpdate({
+          presentationId: a.presentationId,
+          requestBody: { requests: [updateRequest] }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'slides.presentations.batchUpdate(updateTextStyle)',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Applied text formatting to object ${a.objectId}` }],
@@ -1192,10 +1253,15 @@ export async function handleTool(
         return errorResponse("No formatting options specified");
       }
 
-      await slidesService.presentations.batchUpdate({
-        presentationId: a.presentationId,
-        requestBody: { requests }
-      });
+      await withRetry(
+        (signal) => slidesService.presentations.batchUpdate({
+          presentationId: a.presentationId,
+          requestBody: { requests }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'slides.presentations.batchUpdate(updateParagraphStyle)',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Applied paragraph formatting to object ${a.objectId}` }],
@@ -1270,18 +1336,23 @@ export async function handleTool(
         return errorResponse("No styling options specified");
       }
 
-      await slidesService.presentations.batchUpdate({
-        presentationId: a.presentationId,
-        requestBody: {
-          requests: [{
-            updateShapeProperties: {
-              objectId: a.objectId,
-              shapeProperties,
-              fields: fields.join(',')
-            }
-          }]
-        }
-      });
+      await withRetry(
+        (signal) => slidesService.presentations.batchUpdate({
+          presentationId: a.presentationId,
+          requestBody: {
+            requests: [{
+              updateShapeProperties: {
+                objectId: a.objectId,
+                shapeProperties,
+                fields: fields.join(',')
+              }
+            }]
+          }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'slides.presentations.batchUpdate(updateShapeProperties)',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Applied styling to shape ${a.objectId}` }],
@@ -1318,10 +1389,15 @@ export async function handleTool(
         }
       }));
 
-      await slidesService.presentations.batchUpdate({
-        presentationId: a.presentationId,
-        requestBody: { requests }
-      });
+      await withRetry(
+        (signal) => slidesService.presentations.batchUpdate({
+          presentationId: a.presentationId,
+          requestBody: { requests }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'slides.presentations.batchUpdate(updatePageProperties)',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Set background color for ${a.pageObjectIds.length} slide(s)` }],
@@ -1404,10 +1480,15 @@ export async function handleTool(
         }
       }
 
-      await slidesService.presentations.batchUpdate({
-        presentationId: a.presentationId,
-        requestBody: { requests }
-      });
+      await withRetry(
+        (signal) => slidesService.presentations.batchUpdate({
+          presentationId: a.presentationId,
+          requestBody: { requests }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'slides.presentations.batchUpdate(createTextBox)',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Created text box with ID: ${elementId}` }],
@@ -1472,10 +1553,15 @@ export async function handleTool(
         });
       }
 
-      await slidesService.presentations.batchUpdate({
-        presentationId: a.presentationId,
-        requestBody: { requests }
-      });
+      await withRetry(
+        (signal) => slidesService.presentations.batchUpdate({
+          presentationId: a.presentationId,
+          requestBody: { requests }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'slides.presentations.batchUpdate(createShape)',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Created ${a.shapeType} shape with ID: ${elementId}` }],
@@ -1493,9 +1579,14 @@ export async function handleTool(
       const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
 
       // Get the presentation to access the slide
-      const presentation = await slidesService.presentations.get({
-        presentationId: a.presentationId
-      });
+      const presentation = await withRetry(
+        (signal) => slidesService.presentations.get({
+          presentationId: a.presentationId
+        }, { signal }),
+        ctx.runtimeConfig,
+        'slides.presentations.get',
+        ctx.log
+      );
 
       if (!presentation.data.slides || a.slideIndex >= presentation.data.slides.length) {
         return errorResponse(`Slide index ${a.slideIndex} not found in presentation (has ${presentation.data.slides?.length ?? 0} slides)`);
@@ -1569,9 +1660,14 @@ export async function handleTool(
       const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
 
       // Get the presentation to access the slide
-      const presentation = await slidesService.presentations.get({
-        presentationId: a.presentationId
-      });
+      const presentation = await withRetry(
+        (signal) => slidesService.presentations.get({
+          presentationId: a.presentationId
+        }, { signal }),
+        ctx.runtimeConfig,
+        'slides.presentations.get',
+        ctx.log
+      );
 
       if (!presentation.data.slides || a.slideIndex >= presentation.data.slides.length) {
         return errorResponse(`Slide index ${a.slideIndex} not found in presentation (has ${presentation.data.slides?.length ?? 0} slides)`);
@@ -1605,10 +1701,15 @@ export async function handleTool(
 
       requests.push({ insertText: { objectId: notesObjectId, text: a.notes, insertionIndex: 0 } });
 
-      await slidesService.presentations.batchUpdate({
-        presentationId: a.presentationId,
-        requestBody: { requests }
-      });
+      await withRetry(
+        (signal) => slidesService.presentations.batchUpdate({
+          presentationId: a.presentationId,
+          requestBody: { requests }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'slides.presentations.batchUpdate(speakerNotes)',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Successfully updated speaker notes for slide ${a.slideIndex}` }],
@@ -1622,12 +1723,17 @@ export async function handleTool(
       const a = validation.data;
 
       const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
-      await slidesService.presentations.batchUpdate({
-        presentationId: a.presentationId,
-        requestBody: {
-          requests: [{ deleteObject: { objectId: a.slideObjectId } }]
-        }
-      });
+      await withRetry(
+        (signal) => slidesService.presentations.batchUpdate({
+          presentationId: a.presentationId,
+          requestBody: {
+            requests: [{ deleteObject: { objectId: a.slideObjectId } }]
+          }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'slides.presentations.batchUpdate(deleteSlide)',
+        ctx.log
+      );
 
       return {
         content: [{ type: 'text', text: `Deleted slide ${a.slideObjectId}` }],
@@ -1641,12 +1747,17 @@ export async function handleTool(
       const a = validation.data;
 
       const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
-      const response = await slidesService.presentations.batchUpdate({
-        presentationId: a.presentationId,
-        requestBody: {
-          requests: [{ duplicateObject: { objectId: a.slideObjectId } }]
-        }
-      });
+      const response = await withRetry(
+        (signal) => slidesService.presentations.batchUpdate({
+          presentationId: a.presentationId,
+          requestBody: {
+            requests: [{ duplicateObject: { objectId: a.slideObjectId } }]
+          }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'slides.presentations.batchUpdate(duplicateObject)',
+        ctx.log
+      );
 
       const dupId = response.data.replies?.[0]?.duplicateObject?.objectId;
       return {
@@ -1661,17 +1772,22 @@ export async function handleTool(
       const a = validation.data;
 
       const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
-      await slidesService.presentations.batchUpdate({
-        presentationId: a.presentationId,
-        requestBody: {
-          requests: [{
-            updateSlidesPosition: {
-              slideObjectIds: a.slideObjectIds,
-              insertionIndex: a.insertionIndex,
-            }
-          }]
-        }
-      });
+      await withRetry(
+        (signal) => slidesService.presentations.batchUpdate({
+          presentationId: a.presentationId,
+          requestBody: {
+            requests: [{
+              updateSlidesPosition: {
+                slideObjectIds: a.slideObjectIds,
+                insertionIndex: a.insertionIndex,
+              }
+            }]
+          }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'slides.presentations.batchUpdate(updateSlidesPosition)',
+        ctx.log
+      );
 
       return {
         content: [{ type: 'text', text: `Reordered ${a.slideObjectIds.length} slide(s) to index ${a.insertionIndex}` }],
@@ -1685,20 +1801,25 @@ export async function handleTool(
       const a = validation.data;
 
       const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
-      const response = await slidesService.presentations.batchUpdate({
-        presentationId: a.presentationId,
-        requestBody: {
-          requests: [{
-            replaceAllText: {
-              containsText: {
-                text: a.containsText,
-                matchCase: a.matchCase,
-              },
-              replaceText: a.replaceText,
-            }
-          }]
-        }
-      });
+      const response = await withRetry(
+        (signal) => slidesService.presentations.batchUpdate({
+          presentationId: a.presentationId,
+          requestBody: {
+            requests: [{
+              replaceAllText: {
+                containsText: {
+                  text: a.containsText,
+                  matchCase: a.matchCase,
+                },
+                replaceText: a.replaceText,
+              }
+            }]
+          }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'slides.presentations.batchUpdate(replaceAllText)',
+        ctx.log
+      );
 
       const count = response.data.replies?.[0]?.replaceAllText?.occurrencesChanged ?? 0;
       return {
@@ -1713,12 +1834,17 @@ export async function handleTool(
       const a = validation.data;
 
       const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
-      const response = await slidesService.presentations.pages.getThumbnail({
-        presentationId: a.presentationId,
-        pageObjectId: a.slideObjectId,
-        'thumbnailProperties.mimeType': a.mimeType,
-        'thumbnailProperties.thumbnailSize': a.size,
-      });
+      const response = await withRetry(
+        (signal) => slidesService.presentations.pages.getThumbnail({
+          presentationId: a.presentationId,
+          pageObjectId: a.slideObjectId,
+          'thumbnailProperties.mimeType': a.mimeType,
+          'thumbnailProperties.thumbnailSize': a.size,
+        }, { signal }),
+        ctx.runtimeConfig,
+        'slides.presentations.pages.getThumbnail',
+        ctx.log
+      );
 
       const url = response.data?.contentUrl;
       if (!url) return errorResponse('No thumbnail URL returned by Google Slides API.');
@@ -1737,10 +1863,15 @@ export async function handleTool(
       const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
 
       // Page size lives on the presentation; grab just that field.
-      const sizeOnly = await slidesService.presentations.get({
-        presentationId: a.presentationId,
-        fields: 'pageSize',
-      });
+      const sizeOnly = await withRetry(
+        (signal) => slidesService.presentations.get({
+          presentationId: a.presentationId,
+          fields: 'pageSize',
+        }, { signal }),
+        ctx.runtimeConfig,
+        'slides.presentations.get(pageSize)',
+        ctx.log
+      );
       const slideWidth = sizeOnly.data.pageSize?.width?.magnitude || 9144000;
       const slideHeight = sizeOnly.data.pageSize?.height?.magnitude || 6858000;
 
@@ -1748,17 +1879,27 @@ export async function handleTool(
       // only the fields of the slides we actually render.
       let slides: slides_v1.Schema$Page[] = [];
       if (a.slideObjectId) {
-        const page = await slidesService.presentations.pages.get({
-          presentationId: a.presentationId,
-          pageObjectId: a.slideObjectId,
-          fields: 'objectId,pageElements(objectId,transform,size,shape/shapeType,image)',
-        });
+        const page = await withRetry(
+          (signal) => slidesService.presentations.pages.get({
+            presentationId: a.presentationId,
+            pageObjectId: a.slideObjectId,
+            fields: 'objectId,pageElements(objectId,transform,size,shape/shapeType,image)',
+          }, { signal }),
+          ctx.runtimeConfig,
+          'slides.presentations.pages.get',
+          ctx.log
+        );
         slides = [page.data];
       } else {
-        const withSlides = await slidesService.presentations.get({
-          presentationId: a.presentationId,
-          fields: 'slides(objectId,pageElements(objectId,transform,size,shape/shapeType,image))',
-        });
+        const withSlides = await withRetry(
+          (signal) => slidesService.presentations.get({
+            presentationId: a.presentationId,
+            fields: 'slides(objectId,pageElements(objectId,transform,size,shape/shapeType,image))',
+          }, { signal }),
+          ctx.runtimeConfig,
+          'slides.presentations.get(elements)',
+          ctx.log
+        );
         slides = withSlides.data.slides || [];
       }
 
@@ -1798,10 +1939,15 @@ export async function handleTool(
       const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
 
       // Field-masked fetch: we only need each element's objectId/transform/size.
-      const pres = await slidesService.presentations.get({
-        presentationId: a.presentationId,
-        fields: 'slides(pageElements(objectId,transform,size))',
-      });
+      const pres = await withRetry(
+        (signal) => slidesService.presentations.get({
+          presentationId: a.presentationId,
+          fields: 'slides(pageElements(objectId,transform,size))',
+        }, { signal }),
+        ctx.runtimeConfig,
+        'slides.presentations.get(transforms)',
+        ctx.log
+      );
 
       let currentTransform: slides_v1.Schema$AffineTransform | null = null;
       let currentSize: slides_v1.Schema$Size | null = null;
@@ -1848,10 +1994,15 @@ export async function handleTool(
         },
       }];
 
-      await slidesService.presentations.batchUpdate({
-        presentationId: a.presentationId,
-        requestBody: { requests },
-      });
+      await withRetry(
+        (signal) => slidesService.presentations.batchUpdate({
+          presentationId: a.presentationId,
+          requestBody: { requests },
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'slides.presentations.batchUpdate(updatePageElementTransform)',
+        ctx.log
+      );
 
       const didResize = a.width !== undefined || a.height !== undefined;
       const action = didResize ? 'Moved/resized' : 'Moved';
@@ -1867,12 +2018,17 @@ export async function handleTool(
       const a = validation.data;
 
       const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
-      await slidesService.presentations.batchUpdate({
-        presentationId: a.presentationId,
-        requestBody: {
-          requests: [{ deleteObject: { objectId: a.objectId } }],
-        },
-      });
+      await withRetry(
+        (signal) => slidesService.presentations.batchUpdate({
+          presentationId: a.presentationId,
+          requestBody: {
+            requests: [{ deleteObject: { objectId: a.objectId } }],
+          },
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'slides.presentations.batchUpdate(deleteElement)',
+        ctx.log
+      );
 
       return {
         content: [{ type: 'text', text: `Deleted element ${a.objectId}` }],
@@ -1921,18 +2077,23 @@ export async function handleTool(
       const a = validation.data;
 
       const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
-      await slidesService.presentations.batchUpdate({
-        presentationId: a.presentationId,
-        requestBody: {
-          requests: a.slideObjectIds.map((objectId) => ({
-            updateSlideProperties: {
-              objectId,
-              slideProperties: { isSkipped: a.skipped },
-              fields: 'isSkipped',
-            },
-          })),
-        },
-      });
+      await withRetry(
+        (signal) => slidesService.presentations.batchUpdate({
+          presentationId: a.presentationId,
+          requestBody: {
+            requests: a.slideObjectIds.map((objectId) => ({
+              updateSlideProperties: {
+                objectId,
+                slideProperties: { isSkipped: a.skipped },
+                fields: 'isSkipped',
+              },
+            })),
+          },
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'slides.presentations.batchUpdate(setSlideVisibility)',
+        ctx.log
+      );
 
       return {
         content: [{ type: 'text', text: `${a.skipped ? 'Hid' : 'Unhid'} ${a.slideObjectIds.length} slide(s): ${a.slideObjectIds.join(', ')}` }],
@@ -1946,18 +2107,23 @@ export async function handleTool(
       const a = validation.data;
 
       const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
-      const doReplace = async (url: string) => slidesService.presentations.batchUpdate({
-        presentationId: a.presentationId,
-        requestBody: {
-          requests: [{
-            replaceImage: {
-              imageObjectId: a.imageObjectId,
-              url,
-              imageReplaceMethod: a.replaceMethod,
-            },
-          }],
-        },
-      });
+      const doReplace = async (url: string) => withRetry(
+        (signal) => slidesService.presentations.batchUpdate({
+          presentationId: a.presentationId,
+          requestBody: {
+            requests: [{
+              replaceImage: {
+                imageObjectId: a.imageObjectId,
+                url,
+                imageReplaceMethod: a.replaceMethod,
+              },
+            }],
+          },
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'slides.presentations.batchUpdate(replaceImage)',
+        ctx.log
+      );
 
       if (a.localImagePath) {
         // Upload briefly as public so the Slides API can fetch the bytes, then
@@ -1988,17 +2154,22 @@ export async function handleTool(
       const a = validation.data;
 
       const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
-      await slidesService.presentations.batchUpdate({
-        presentationId: a.presentationId,
-        requestBody: {
-          requests: [{
-            updatePageElementsZOrder: {
-              pageElementObjectIds: a.pageElementObjectIds,
-              operation: a.operation,
-            },
-          }],
-        },
-      });
+      await withRetry(
+        (signal) => slidesService.presentations.batchUpdate({
+          presentationId: a.presentationId,
+          requestBody: {
+            requests: [{
+              updatePageElementsZOrder: {
+                pageElementObjectIds: a.pageElementObjectIds,
+                operation: a.operation,
+              },
+            }],
+          },
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'slides.presentations.batchUpdate(setElementZOrder)',
+        ctx.log
+      );
 
       return {
         content: [{ type: 'text', text: `Applied ${a.operation} to ${a.pageElementObjectIds.length} element(s): ${a.pageElementObjectIds.join(', ')}` }],
@@ -2016,10 +2187,15 @@ export async function handleTool(
       // deleteText on an element with no existing text is an API error, so
       // check whether the shape currently has any. Search slides, layouts, and
       // masters (recursing into groups) — the setter works on any of them.
-      const pres = await slidesService.presentations.get({
-        presentationId: a.presentationId,
-        fields: 'slides(pageElements(objectId,shape/text,elementGroup)),layouts(pageElements(objectId,shape/text,elementGroup)),masters(pageElements(objectId,shape/text,elementGroup))',
-      });
+      const pres = await withRetry(
+        (signal) => slidesService.presentations.get({
+          presentationId: a.presentationId,
+          fields: 'slides(pageElements(objectId,shape/text,elementGroup)),layouts(pageElements(objectId,shape/text,elementGroup)),masters(pageElements(objectId,shape/text,elementGroup))',
+        }, { signal }),
+        ctx.runtimeConfig,
+        'slides.presentations.get(setElementText)',
+        ctx.log
+      );
 
       let found = false;
       let hasText = false;
@@ -2063,10 +2239,15 @@ export async function handleTool(
         };
       }
 
-      await slidesService.presentations.batchUpdate({
-        presentationId: a.presentationId,
-        requestBody: { requests },
-      });
+      await withRetry(
+        (signal) => slidesService.presentations.batchUpdate({
+          presentationId: a.presentationId,
+          requestBody: { requests },
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'slides.presentations.batchUpdate(setElementText)',
+        ctx.log
+      );
 
       const action = a.text.length === 0 ? 'Cleared text of' : `Set text of`;
       return {

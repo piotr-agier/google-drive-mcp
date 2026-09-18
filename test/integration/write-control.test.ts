@@ -100,7 +100,7 @@ describe('ifRevisionId optimistic locking', () => {
     // A parameter the handler accepts but the schema omits is invisible to a
     // client that builds calls from listTools.
     const { tools } = await ctx.client.listTools();
-    for (const name of ['insertText', 'deleteRange', 'findAndReplaceInDoc', 'applyTextStyle', 'applyParagraphStyle', 'updateGoogleDoc']) {
+    for (const name of ['insertText', 'deleteRange', 'findAndReplaceInDoc', 'applyTextStyle', 'applyParagraphStyle', 'updateGoogleDoc', 'formatGoogleDocText', 'formatGoogleDocParagraph', 'createParagraphBullets', 'insertTable', 'editTableCell', 'styleDocTable', 'insertSmartChip', 'createFootnote']) {
       const tool = tools.find((t) => t.name === name);
       assert.ok(tool, `${name} is registered`);
       assert.ok((tool!.inputSchema.properties as Record<string, unknown>).ifRevisionId, `${name} does not advertise ifRevisionId`);

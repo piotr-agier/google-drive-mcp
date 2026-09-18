@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { buildCalendarEventUpdate } from '../utils.js';
 import { errorResponse } from '../types.js';
 import type { ToolDefinition, ToolResult, ToolContext } from '../types.js';
+import { withRetry } from '../utils/retry.js';
 
 // ---------------------------------------------------------------------------
 // Interfaces
@@ -398,10 +399,15 @@ export async function handleTool(
       }
       const parsed = validation.data;
 
-      const response = await ctx.getCalendar().calendarList.list({
-        showHidden: parsed.showHidden,
-        maxResults: 250
-      });
+      const response = await withRetry(
+        (signal) => ctx.getCalendar().calendarList.list({
+          showHidden: parsed.showHidden,
+          maxResults: 250
+        }, { signal }),
+        ctx.runtimeConfig,
+        'calendar.calendarList.list',
+        ctx.log
+      );
 
       const calendars = response.data.items || [];
       if (calendars.length === 0) {
@@ -438,7 +444,12 @@ export async function handleTool(
       if (parsed.timeMax) params.timeMax = parsed.timeMax;
       if (parsed.query) params.q = parsed.query;
 
-      const response = await ctx.getCalendar().events.list(params);
+      const response = await withRetry(
+        (signal) => ctx.getCalendar().events.list(params, { signal }),
+        ctx.runtimeConfig,
+        'calendar.events.list',
+        ctx.log
+      );
 
       const events = response.data.items || [];
       if (events.length === 0) {
@@ -460,10 +471,15 @@ export async function handleTool(
       }
       const parsed = validation.data;
 
-      const response = await ctx.getCalendar().events.get({
-        calendarId: parsed.calendarId || 'primary',
-        eventId: parsed.eventId
-      });
+      const response = await withRetry(
+        (signal) => ctx.getCalendar().events.get({
+          calendarId: parsed.calendarId || 'primary',
+          eventId: parsed.eventId
+        }, { signal }),
+        ctx.runtimeConfig,
+        'calendar.events.get',
+        ctx.log
+      );
 
       const formatted = formatEventForDisplay(formatCalendarEvent(response.data));
       return {
@@ -523,7 +539,12 @@ export async function handleTool(
         insertParams.conferenceDataVersion = conferenceDataVersion;
       }
 
-      const response = await ctx.getCalendar().events.insert(insertParams);
+      const response = await withRetry(
+        (signal) => ctx.getCalendar().events.insert(insertParams, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'calendar.events.insert',
+        ctx.log
+      );
       const created = formatCalendarEvent(response.data);
 
       return {
@@ -540,23 +561,33 @@ export async function handleTool(
       const parsed = validation.data;
 
       // First get the existing event
-      const existingResponse = await ctx.getCalendar().events.get({
-        calendarId: parsed.calendarId || 'primary',
-        eventId: parsed.eventId
-      });
+      const existingResponse = await withRetry(
+        (signal) => ctx.getCalendar().events.get({
+          calendarId: parsed.calendarId || 'primary',
+          eventId: parsed.eventId
+        }, { signal }),
+        ctx.runtimeConfig,
+        'calendar.events.get',
+        ctx.log
+      );
 
       const existing = existingResponse.data;
       const eventResource = buildCalendarEventUpdate(existing, parsed);
 
-      const response = await ctx.getCalendar().events.update({
-        calendarId: parsed.calendarId || 'primary',
-        eventId: parsed.eventId,
-        requestBody: eventResource,
-        sendUpdates: parsed.sendUpdates,
-        // Required so forwarded/overridden `attachments` are persisted rather
-        // than wiped; without it the API ignores attachment changes.
-        supportsAttachments: true
-      });
+      const response = await withRetry(
+        (signal) => ctx.getCalendar().events.update({
+          calendarId: parsed.calendarId || 'primary',
+          eventId: parsed.eventId,
+          requestBody: eventResource,
+          sendUpdates: parsed.sendUpdates,
+          // Required so forwarded/overridden `attachments` are persisted rather
+          // than wiped; without it the API ignores attachment changes.
+          supportsAttachments: true
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'calendar.events.update',
+        ctx.log
+      );
 
       const updated = formatCalendarEvent(response.data);
 
@@ -573,11 +604,16 @@ export async function handleTool(
       }
       const parsed = validation.data;
 
-      await ctx.getCalendar().events.delete({
-        calendarId: parsed.calendarId || 'primary',
-        eventId: parsed.eventId,
-        sendUpdates: parsed.sendUpdates
-      });
+      await withRetry(
+        (signal) => ctx.getCalendar().events.delete({
+          calendarId: parsed.calendarId || 'primary',
+          eventId: parsed.eventId,
+          sendUpdates: parsed.sendUpdates
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'calendar.events.delete',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Event ${parsed.eventId} has been deleted.` }],

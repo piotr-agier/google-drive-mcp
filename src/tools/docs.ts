@@ -2619,7 +2619,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "findAndReplaceInDoc",
-    description: "Find and replace text across a Google Document. Dry-run mode counts matches exactly across body, tables, headers, footers, and footnotes. On zero matches the response explains the likeliest lookalike cause (non-breaking spaces, curly quotes, HTML entities, case). For multi-tab docs, specify tabId to scope replacements to a single tab.",
+    description: "Find and replace text across a Google Document. Dry-run mode counts matches exactly across body, tables, headers, footers, and footnotes. On zero matches the response explains the likeliest lookalike cause (non-breaking spaces, curly quotes, HTML entities, case). For multi-tab docs, specify tabId to scope replacements to a single tab. When replaceText contains a newline, the write is always locked to the revision its matches were located in — even without an explicit ifRevisionId — since the compiled batch targets indices from that read; a concurrent edit fails the call instead of landing at the wrong offsets.",
     inputSchema: {
       type: "object",
       properties: {

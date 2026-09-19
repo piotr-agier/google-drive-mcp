@@ -4105,22 +4105,35 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           };
         }
         const requests = buildMultilineReplaceRequests(ranges, a.replaceText);
+        // Lock the batch to the revision the ranges were located against: the
+        // compiled indices are only valid for that revision. An explicit
+        // ifRevisionId wins, so a caller's older read still guards the write.
+        // Held in a variable so the catch below can tell whether this write
+        // actually carried a lock.
+        const lock = a.ifRevisionId ?? (doc.data.revisionId || undefined);
         try {
           await docs.documents.batchUpdate({
             documentId: a.documentId,
-            // Lock the batch to the revision the ranges were located against:
-            // the compiled indices are only valid for that revision. An explicit
-            // ifRevisionId wins, so a caller's older read still guards the write.
             requestBody: {
               requests: requests as any[],
-              ...writeControlFor(a.ifRevisionId ?? (doc.data.revisionId || undefined)),
+              ...writeControlFor(lock),
             },
           });
         } catch (error: any) {
           ctx.log('Error in multi-line findAndReplaceInDoc batch:', error.message);
-          if ((error.status ?? error.code) === 400 && /revision/i.test(error.message)) {
+          // A 400 on a locked write is the lock failing: these requests were
+          // compiled from the same read the lock came from, so with that
+          // revision pinned the indices are valid by construction. Google
+          // documents the 400 for a requiredRevisionId mismatch but not the
+          // message it carries, so keying on the wording would stop firing
+          // without any test noticing if Google reworded it. Whether a lock
+          // was sent is knowable here and cannot drift. The API's own message
+          // is passed through, so a 400 from some other cause stays
+          // diagnosable rather than being replaced by this explanation.
+          if (lock !== undefined && (error.status ?? error.code) === 400) {
             throw new Error(
-              'The document changed between the read and the write (revision mismatch). Re-read the document and retry.',
+              'The document changed between the read and the write (revision mismatch). ' +
+                `Re-read the document and retry. (Google Docs API: ${error.message})`,
             );
           }
           throw error;

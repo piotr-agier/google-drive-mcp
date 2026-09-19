@@ -3,6 +3,7 @@ import type { sheets_v4 } from 'googleapis';
 import type { ToolDefinition, ToolResult, ToolContext } from '../types.js';
 import { errorResponse } from '../types.js';
 import { parseA1Range, convertA1ToGridRange, escapeDriveQuery, ALL_DRIVES_LIST_PARAMS, DRIVE_ORDER_BY_VALUES, type GridRange } from '../utils.js';
+import { withRetry } from '../utils/retry.js';
 
 // ---------------------------------------------------------------------------
 // Zod Schemas
@@ -851,15 +852,21 @@ export const toolDefinitions: ToolDefinition[] = [
 // ---------------------------------------------------------------------------
 
 async function resolveGridRange(
+  ctx: ToolContext,
   sheetsService: ReturnType<ToolContext['google']['sheets']>,
   spreadsheetId: string,
   range: string
 ): Promise<GridRange | string> {
-  const rangeData = await sheetsService.spreadsheets.get({
-    spreadsheetId,
-    ranges: [range],
-    fields: 'sheets(properties(sheetId,title))'
-  });
+  const rangeData = await withRetry(
+    (signal) => sheetsService.spreadsheets.get({
+      spreadsheetId,
+      ranges: [range],
+      fields: 'sheets(properties(sheetId,title))'
+    }, { signal }),
+    ctx.runtimeConfig,
+    'sheets.spreadsheets.get(sheetLookup)',
+    ctx.log
+  );
   const { sheetName, cellRange: a1Range } = parseA1Range(range);
   const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
   if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
@@ -885,10 +892,15 @@ async function batchUpdateOne(
   request: sheets_v4.Schema$Request
 ) {
   const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-  return sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: { requests: [request] },
-  });
+  return withRetry(
+    (signal) => sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: { requests: [request] },
+    }, { signal }),
+    { ...ctx.runtimeConfig, retryMax: 0 },
+    `sheets.spreadsheets.batchUpdate(${Object.keys(request)[0]})`,
+    ctx.log
+  );
 }
 
 function describeDimensionGroup(
@@ -931,37 +943,52 @@ export async function handleTool(
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
 
       // Create spreadsheet with initial sheet
-      const spreadsheet = await sheets.spreadsheets.create({
-        requestBody: {
-          properties: { title: a.name },
-          sheets: [{
-            properties: {
-              sheetId: 0,
-              title: 'Sheet1',
-              gridProperties: {
-                rowCount: Math.max(a.data.length, 1000),
-                columnCount: Math.max(a.data[0]?.length || 0, 26)
+      const spreadsheet = await withRetry(
+        (signal) => sheets.spreadsheets.create({
+          requestBody: {
+            properties: { title: a.name },
+            sheets: [{
+              properties: {
+                sheetId: 0,
+                title: 'Sheet1',
+                gridProperties: {
+                  rowCount: Math.max(a.data.length, 1000),
+                  columnCount: Math.max(a.data[0]?.length || 0, 26)
+                }
               }
-            }
-          }]
-        }
-      });
+            }]
+          }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'sheets.spreadsheets.create',
+        ctx.log
+      );
 
-      await ctx.getDrive().files.update({
-        fileId: spreadsheet.data.spreadsheetId || '',
-        addParents: parentFolderId,
-        removeParents: 'root',
-        fields: 'id, name, webViewLink',
-        supportsAllDrives: true
-      });
+      await withRetry(
+        (signal) => ctx.getDrive().files.update({
+          fileId: spreadsheet.data.spreadsheetId || '',
+          addParents: parentFolderId,
+          removeParents: 'root',
+          fields: 'id, name, webViewLink',
+          supportsAllDrives: true
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'drive.files.update(reparent)',
+        ctx.log
+      );
 
       // Now update with data
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: spreadsheet.data.spreadsheetId!,
-        range: 'Sheet1!A1',
-        valueInputOption: a.valueInputOption || 'RAW',
-        requestBody: { values: a.data }
-      });
+      await withRetry(
+        (signal) => sheets.spreadsheets.values.update({
+          spreadsheetId: spreadsheet.data.spreadsheetId!,
+          range: 'Sheet1!A1',
+          valueInputOption: a.valueInputOption || 'RAW',
+          requestBody: { values: a.data }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'sheets.spreadsheets.values.update',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Created Google Sheet: ${a.name}\nID: ${spreadsheet.data.spreadsheetId}` }],
@@ -977,12 +1004,17 @@ export async function handleTool(
       const a = validation.data;
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: a.spreadsheetId,
-        range: a.range,
-        valueInputOption: a.valueInputOption || 'RAW',
-        requestBody: { values: a.data }
-      });
+      await withRetry(
+        (signal) => sheets.spreadsheets.values.update({
+          spreadsheetId: a.spreadsheetId,
+          range: a.range,
+          valueInputOption: a.valueInputOption || 'RAW',
+          requestBody: { values: a.data }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'sheets.spreadsheets.values.update',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Updated Google Sheet range: ${a.range}` }],
@@ -998,13 +1030,18 @@ export async function handleTool(
       const a = validation.data;
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      const response = await sheets.spreadsheets.values.batchUpdate({
-        spreadsheetId: a.spreadsheetId,
-        requestBody: {
-          valueInputOption: a.valueInputOption || 'RAW',
-          data: a.updates
-        }
-      });
+      const response = await withRetry(
+        (signal) => sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: a.spreadsheetId,
+          requestBody: {
+            valueInputOption: a.valueInputOption || 'RAW',
+            data: a.updates
+          }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'sheets.spreadsheets.values.batchUpdate',
+        ctx.log
+      );
 
       // Report counts and the ranges touched, never the values back: echoing a
       // large batch would undo the context saving the batch exists for.
@@ -1035,11 +1072,16 @@ export async function handleTool(
       const a = validation.data;
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      const response = await sheets.spreadsheets.values.get({
-        spreadsheetId: a.spreadsheetId,
-        range: a.range,
-        valueRenderOption: a.valueRenderOption
-      });
+      const response = await withRetry(
+        (signal) => sheets.spreadsheets.values.get({
+          spreadsheetId: a.spreadsheetId,
+          range: a.range,
+          valueRenderOption: a.valueRenderOption
+        }, { signal }),
+        ctx.runtimeConfig,
+        'sheets.spreadsheets.values.get',
+        ctx.log
+      );
 
       const values = response.data.values || [];
       let content = `Content for range ${a.range}:\n\n`;
@@ -1068,11 +1110,16 @@ export async function handleTool(
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
 
       // Parse the range to get sheet ID and grid range
-      const rangeData = await sheets.spreadsheets.get({
-        spreadsheetId: a.spreadsheetId,
-        ranges: [a.range],
-        fields: 'sheets(properties(sheetId,title))'
-      });
+      const rangeData = await withRetry(
+        (signal) => sheets.spreadsheets.get({
+          spreadsheetId: a.spreadsheetId,
+          ranges: [a.range],
+          fields: 'sheets(properties(sheetId,title))'
+        }, { signal }),
+        ctx.runtimeConfig,
+        'sheets.spreadsheets.get(sheetLookup)',
+        ctx.log
+      );
 
       const { sheetName, cellRange: a1Range } = parseA1Range(a.range);
 
@@ -1111,10 +1158,15 @@ export async function handleTool(
         }
       }];
 
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: a.spreadsheetId,
-        requestBody: { requests }
-      });
+      await withRetry(
+        (signal) => sheets.spreadsheets.batchUpdate({
+          spreadsheetId: a.spreadsheetId,
+          requestBody: { requests }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'sheets.spreadsheets.batchUpdate(repeatCell)',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Formatted cells in range ${a.range}` }],
@@ -1132,11 +1184,16 @@ export async function handleTool(
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
 
       // Get sheet information
-      const rangeData = await sheets.spreadsheets.get({
-        spreadsheetId: a.spreadsheetId,
-        ranges: [a.range],
-        fields: 'sheets(properties(sheetId,title))'
-      });
+      const rangeData = await withRetry(
+        (signal) => sheets.spreadsheets.get({
+          spreadsheetId: a.spreadsheetId,
+          ranges: [a.range],
+          fields: 'sheets(properties(sheetId,title))'
+        }, { signal }),
+        ctx.runtimeConfig,
+        'sheets.spreadsheets.get(sheetLookup)',
+        ctx.log
+      );
 
       const { sheetName, cellRange: a1Range } = parseA1Range(a.range);
       const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
@@ -1192,10 +1249,15 @@ export async function handleTool(
         }
       }];
 
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: a.spreadsheetId,
-        requestBody: { requests }
-      });
+      await withRetry(
+        (signal) => sheets.spreadsheets.batchUpdate({
+          spreadsheetId: a.spreadsheetId,
+          requestBody: { requests }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'sheets.spreadsheets.batchUpdate(textFormat)',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Applied text formatting to range ${a.range}` }],
@@ -1212,11 +1274,16 @@ export async function handleTool(
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
 
-      const rangeData = await sheets.spreadsheets.get({
-        spreadsheetId: a.spreadsheetId,
-        ranges: [a.range],
-        fields: 'sheets(properties(sheetId,title))'
-      });
+      const rangeData = await withRetry(
+        (signal) => sheets.spreadsheets.get({
+          spreadsheetId: a.spreadsheetId,
+          ranges: [a.range],
+          fields: 'sheets(properties(sheetId,title))'
+        }, { signal }),
+        ctx.runtimeConfig,
+        'sheets.spreadsheets.get(sheetLookup)',
+        ctx.log
+      );
 
       const { sheetName, cellRange: a1Range } = parseA1Range(a.range);
       const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
@@ -1243,10 +1310,15 @@ export async function handleTool(
         }
       }];
 
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: a.spreadsheetId,
-        requestBody: { requests }
-      });
+      await withRetry(
+        (signal) => sheets.spreadsheets.batchUpdate({
+          spreadsheetId: a.spreadsheetId,
+          requestBody: { requests }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'sheets.spreadsheets.batchUpdate(numberFormat)',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Applied number formatting to range ${a.range}` }],
@@ -1263,11 +1335,16 @@ export async function handleTool(
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
 
-      const rangeData = await sheets.spreadsheets.get({
-        spreadsheetId: a.spreadsheetId,
-        ranges: [a.range],
-        fields: 'sheets(properties(sheetId,title))'
-      });
+      const rangeData = await withRetry(
+        (signal) => sheets.spreadsheets.get({
+          spreadsheetId: a.spreadsheetId,
+          ranges: [a.range],
+          fields: 'sheets(properties(sheetId,title))'
+        }, { signal }),
+        ctx.runtimeConfig,
+        'sheets.spreadsheets.get(sheetLookup)',
+        ctx.log
+      );
 
       const { sheetName, cellRange: a1Range } = parseA1Range(a.range);
       const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
@@ -1300,10 +1377,15 @@ export async function handleTool(
       if (a.innerHorizontal) updateBordersRequest.updateBorders.innerHorizontal = border;
       if (a.innerVertical) updateBordersRequest.updateBorders.innerVertical = border;
 
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: a.spreadsheetId,
-        requestBody: { requests: [updateBordersRequest] }
-      });
+      await withRetry(
+        (signal) => sheets.spreadsheets.batchUpdate({
+          spreadsheetId: a.spreadsheetId,
+          requestBody: { requests: [updateBordersRequest] }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'sheets.spreadsheets.batchUpdate(updateBorders)',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Set borders for range ${a.range}` }],
@@ -1320,11 +1402,16 @@ export async function handleTool(
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
 
-      const rangeData = await sheets.spreadsheets.get({
-        spreadsheetId: a.spreadsheetId,
-        ranges: [a.range],
-        fields: 'sheets(properties(sheetId,title))'
-      });
+      const rangeData = await withRetry(
+        (signal) => sheets.spreadsheets.get({
+          spreadsheetId: a.spreadsheetId,
+          ranges: [a.range],
+          fields: 'sheets(properties(sheetId,title))'
+        }, { signal }),
+        ctx.runtimeConfig,
+        'sheets.spreadsheets.get(sheetLookup)',
+        ctx.log
+      );
 
       const { sheetName, cellRange: a1Range } = parseA1Range(a.range);
       const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
@@ -1341,10 +1428,15 @@ export async function handleTool(
         }
       }];
 
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: a.spreadsheetId,
-        requestBody: { requests }
-      });
+      await withRetry(
+        (signal) => sheets.spreadsheets.batchUpdate({
+          spreadsheetId: a.spreadsheetId,
+          requestBody: { requests }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'sheets.spreadsheets.batchUpdate(mergeCells)',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Merged cells in range ${a.range} with type ${a.mergeType}` }],
@@ -1361,11 +1453,16 @@ export async function handleTool(
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
 
-      const rangeData = await sheets.spreadsheets.get({
-        spreadsheetId: a.spreadsheetId,
-        ranges: [a.range],
-        fields: 'sheets(properties(sheetId,title))'
-      });
+      const rangeData = await withRetry(
+        (signal) => sheets.spreadsheets.get({
+          spreadsheetId: a.spreadsheetId,
+          ranges: [a.range],
+          fields: 'sheets(properties(sheetId,title))'
+        }, { signal }),
+        ctx.runtimeConfig,
+        'sheets.spreadsheets.get(sheetLookup)',
+        ctx.log
+      );
 
       const { sheetName, cellRange: a1Range } = parseA1Range(a.range);
       const sheet = rangeData.data.sheets?.find(s => s.properties?.title === sheetName);
@@ -1439,10 +1536,15 @@ export async function handleTool(
         }
       }];
 
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: a.spreadsheetId,
-        requestBody: { requests }
-      });
+      await withRetry(
+        (signal) => sheets.spreadsheets.batchUpdate({
+          spreadsheetId: a.spreadsheetId,
+          requestBody: { requests }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'sheets.spreadsheets.batchUpdate(conditionalFormat)',
+        ctx.log
+      );
 
       return {
         content: [{ type: "text", text: `Added conditional formatting to range ${a.range}` }],
@@ -1458,10 +1560,15 @@ export async function handleTool(
       const a = validation.data;
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      const response = await sheets.spreadsheets.get({
-        spreadsheetId: a.spreadsheetId,
-        fields: 'spreadsheetId,properties.title,sheets.properties'
-      });
+      const response = await withRetry(
+        (signal) => sheets.spreadsheets.get({
+          spreadsheetId: a.spreadsheetId,
+          fields: 'spreadsheetId,properties.title,sheets.properties'
+        }, { signal }),
+        ctx.runtimeConfig,
+        'sheets.spreadsheets.get(info)',
+        ctx.log
+      );
 
       const metadata = response.data;
       let result = `**Spreadsheet Information:**\n\n`;
@@ -1496,13 +1603,18 @@ export async function handleTool(
       const a = validation.data;
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      const response = await sheets.spreadsheets.values.append({
-        spreadsheetId: a.spreadsheetId,
-        range: a.range,
-        valueInputOption: a.valueInputOption || 'USER_ENTERED',
-        insertDataOption: 'INSERT_ROWS',
-        requestBody: { values: a.values }
-      });
+      const response = await withRetry(
+        (signal) => sheets.spreadsheets.values.append({
+          spreadsheetId: a.spreadsheetId,
+          range: a.range,
+          valueInputOption: a.valueInputOption || 'USER_ENTERED',
+          insertDataOption: 'INSERT_ROWS',
+          requestBody: { values: a.values }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'sheets.spreadsheets.values.append',
+        ctx.log
+      );
 
       const updatedCells = response.data.updates?.updatedCells || 0;
       const updatedRows = response.data.updates?.updatedRows || 0;
@@ -1526,18 +1638,23 @@ export async function handleTool(
       const sheetTitle = isAlias ? (validation.data as z.infer<typeof AddSheetSchema>).title : (validation.data as z.infer<typeof AddSpreadsheetSheetSchema>).sheetTitle;
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      const response = await sheets.spreadsheets.batchUpdate({
-        spreadsheetId,
-        requestBody: {
-          requests: [{
-            addSheet: {
-              properties: {
-                title: sheetTitle
+      const response = await withRetry(
+        (signal) => sheets.spreadsheets.batchUpdate({
+          spreadsheetId,
+          requestBody: {
+            requests: [{
+              addSheet: {
+                properties: {
+                  title: sheetTitle
+                }
               }
-            }
-          }]
-        }
-      });
+            }]
+          }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'sheets.spreadsheets.batchUpdate(addSheet)',
+        ctx.log
+      );
 
       const addedSheet = response.data.replies?.[0]?.addSheet?.properties;
       if (!addedSheet) {
@@ -1556,10 +1673,15 @@ export async function handleTool(
       const a = validation.data;
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      const response = await sheets.spreadsheets.get({
-        spreadsheetId: a.spreadsheetId,
-        fields: 'sheets.properties(sheetId,title,index,hidden)'
-      });
+      const response = await withRetry(
+        (signal) => sheets.spreadsheets.get({
+          spreadsheetId: a.spreadsheetId,
+          fields: 'sheets.properties(sheetId,title,index,hidden)'
+        }, { signal }),
+        ctx.runtimeConfig,
+        'sheets.spreadsheets.get(listSheets)',
+        ctx.log
+      );
 
       const tabs = response.data.sheets || [];
       if (tabs.length === 0) {
@@ -1576,17 +1698,22 @@ export async function handleTool(
       const a = validation.data;
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: a.spreadsheetId,
-        requestBody: {
-          requests: [{
-            updateSheetProperties: {
-              properties: { sheetId: a.sheetId, title: a.newTitle },
-              fields: 'title'
-            }
-          }]
-        }
-      });
+      await withRetry(
+        (signal) => sheets.spreadsheets.batchUpdate({
+          spreadsheetId: a.spreadsheetId,
+          requestBody: {
+            requests: [{
+              updateSheetProperties: {
+                properties: { sheetId: a.sheetId, title: a.newTitle },
+                fields: 'title'
+              }
+            }]
+          }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'sheets.spreadsheets.batchUpdate(renameSheet)',
+        ctx.log
+      );
 
       return { content: [{ type: 'text', text: `Renamed sheet ${a.sheetId} to "${a.newTitle}".` }], isError: false };
     }
@@ -1597,14 +1724,19 @@ export async function handleTool(
       const a = validation.data;
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: a.spreadsheetId,
-        requestBody: {
-          requests: [{
-            deleteSheet: { sheetId: a.sheetId }
-          }]
-        }
-      });
+      await withRetry(
+        (signal) => sheets.spreadsheets.batchUpdate({
+          spreadsheetId: a.spreadsheetId,
+          requestBody: {
+            requests: [{
+              deleteSheet: { sheetId: a.sheetId }
+            }]
+          }
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'sheets.spreadsheets.batchUpdate(deleteSheet)',
+        ctx.log
+      );
 
       return { content: [{ type: 'text', text: `Deleted sheet ${a.sheetId}.` }], isError: false };
     }
@@ -1615,7 +1747,7 @@ export async function handleTool(
       const a = validation.data;
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      const gridRange = await resolveGridRange(sheets, a.spreadsheetId, a.range);
+      const gridRange = await resolveGridRange(ctx, sheets, a.spreadsheetId, a.range);
       if (typeof gridRange === 'string') return errorResponse(gridRange);
 
       // ONE_OF_RANGE expects a single range formula (leading "="); accept plain
@@ -1624,24 +1756,29 @@ export async function handleTool(
         ? a.values.map(v => ({ userEnteredValue: v.startsWith("=") ? v : `=${v}` }))
         : a.values.map(v => ({ userEnteredValue: v }));
 
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: a.spreadsheetId,
-        requestBody: {
-          requests: [{
-            setDataValidation: {
-              range: gridRange,
-              rule: {
-                condition: {
-                  type: a.conditionType,
-                  values: conditionValues,
+      await withRetry(
+        (signal) => sheets.spreadsheets.batchUpdate({
+          spreadsheetId: a.spreadsheetId,
+          requestBody: {
+            requests: [{
+              setDataValidation: {
+                range: gridRange,
+                rule: {
+                  condition: {
+                    type: a.conditionType,
+                    values: conditionValues,
+                  },
+                  strict: a.strict,
+                  showCustomUi: a.showCustomUi,
                 },
-                strict: a.strict,
-                showCustomUi: a.showCustomUi,
               },
-            },
-          }],
-        },
-      });
+            }],
+          },
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'sheets.spreadsheets.batchUpdate(setDataValidation)',
+        ctx.log
+      );
 
       return { content: [{ type: 'text', text: `Added data validation (${a.conditionType}) to ${a.range}.` }], isError: false };
     }
@@ -1652,23 +1789,28 @@ export async function handleTool(
       const a = validation.data;
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      const gridRange = await resolveGridRange(sheets, a.spreadsheetId, a.range);
+      const gridRange = await resolveGridRange(ctx, sheets, a.spreadsheetId, a.range);
       if (typeof gridRange === 'string') return errorResponse(gridRange);
 
-      const response = await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: a.spreadsheetId,
-        requestBody: {
-          requests: [{
-            addProtectedRange: {
-              protectedRange: {
-                range: gridRange,
-                description: a.description,
-                warningOnly: a.warningOnly,
+      const response = await withRetry(
+        (signal) => sheets.spreadsheets.batchUpdate({
+          spreadsheetId: a.spreadsheetId,
+          requestBody: {
+            requests: [{
+              addProtectedRange: {
+                protectedRange: {
+                  range: gridRange,
+                  description: a.description,
+                  warningOnly: a.warningOnly,
+                },
               },
-            },
-          }],
-        },
-      });
+            }],
+          },
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'sheets.spreadsheets.batchUpdate(addProtectedRange)',
+        ctx.log
+      );
 
       const protectedRangeId = response.data.replies?.[0]?.addProtectedRange?.protectedRange?.protectedRangeId;
       return { content: [{ type: 'text', text: `Protected range ${a.range}${protectedRangeId ? ` (id: ${protectedRangeId})` : ''}.` }], isError: false };
@@ -1680,22 +1822,27 @@ export async function handleTool(
       const a = validation.data;
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      const gridRange = await resolveGridRange(sheets, a.spreadsheetId, a.range);
+      const gridRange = await resolveGridRange(ctx, sheets, a.spreadsheetId, a.range);
       if (typeof gridRange === 'string') return errorResponse(gridRange);
 
-      const response = await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: a.spreadsheetId,
-        requestBody: {
-          requests: [{
-            addNamedRange: {
-              namedRange: {
-                name: a.name,
-                range: gridRange,
+      const response = await withRetry(
+        (signal) => sheets.spreadsheets.batchUpdate({
+          spreadsheetId: a.spreadsheetId,
+          requestBody: {
+            requests: [{
+              addNamedRange: {
+                namedRange: {
+                  name: a.name,
+                  range: gridRange,
+                },
               },
-            },
-          }],
-        },
-      });
+            }],
+          },
+        }, { signal }),
+        { ...ctx.runtimeConfig, retryMax: 0 },
+        'sheets.spreadsheets.batchUpdate(addNamedRange)',
+        ctx.log
+      );
 
       const namedRangeId = response.data.replies?.[0]?.addNamedRange?.namedRange?.namedRangeId;
       return { content: [{ type: 'text', text: `Added named range "${a.name}" for ${a.range}${namedRangeId ? ` (id: ${namedRangeId})` : ''}.` }], isError: false };
@@ -1757,10 +1904,15 @@ export async function handleTool(
       const a = validation.data;
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      const response = await sheets.spreadsheets.get({
-        spreadsheetId: a.spreadsheetId,
-        fields: 'sheets(properties(sheetId,title),rowGroups,columnGroups)'
-      });
+      const response = await withRetry(
+        (signal) => sheets.spreadsheets.get({
+          spreadsheetId: a.spreadsheetId,
+          fields: 'sheets(properties(sheetId,title),rowGroups,columnGroups)'
+        }, { signal }),
+        ctx.runtimeConfig,
+        'sheets.spreadsheets.get(dimensionGroups)',
+        ctx.log
+      );
 
       const allSheets = response.data.sheets || [];
       const targets = a.sheetId === undefined
@@ -1795,13 +1947,18 @@ export async function handleTool(
         queryString += ` and (name contains '${escapedQuery}' or fullText contains '${escapedQuery}')`;
       }
 
-      const response = await ctx.getDrive().files.list({
-        q: queryString,
-        pageSize: a.maxResults || 20,
-        orderBy: a.orderBy,
-        fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName,emailAddress))',
-        ...ALL_DRIVES_LIST_PARAMS
-      });
+      const response = await withRetry(
+        (signal) => ctx.getDrive().files.list({
+          q: queryString,
+          pageSize: a.maxResults || 20,
+          orderBy: a.orderBy,
+          fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName,emailAddress))',
+          ...ALL_DRIVES_LIST_PARAMS
+        }, { signal }),
+        ctx.runtimeConfig,
+        'drive.files.list',
+        ctx.log
+      );
 
       const files = response.data.files || [];
       if (files.length === 0) {

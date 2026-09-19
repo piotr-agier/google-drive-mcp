@@ -4221,7 +4221,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           ctx.runtimeConfig,
           'docs.documents.get(findAndReplaceInDoc.multiline)',
           ctx.log
-        );        const text = collectDocPlainText(doc.data, a.tabId);
+        );
+        const text = collectDocPlainText(doc.data, a.tabId);
         const plainCount = countOccurrences(text, a.findText, a.matchCase);
         const ranges = findOccurrenceRanges(doc.data, a.findText, a.matchCase, a.tabId);
         if (ranges.length === 0) {
@@ -4298,7 +4299,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           ctx.runtimeConfig,
           'docs.documents.get(findAndReplaceInDoc.expectedCount)',
           ctx.log
-        );        const text = collectDocPlainText(doc.data, a.tabId);
+        );
+        const text = collectDocPlainText(doc.data, a.tabId);
         const preCount = countOccurrences(text, a.findText, a.matchCase);
         if (preCount !== a.expectedCount) {
           let message = `Aborted without writing: expectedCount=${a.expectedCount} but found ${preCount} occurrence(s) of "${a.findText}"${a.tabId ? ` in tab ${a.tabId}` : ''}.`;
@@ -4346,7 +4348,8 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
             ctx.runtimeConfig,
             'docs.documents.get(findAndReplaceInDoc.diagnose)',
             ctx.log
-          );          const hint = diagnoseZeroMatch(collectDocPlainText(doc.data, a.tabId), a.findText, a.matchCase);
+          );
+          const hint = diagnoseZeroMatch(collectDocPlainText(doc.data, a.tabId), a.findText, a.matchCase);
           if (hint) message += `\nLikely cause: ${hint}.`;
         } catch {
           // diagnosis is best-effort; the zero count already stands on its own
@@ -5098,8 +5101,13 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       // gets the metadata rather than an error from the lock lookup.
       let docsRevisionId = REVISION_UNAVAILABLE;
       try {
-        const docMeta = await ctx.google.docs({ version: 'v1', auth: ctx.authClient })
-          .documents.get({ documentId: a.documentId, fields: 'revisionId' });
+        const docMeta = await withRetry(
+          (signal) => ctx.google.docs({ version: 'v1', auth: ctx.authClient })
+            .documents.get({ documentId: a.documentId, fields: 'revisionId' }, { signal }),
+          ctx.runtimeConfig,
+          'docs.documents.get(getDocumentInfo)',
+          ctx.log
+        );
         docsRevisionId = revisionIdOf(docMeta.data);
       } catch {
         // Leave it unavailable; the metadata below is still worth returning.

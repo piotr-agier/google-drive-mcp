@@ -943,7 +943,7 @@ async function batchUpdateOne(
       requestBody: { requests: [request] },
     }, { signal }),
     { ...ctx.runtimeConfig, retryMax: 0 },
-    'sheets.spreadsheets.batchUpdate',
+    `sheets.spreadsheets.batchUpdate(${Object.keys(request)[0]})`,
     ctx.log
   );
 }

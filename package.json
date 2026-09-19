@@ -54,7 +54,7 @@
         "registry:verify": "node scripts/registry-metadata.js verify",
         "prepare": "npm run build",
         "test": "npm run test:build && MCP_TESTING=1 node --test \".tmp-test/test/**/*.test.js\"",
-        "test:build": "shx rm -rf .tmp-test && tsc -p tsconfig.test.json && shx cp package.json .tmp-test/ && node scripts/build.js",
+        "test:build": "shx rm -rf .tmp-test && tsc -p tsconfig.test.json && shx cp package.json .tmp-test/ && shx cp -r test/fixtures .tmp-test/test/fixtures && node scripts/build.js",
         "test:unit": "npm run test:build && MCP_TESTING=1 node --test .tmp-test/test/*.test.js",
         "test:integration": "npm run test:build && MCP_TESTING=1 node --test \".tmp-test/test/integration/**/*.test.js\" \".tmp-test/test/schema/**/*.test.js\"",
         "lint": "tsc --noEmit && eslint src/",

@@ -125,6 +125,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
 
   // ---- Sheets ----
   getGoogleSheetContent: read(SHEETS_READ_SCOPES),
+  getGoogleSheetCells: read(SHEETS_READ_SCOPES),
   getSpreadsheetInfo: read(SHEETS_READ_SCOPES),
   listSheets: read(SHEETS_READ_SCOPES),
   listGoogleSheets: read(DRIVE_READ_SCOPES),

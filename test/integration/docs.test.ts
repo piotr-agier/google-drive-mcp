@@ -1704,11 +1704,23 @@ describe('Docs tools', () => {
       assert.equal(requests[1].insertText.text, 'line one\nline two');
     });
 
+    // The mock honours a `fields` mask with respect to revisionId, because the
+    // API does. The lock below is taken from this read, so a projection that
+    // leaves revisionId out silently unlocks the batch — and since #219 gates
+    // the stale-revision message on whether a lock was sent, it silently
+    // disables that message too. Both would regress with no test failing if
+    // the mock handed back revisionId whatever was asked for. Only revisionId
+    // is modelled; the rest of the projection is not what these tests check.
+    function suppliesRevisionId(fields: unknown): boolean {
+      if (typeof fields !== 'string' || fields.trim() === '') return true;
+      return /(^|[(,\s])revisionId([),\s]|$)/.test(fields);
+    }
+
     function docWithRevisionAndMatch(documentId: string, revisionId?: string) {
-      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+      ctx.mocks.docs.service.documents.get._setImpl(async (params: any) => ({
         data: {
           documentId, title: 'My Doc',
-          ...(revisionId ? { revisionId } : {}),
+          ...(revisionId && suppliesRevisionId(params?.fields) ? { revisionId } : {}),
           body: {
             content: [{
               paragraph: { elements: [{ startIndex: 1, textRun: { content: 'Hello World\n' } }] },
@@ -1719,16 +1731,7 @@ describe('Docs tools', () => {
     }
 
     it('pins the multi-line batch to the revision it located against', async () => {
-      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
-        data: {
-          documentId: 'doc-pin', title: 'My Doc', revisionId: 'rev-9',
-          body: {
-            content: [{
-              paragraph: { elements: [{ startIndex: 1, textRun: { content: 'Hello World\n' } }] },
-            }],
-          },
-        },
-      }));
+      docWithRevisionAndMatch('doc-pin', 'rev-9');
 
       await callTool(ctx.client, 'findAndReplaceInDoc', {
         documentId: 'doc-pin', findText: 'World', replaceText: 'a\nb',

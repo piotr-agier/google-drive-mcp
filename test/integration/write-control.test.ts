@@ -96,6 +96,17 @@ describe('ifRevisionId optimistic locking', () => {
     assert.deepEqual(lastWriteControl(), { requiredRevisionId: 'rev-m' });
   });
 
+  it('every Docs tool whose handler takes ifRevisionId advertises it in its inputSchema', async () => {
+    // A parameter the handler accepts but the schema omits is invisible to a
+    // client that builds calls from listTools.
+    const { tools } = await ctx.client.listTools();
+    for (const name of ['insertText', 'deleteRange', 'findAndReplaceInDoc', 'applyTextStyle', 'applyParagraphStyle', 'updateGoogleDoc', 'formatGoogleDocText', 'formatGoogleDocParagraph', 'createParagraphBullets', 'insertTable', 'editTableCell', 'styleDocTable', 'insertSmartChip', 'createFootnote']) {
+      const tool = tools.find((t) => t.name === name);
+      assert.ok(tool, `${name} is registered`);
+      assert.ok((tool!.inputSchema.properties as Record<string, unknown>).ifRevisionId, `${name} does not advertise ifRevisionId`);
+    }
+  });
+
   it('insertText and deleteRange refuse the lock on text files rather than ignoring it', async () => {
     asTextFile();
     const ins = await callTool(ctx.client, 'insertText', { documentId: 'd', text: 'hi', index: 0, ifRevisionId: 'rev-n' });

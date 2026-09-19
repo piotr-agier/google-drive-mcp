@@ -1704,6 +1704,20 @@ describe('Docs tools', () => {
       assert.equal(requests[1].insertText.text, 'line one\nline two');
     });
 
+    function docWithRevisionAndMatch(documentId: string, revisionId?: string) {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+        data: {
+          documentId, title: 'My Doc',
+          ...(revisionId ? { revisionId } : {}),
+          body: {
+            content: [{
+              paragraph: { elements: [{ startIndex: 1, textRun: { content: 'Hello World\n' } }] },
+            }],
+          },
+        },
+      }));
+    }
+
     it('pins the multi-line batch to the revision it located against', async () => {
       ctx.mocks.docs.service.documents.get._setImpl(async () => ({
         data: {
@@ -1773,6 +1787,65 @@ describe('Docs tools', () => {
       assert.equal(res.isError, true);
       assert.match(res.content[0].text!, /document changed between the read and the write/);
       assert.match(res.content[0].text!, /[Rr]e-read the document and retry/);
+
+      ctx.mocks.docs.service.documents.batchUpdate._resetImpl();
+    });
+
+    // The mapping above rewrites the API's own explanation, so it has to fire
+    // on exactly the failure it explains. Google documents the 400 for a
+    // requiredRevisionId mismatch but not its message text, so the condition
+    // is "this write carried a lock", not "the message mentions a revision".
+    // These two cases pin both sides of it; without them the handler could map
+    // every 400 to a revision mismatch and nothing would fail.
+    it('keeps the API message when it maps a stale-revision failure', async () => {
+      docWithRevisionAndMatch('doc-keep', 'rev-9');
+      ctx.mocks.docs.service.documents.batchUpdate._setImpl(async () => {
+        throw Object.assign(new Error('Some specific reason from Google.'), { status: 400 });
+      });
+
+      const res = await callTool(ctx.client, 'findAndReplaceInDoc', {
+        documentId: 'doc-keep', findText: 'World', replaceText: 'a\nb',
+      });
+      assert.equal(res.isError, true);
+      assert.match(res.content[0].text!, /document changed between the read and the write/);
+      // A 400 from some other cause is still mapped, because the lock is the
+      // only reliable signal — so the original text must survive for it to be
+      // diagnosable at all.
+      assert.match(res.content[0].text!, /Some specific reason from Google\./);
+
+      ctx.mocks.docs.service.documents.batchUpdate._resetImpl();
+    });
+
+    it('passes a 400 through unmapped when the write carried no lock', async () => {
+      // No revisionId on the read and no ifRevisionId from the caller means no
+      // writeControl was sent, so a 400 cannot be the lock failing.
+      docWithRevisionAndMatch('doc-nolock', undefined);
+      ctx.mocks.docs.service.documents.batchUpdate._setImpl(async () => {
+        throw Object.assign(new Error('Invalid requests[0]: bad index.'), { status: 400 });
+      });
+
+      const res = await callTool(ctx.client, 'findAndReplaceInDoc', {
+        documentId: 'doc-nolock', findText: 'World', replaceText: 'a\nb',
+      });
+      assert.equal(res.isError, true);
+      assert.match(res.content[0].text!, /Invalid requests\[0\]: bad index\./);
+      assert.doesNotMatch(res.content[0].text!, /revision mismatch/);
+
+      ctx.mocks.docs.service.documents.batchUpdate._resetImpl();
+    });
+
+    it('passes a non-400 failure through unmapped even when the write carried a lock', async () => {
+      docWithRevisionAndMatch('doc-403', 'rev-9');
+      ctx.mocks.docs.service.documents.batchUpdate._setImpl(async () => {
+        throw Object.assign(new Error('The caller does not have permission.'), { status: 403 });
+      });
+
+      const res = await callTool(ctx.client, 'findAndReplaceInDoc', {
+        documentId: 'doc-403', findText: 'World', replaceText: 'a\nb',
+      });
+      assert.equal(res.isError, true);
+      assert.match(res.content[0].text!, /does not have permission/);
+      assert.doesNotMatch(res.content[0].text!, /revision mismatch/);
 
       ctx.mocks.docs.service.documents.batchUpdate._resetImpl();
     });

@@ -172,12 +172,25 @@ describe('revisionId is obtainable from the reads', () => {
     ctx.mocks.drive.service.files.get._resetImpl();
   });
 
+  // The mock honours a `fields` mask with respect to revisionId, because the
+  // API does. A projection that leaves revisionId out is the one change that
+  // breaks every tool in this describe at once without touching any of their
+  // logic: the field simply stops arriving. A mock that returns revisionId
+  // regardless would report a lock the server could never actually obtain, so
+  // masking the read would pass the whole suite and fail in production. Only
+  // revisionId is modelled; the rest of the projection is not what these tests
+  // are about.
+  function suppliesRevisionId(fields: unknown): boolean {
+    if (typeof fields !== 'string' || fields.trim() === '') return true;
+    return /(^|[(,\s])revisionId([),\s]|$)/.test(fields);
+  }
+
   function docWithRevision(revisionId?: string) {
-    ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+    ctx.mocks.docs.service.documents.get._setImpl(async (params: any) => ({
       data: {
         documentId: 'doc-1',
         title: 'Test Doc',
-        ...(revisionId ? { revisionId } : {}),
+        ...(revisionId && suppliesRevisionId(params?.fields) ? { revisionId } : {}),
         body: {
           content: [{
             startIndex: 0, endIndex: 13,
@@ -242,6 +255,21 @@ describe('revisionId is obtainable from the reads', () => {
     const text = res.content[0].text!;
     assert.match(text, /\*\*Docs revisionId:\*\* rev-read-5/);
     assert.match(text, /\*\*Drive Version:\*\* 42/);
+  });
+
+  // These two shipped in #211 and lead their output with the revisionId, but
+  // neither had a test saying so, which left their reads free to grow a
+  // projection that drops the field.
+  it('getGoogleDocStyleSummary and describeGoogleDocRange report the revisionId', async () => {
+    docWithRevision('rev-read-6');
+
+    const summary = await callTool(ctx.client, 'getGoogleDocStyleSummary', { documentId: 'd' });
+    assert.equal(summary.isError, false);
+    assert.match(summary.content[0].text!, /revisionId: rev-read-6/);
+
+    const probe = await callTool(ctx.client, 'describeGoogleDocRange', { documentId: 'd', startIndex: 1, endIndex: 5 });
+    assert.equal(probe.isError, false);
+    assert.match(probe.content[0].text!, /revisionId: rev-read-6/);
   });
 
   it('getDocumentInfo still returns metadata when the revisionId lookup fails', async () => {

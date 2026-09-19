@@ -1,6 +1,6 @@
 # Tool reference
 
-This server exposes 128 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
+This server exposes 130 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
 
 ## Available Tools
 
@@ -422,12 +422,33 @@ different identifiers; neither is accepted as a lock.
   - `updates`: Array of `{range, values}` pairs; overlapping ranges have no documented precedence, so avoid them
   - `valueInputOption`: `RAW` (default, safe) or `USER_ENTERED` (evaluates formulas), applied to every range (optional)
 
+- **updateGoogleSheetIfUnchanged** - Write cell values only if the guarded area is unchanged, returning the overwritten contents so the write can be undone
+  - `spreadsheetId`: Spreadsheet ID
+  - `updates`: ranges to write, ValueRange-shaped
+  - `guardRanges`: ranges that must be unchanged (optional, defaults to the ranges in `updates`)
+  - `expectedFingerprint`: fingerprint from a previous `dryRun` call; required unless `dryRun`
+  - `valueInputOption`: `USER_ENTERED` (default) or `RAW` (optional)
+  - `dryRun`: return the fingerprint and guarded contents without writing (optional)
+  - `maxCells` / `maxBytes`: budget for the contents returned on a dryRun or refusal (optional)
+  - Optimistic, not atomic: the Sheets API has no compare-and-swap, so a write landing between the read and the write is not caught
+  - A cell listed in the returned `hazards` cannot be restored through `updates`, which only accepts strings and would silently change the cell's type on rollback - apply its returned `userEnteredValue` verbatim through another tool instead
+  - The hazard list is deliberately not exhaustive: date-shaped text (e.g. `'2024-01-01'`) and other apostrophe-forced text outside the detected cases (formula-, number-, and boolean-looking) are not flagged
+
 - **getGoogleSheetContent** - Get spreadsheet content with cell information
   - `spreadsheetId`: Spreadsheet ID
   - `range`: Range to get (e.g., 'Sheet1!A1:C10')
   - `valueRenderOption`: `FORMATTED_VALUE` (default, as displayed), `UNFORMATTED_VALUE` (raw values), or `FORMULA` (the formula behind each cell) (optional)
   - Cells within a row are separated by a tab, so a value containing a comma stays one cell
   - Under `UNFORMATTED_VALUE` a date or time cell is returned as a serial number, not a date string
+
+- **getGoogleSheetCells** - Read cells as structured data: one absolute A1 address per cell, the formula and its computed result together, several ranges per call
+  - `spreadsheetId`: Spreadsheet ID
+  - `ranges`: A1 ranges to read, returned separately and in order
+  - `fields`: CellData fields (optional, default `userEnteredValue`, `effectiveValue`, `formattedValue`)
+  - `sheetMetadata`: `merges`, `frozen`, `dimensionGroups` (whole sheet), `hiddenRows`, `hiddenColumns`, `dimensionSizes` (only inside the requested ranges) (optional)
+  - `includeEmpty`: return cells with none of the requested fields (optional, default false)
+  - `maxCells` / `maxBytes`: response budget; on overflow returns `truncated` and `nextRanges` (optional)
+  - Addresses are absolute to the sheet, not relative to the requested range, and `getGoogleSheetContent` is unchanged
 
 #### Sheet Management
 - **getSpreadsheetInfo** - Get detailed information about a spreadsheet including all sheets/tabs

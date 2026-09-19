@@ -3,7 +3,7 @@ import { describe, it, before, after } from 'node:test';
 import { setupTestServer, type TestContext } from '../helpers/setup-server.js';
 import { TOOL_META } from '../../src/tools/toolMeta.js';
 
-const EXPECTED_TOOL_COUNT = 128;
+const EXPECTED_TOOL_COUNT = 130;
 
 const EXPECTED_TOOLS = [
   'manage_accounts',
@@ -12,7 +12,7 @@ const EXPECTED_TOOLS = [
   'createGoogleDoc', 'createDocFromHTML', 'updateGoogleDoc', 'insertText', 'deleteRange',
   'readGoogleDoc', 'readGoogleDocPaginated', 'listDocumentTabs', 'applyTextStyle', 'applyParagraphStyle', 'formatGoogleDocText', 'formatGoogleDocParagraph', 'createParagraphBullets', 'findAndReplaceInDoc',
   'listComments', 'getComment', 'addComment', 'replyToComment', 'deleteComment',
-  'createGoogleSheet', 'updateGoogleSheet', 'batchUpdateGoogleSheetValues', 'getGoogleSheetContent',
+  'createGoogleSheet', 'updateGoogleSheet', 'batchUpdateGoogleSheetValues', 'updateGoogleSheetIfUnchanged', 'getGoogleSheetContent', 'getGoogleSheetCells',
   'formatGoogleSheetCells', 'formatGoogleSheetText', 'formatGoogleSheetNumbers',
   'setGoogleSheetBorders', 'mergeGoogleSheetCells', 'addGoogleSheetConditionalFormat',
   'getSpreadsheetInfo', 'appendSpreadsheetRows', 'addSpreadsheetSheet', 'addSheet', 'listSheets', 'renameSheet', 'deleteSheet', 'addDataValidation', 'protectRange', 'addNamedRange',

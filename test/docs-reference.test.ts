@@ -187,7 +187,7 @@ describe('Documentation reference', () => {
       'hiddenColumns', 'hiddenRows', 'textFormatRuns', 'userEnteredFormat',
       'userEnteredValue',
       // Output field names, named in prose by the tool that returns them
-      'nextRanges',
+      'nextRanges', 'postFingerprint', 'preImage',
     ]);
 
     // A tool may freely name its own parameters; only cross-tool references

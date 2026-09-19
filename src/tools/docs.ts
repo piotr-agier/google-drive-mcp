@@ -2619,7 +2619,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "findAndReplaceInDoc",
-    description: "Find and replace text across a Google Document. Dry-run mode counts matches exactly across body, tables, headers, footers, and footnotes. On zero matches the response explains the likeliest lookalike cause (non-breaking spaces, curly quotes, HTML entities, case). For multi-tab docs, specify tabId to scope replacements to a single tab.",
+    description: "Find and replace text across a Google Document. Dry-run mode counts matches exactly across body, tables, headers, footers, and footnotes. On zero matches the response explains the likeliest lookalike cause (non-breaking spaces, curly quotes, HTML entities, case). For multi-tab docs, specify tabId to scope replacements to a single tab. When replaceText contains a newline, the write is always locked to the revision its matches were located in — even without an explicit ifRevisionId — since the compiled batch targets indices from that read; a concurrent edit fails the call instead of landing at the wrong offsets.",
     inputSchema: {
       type: "object",
       properties: {
@@ -4105,10 +4105,26 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
           };
         }
         const requests = buildMultilineReplaceRequests(ranges, a.replaceText);
-        await docs.documents.batchUpdate({
-          documentId: a.documentId,
-          requestBody: { requests: requests as any[] },
-        });
+        try {
+          await docs.documents.batchUpdate({
+            documentId: a.documentId,
+            // Lock the batch to the revision the ranges were located against:
+            // the compiled indices are only valid for that revision. An explicit
+            // ifRevisionId wins, so a caller's older read still guards the write.
+            requestBody: {
+              requests: requests as any[],
+              ...writeControlFor(a.ifRevisionId ?? (doc.data.revisionId || undefined)),
+            },
+          });
+        } catch (error: any) {
+          ctx.log('Error in multi-line findAndReplaceInDoc batch:', error.message);
+          if ((error.status ?? error.code) === 400 && /revision/i.test(error.message)) {
+            throw new Error(
+              'The document changed between the read and the write (revision mismatch). Re-read the document and retry.',
+            );
+          }
+          throw error;
+        }
         return {
           content: [{
             type: 'text',

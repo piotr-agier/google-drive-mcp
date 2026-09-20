@@ -181,6 +181,13 @@ describe('Documentation reference', () => {
       'mimeType', 'modifiedTime', 'nextOffset', 'objectId', 'revisionId', 'startTime',
       // Parameters shared across tools, named in prose by tools that take them
       'ifRevisionId',
+      // Sheets CellData, ExtendedValue and dimension-metadata field names
+      'dataValidation', 'dimensionGroups', 'dimensionSizes', 'effectiveFormat',
+      'effectiveValue', 'errorValue', 'formattedValue', 'formulaValue',
+      'hiddenColumns', 'hiddenRows', 'textFormatRuns', 'userEnteredFormat',
+      'userEnteredValue',
+      // Output field names, named in prose by the tool that returns them
+      'nextRanges',
     ]);
 
     // A tool may freely name its own parameters; only cross-tool references

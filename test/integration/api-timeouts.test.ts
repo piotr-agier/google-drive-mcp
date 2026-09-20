@@ -8,12 +8,31 @@
  * test file in its own process, so this does not leak into other test files.
  */
 import assert from 'node:assert/strict';
-import { describe, it, before, after, beforeEach } from 'node:test';
+import { describe, it, before, after, beforeEach, mock } from 'node:test';
 
 process.env.GOOGLE_DRIVE_MCP_API_TIMEOUT = '100';
 process.env.GOOGLE_DRIVE_MCP_RETRY_BASE_DELAY = '5';
 
 import { setupTestServer, callTool, type TestContext } from '../helpers/setup-server.js';
+import { UPLOAD_TIMEOUT_MS } from '../../src/utils/retry.js';
+
+// A macrotask boundary (unaffected by the fake `setTimeout` below) so every
+// microtask chain a faked timer callback kicked off — including the round
+// trip through the in-memory MCP transport — has settled before we assert.
+const flushMicrotasks = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+// The full client -> transport -> server -> transport -> client round trip
+// takes more macrotask hops to drain than a single flush; poll rather than
+// guess a fixed count.
+async function waitUntilSettled(isSettled: () => boolean, maxFlushes = 50): Promise<void> {
+  for (let i = 0; i < maxFlushes && !isSettled(); i++) {
+    await flushMicrotasks();
+  }
+}
+
+async function flushTimes(n: number): Promise<void> {
+  for (let i = 0; i < n; i++) await flushMicrotasks();
+}
 
 const serviceUnavailable = () =>
   Object.assign(new Error('Service Unavailable'), { response: { status: 503 } });
@@ -112,5 +131,56 @@ describe('API call timeout/retry policy (reads vs. writes)', () => {
 
     assert.equal(res.isError, false, JSON.stringify(res));
     assert.equal(calls, 2, 'expected the stream-mode read to be retried once after the 503');
+  });
+
+  // Proves the upload sites use their own generous deadline (UPLOAD_TIMEOUT_MS)
+  // rather than this file's ambient 100ms apiTimeout — a config value nobody
+  // else checks. Uses fake timers because the deadline is 30 real minutes;
+  // the client's own default request timeout is pushed out of the way with an
+  // explicit `timeout` so it cannot fire first and confound the assertion.
+  it('an upload write (drive.files.create) gets its own deadline, not the small default apiTimeout', async () => {
+    ctx.mocks.drive.service.files.list._setImpl(async () => ({ data: { files: [] } }));
+    ctx.mocks.drive.service.files.create._setImpl(() => new Promise(() => {})); // never settles
+
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      let settled: unknown;
+      ctx.client.callTool(
+        { name: 'createTextFile', arguments: { name: 'huge-upload.txt', content: 'hello' } },
+        undefined,
+        { timeout: UPLOAD_TIMEOUT_MS + 60_000 },
+      ).then((r) => { settled = r; }, (e) => { settled = e; });
+
+      // Let the request actually reach the handler and register the real
+      // (now-faked) setTimeout inside withRetry before advancing the clock —
+      // the call above hasn't run past its first `await` yet.
+      await flushTimes(10);
+
+      // Far past the file's ambient 100ms apiTimeout: still pending proves this
+      // call site does not fall back to ctx.runtimeConfig.apiTimeout.
+      mock.timers.tick(300_000);
+      await flushMicrotasks();
+      assert.equal(settled, undefined, 'must not settle at 5 minutes');
+
+      // Just short of the upload deadline: still pending.
+      mock.timers.tick(UPLOAD_TIMEOUT_MS - 300_000 - 1_000);
+      await flushMicrotasks();
+      assert.equal(settled, undefined, 'must not settle just before the upload deadline');
+
+      // Past the upload deadline: now it must fail, naming exactly the
+      // configured deadline — proof of the actual `apiTimeout` the wrapper
+      // received, not just that some larger-than-default bound exists.
+      mock.timers.tick(2_000);
+      await waitUntilSettled(() => settled !== undefined);
+
+      assert.ok(settled, 'expected the call to settle once the upload deadline passed');
+      const res = settled as { isError?: boolean; content: Array<{ text: string }> };
+      assert.equal(res.isError, true);
+      assert.match(res.content[0].text, new RegExp(`timed out after ${UPLOAD_TIMEOUT_MS}ms`));
+    } finally {
+      mock.timers.reset();
+      ctx.mocks.drive.service.files.list._resetImpl();
+      ctx.mocks.drive.service.files.create._resetImpl();
+    }
   });
 });

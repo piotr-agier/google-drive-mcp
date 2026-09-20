@@ -6,7 +6,7 @@ import { errorResponse } from '../types.js';
 import { escapeDriveQuery, isTextMime, ALL_DRIVES_LIST_PARAMS, DRIVE_ORDER_BY_VALUES } from '../utils.js';
 import { downloadTextContent, writeTextContent } from './text-content.js';
 import { uploadImageToDrive } from '../utils/driveImageUpload.js';
-import { withRetry } from '../utils/retry.js';
+import { withRetry, UPLOAD_TIMEOUT_MS } from '../utils/retry.js';
 import { getResponseHeader } from '../utils/streams.js';
 import { describeRangeStyles, paragraphMetaBits, rgbColorToHex, summarizeDocumentStyles, type StyleSummarySegment } from './styleProjection.js';
 import { collectDocPlainText, countOccurrences, diagnoseZeroMatch, findOccurrenceRanges, buildMultilineReplaceRequests } from './findDiagnostics.js';
@@ -3137,7 +3137,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
             fields: 'id, name, webViewLink',
             supportsAllDrives: true
           }, { signal }),
-          { ...ctx.runtimeConfig, retryMax: 0 },
+          { ...ctx.runtimeConfig, retryMax: 0, apiTimeout: UPLOAD_TIMEOUT_MS },
           'drive.files.create(docFromHtml)',
           ctx.log
         );

@@ -17,7 +17,7 @@ import { getSecureTokenPath } from '../auth/utils.js';
 import { SCOPE_ALIASES, SCOPE_PRESETS, resolveOAuthScopes, splitScopes } from '../auth/scopes.js';
 import { getActiveAuthMode, describeBypassedTokens, AUTH_MODE_OVERRIDE_ENV_VARS, type ActiveAuthMode } from '../auth/externalAuth.js';
 import { getEffectiveIdentity } from '../auth/identity.js';
-import { withRetry } from '../utils/retry.js';
+import { withRetry, UPLOAD_TIMEOUT_MS } from '../utils/retry.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -973,7 +973,7 @@ export async function handleTool(
           },
           supportsAllDrives: true
         }, { signal }),
-        { ...ctx.runtimeConfig, retryMax: 0 },
+        { ...ctx.runtimeConfig, retryMax: 0, apiTimeout: UPLOAD_TIMEOUT_MS },
         'drive.files.create(textFile)',
         ctx.log
       );
@@ -1030,7 +1030,7 @@ export async function handleTool(
           fields: 'id, name, modifiedTime, webViewLink',
           supportsAllDrives: true
         }, { signal }),
-        { ...ctx.runtimeConfig, retryMax: 0 },
+        { ...ctx.runtimeConfig, retryMax: 0, apiTimeout: UPLOAD_TIMEOUT_MS },
         'drive.files.update(textFile)',
         ctx.log
       );
@@ -1675,7 +1675,7 @@ export async function handleTool(
             fields: 'id, name, size, mimeType, webViewLink',
             supportsAllDrives: true
           }, { signal }),
-          { ...ctx.runtimeConfig, retryMax: 0 },
+          { ...ctx.runtimeConfig, retryMax: 0, apiTimeout: UPLOAD_TIMEOUT_MS },
           'drive.files.update(uploadInPlace)',
           ctx.log
         );
@@ -1698,7 +1698,7 @@ export async function handleTool(
             fields: 'id, name, size, mimeType, webViewLink',
             supportsAllDrives: true
           }, { signal }),
-          { ...ctx.runtimeConfig, retryMax: 0 },
+          { ...ctx.runtimeConfig, retryMax: 0, apiTimeout: UPLOAD_TIMEOUT_MS },
           'drive.files.create(upload)',
           ctx.log
         );
@@ -2120,7 +2120,7 @@ export async function handleTool(
             fields: 'id,name,webViewLink',
             supportsAllDrives: true,
           }, { signal }),
-          { ...ctx.runtimeConfig, retryMax: 0 },
+          { ...ctx.runtimeConfig, retryMax: 0, apiTimeout: UPLOAD_TIMEOUT_MS },
           'drive.files.create(pdfNoSplit)',
           ctx.log
         );
@@ -2151,7 +2151,7 @@ export async function handleTool(
               fields: 'id,name,webViewLink',
               supportsAllDrives: true,
             }, { signal }),
-            { ...ctx.runtimeConfig, retryMax: 0 },
+            { ...ctx.runtimeConfig, retryMax: 0, apiTimeout: UPLOAD_TIMEOUT_MS },
             'drive.files.create(pdfPart)',
             ctx.log
           );
@@ -2312,7 +2312,7 @@ export async function handleTool(
             },
             supportsAllDrives: true,
           }, { signal }),
-          { ...ctx.runtimeConfig, retryMax: 0 },
+          { ...ctx.runtimeConfig, retryMax: 0, apiTimeout: UPLOAD_TIMEOUT_MS },
           'drive.files.update(restoreRevision)',
           ctx.log
         );

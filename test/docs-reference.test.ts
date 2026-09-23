@@ -135,6 +135,69 @@ describe('Documentation reference', () => {
     assert.deepEqual(documented.sort(), registered.sort());
   });
 
+  // `docs/tools.md` and each tool's JSON schema both describe that tool's
+  // parameters, and nothing keeps them in sync -- `addSheet` once documented
+  // `sheetTitle` while its schema required `title`, so anyone who followed the
+  // docs got a validation error. A docs bullet "claims" the parameter(s) named
+  // in a leading run of one or more backticked identifiers, separated by `/`
+  // or `,`, immediately followed by a colon -- e.g. `` `spreadsheetId`,
+  // `sheetId`: Spreadsheet and sheet IDs ``. Backticks anywhere else in a
+  // bullet are routinely enum members, output field names, or other tools'
+  // names, so only that leading run counts; a bullet with no such leading run
+  // (e.g. `` Target (use one): `index` OR `textToFind` ``) is a free-form note
+  // and is skipped entirely. This only checks the direction that produces a
+  // caller-facing bug -- a documented name the schema doesn't have -- not the
+  // reverse (schema parameters the docs omit).
+  it('never claims a parameter that is not in the tool\'s schema', () => {
+    const allTools = [...docsTools, ...sheetsTools, ...slidesTools, ...driveTools, ...calendarTools];
+    const schemaByName = new Map(
+      allTools.map((tool) => [
+        tool.name,
+        new Set(
+          Object.keys(
+            (tool.inputSchema as { properties?: Record<string, unknown> } | undefined)?.properties ?? {},
+          ),
+        ),
+      ]),
+    );
+
+    const toolReference = withoutFencedCode(
+      fs.readFileSync(path.join(repositoryRoot, 'docs', 'tools.md'), 'utf8'),
+    );
+    const toolBullet = /^- \*\*([A-Za-z_][A-Za-z0-9_]*)\*\*/;
+    const paramBullet = /^ {2}- (.+)$/;
+    const leadingClaim = /^((?:`[A-Za-z0-9_]+`\s*[/,]\s*)*`[A-Za-z0-9_]+`)\s*:/;
+
+    const failures: string[] = [];
+    let currentTool: string | null = null;
+
+    for (const line of toolReference.split(/\r?\n/)) {
+      const toolMatch = toolBullet.exec(line);
+      if (toolMatch) {
+        currentTool = toolMatch[1];
+        continue;
+      }
+      if (!currentTool) continue;
+
+      const paramMatch = paramBullet.exec(line);
+      if (!paramMatch) continue;
+
+      const claim = leadingClaim.exec(paramMatch[1]);
+      if (!claim) continue; // a free-form note, not a parameter claim
+
+      const schema = schemaByName.get(currentTool);
+      if (!schema) continue; // an unregistered name is caught by the test above
+
+      for (const [, name] of claim[1].matchAll(/`([A-Za-z0-9_]+)`/g)) {
+        if (!schema.has(name)) {
+          failures.push(`${currentTool} claims \`${name}\`, which is not in its schema`);
+        }
+      }
+    }
+
+    assert.deepEqual(failures, []);
+  });
+
   it('states the registered tool count in the README and the tool reference', () => {
     const registered = String(Object.keys(TOOL_META).length);
     const failures: string[] = [];

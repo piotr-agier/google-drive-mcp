@@ -16,6 +16,8 @@ const fakeCtx = (captured: Record<string, unknown>) => ({
         ] }] }] }],
     } };
   } } }) },
+  runtimeConfig: { apiTimeout: 120_000, retryMax: 3, retryBaseDelay: 1_000 },
+  log: () => {},
 } as unknown as Parameters<typeof handleTool>[2]);
 
 test('getGoogleSheetCells is registered with ranges and fields', () => {

@@ -431,7 +431,7 @@ different identifiers; neither is accepted as a lock.
   - `dryRun`: return the fingerprint and guarded contents without writing (optional)
   - `maxCells` / `maxBytes`: budget for the contents returned on a dryRun or refusal (optional)
   - Optimistic, not atomic: the Sheets API has no compare-and-swap, so a write landing between the read and the write is not caught
-  - A cell listed in the returned `hazards` cannot be restored through `updates`, which only accepts strings and would silently change the cell's type on rollback - apply its returned `userEnteredValue` verbatim through another tool instead
+  - A cell listed in the returned `hazards` cannot be restored by feeding `preImage` back: `updates` carries strings, so re-writing the string re-interprets it as a formula, a number or a boolean and the cell changes type. Its native `userEnteredValue` is returned so that you can restore that one cell outside this server - through the Sheets API's own `updateCells`, or by hand - so an undo that touches a hazard cell needs that cell handled separately
   - The hazard list is deliberately not exhaustive: date-shaped text (e.g. `'2024-01-01'`) and other apostrophe-forced text outside the detected cases (formula-, number-, and boolean-looking) are not flagged
 
 - **getGoogleSheetContent** - Get spreadsheet content with cell information

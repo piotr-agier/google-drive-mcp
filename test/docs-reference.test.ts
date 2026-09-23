@@ -174,7 +174,7 @@ describe('Documentation reference', () => {
       // JSON Schema
       'anyOf', 'maxItems',
       // Google API methods and request types
-      'batchUpdate', 'updatePageElementsZOrder', 'tableStartLocation',
+      'batchUpdate', 'updateCells', 'updatePageElementsZOrder', 'tableStartLocation',
       // Google API field names
       'byteLength', 'contentUri', 'createdTime', 'dataBase64', 'externalOnly',
       'fileOrganizer', 'fullText', 'hangoutsMeet', 'hiddenByUser', 'horizontalRule',
@@ -223,6 +223,26 @@ describe('Documentation reference', () => {
     }
 
     assert.deepEqual([...new Set(failures)].sort(), []);
+  });
+
+  // The guarded-write hazard advice exists in two copies - the tool
+  // description and the docs/tools.md entry - with nothing tying them
+  // together, and they have drifted once already. Both told the caller to
+  // apply the returned userEnteredValue "through another tool", which no tool
+  // this server registers can do: the restore happens outside the server,
+  // through the Sheets API's own updateCells or by hand. Pin the shared
+  // sentence so the pair has to move together.
+  it('gives the guarded-write hazard advice identically in the description and the tool reference', () => {
+    const SHARED = 'restore that one cell outside this server';
+    const description = sheetsTools.find((tool) => tool.name === 'updateGoogleSheetIfUnchanged')!.description;
+    const reference = fs.readFileSync(path.join(repositoryRoot, 'docs', 'tools.md'), 'utf8');
+
+    assert.ok(description.includes(SHARED), 'the tool description must carry the shared hazard sentence');
+    assert.ok(reference.includes(SHARED), 'docs/tools.md must carry the same sentence');
+
+    for (const [where, text] of [['the description', description], ['docs/tools.md', reference]] as const) {
+      assert.doesNotMatch(text, /through another tool/, `${where} must not send the caller to a tool that does not exist`);
+    }
   });
 
   it('publishes every guide the README links to', () => {

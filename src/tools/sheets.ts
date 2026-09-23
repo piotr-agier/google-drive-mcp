@@ -5,8 +5,12 @@ import { errorResponse } from '../types.js';
 import { parseA1Range, convertA1ToGridRange, escapeDriveQuery, ALL_DRIVES_LIST_PARAMS, DRIVE_ORDER_BY_VALUES, type GridRange } from '../utils.js';
 import {
   CELL_FIELDS, DEFAULT_CELL_FIELDS, SHEET_METADATA, buildFieldMask, collectSheetMetadata,
-  extractRanges, matchRangesToGridData, type SheetLike,
+  extractRanges, matchRangesToGridData, type RangeMatch, type SheetLike,
 } from './sheetCells.js';
+import {
+  blockFromMatch, buildPreImage, checkWriteRanges, fingerprintOf, findHazards, guardRangesFor,
+  padToDeclaredRange, projectResponseValue, type CanonicalBlock, type Hazard, type PreImageRange,
+} from './sheetGuard.js';
 
 // ---------------------------------------------------------------------------
 // Zod Schemas
@@ -40,6 +44,22 @@ const BatchUpdateGoogleSheetValuesSchema = z.object({
   }), { required_error: "At least one update is required" })
     .min(1, "At least one update is required"),
   valueInputOption: z.enum(["RAW", "USER_ENTERED"]).optional()
+});
+
+const UpdateGoogleSheetIfUnchangedSchema = z.object({
+  spreadsheetId: z.string({ required_error: "Spreadsheet ID is required" }).min(1, "Spreadsheet ID is required"),
+  updates: z.array(z.object({
+    range: z.string({ required_error: "Range is required" }).min(1, "Range is required"),
+    values: z.array(z.array(z.string()), { required_error: "Values are required" })
+  }), { required_error: "At least one update is required" }).min(1, "At least one update is required"),
+  guardRanges: z.array(z.string().min(1)).optional(),
+  expectedFingerprint: z.string().regex(/^v1:[0-9a-f]{64}$/, "expectedFingerprint must be a v1: fingerprint returned by a dryRun call").optional(),
+  valueInputOption: z.enum(["RAW", "USER_ENTERED"]).optional().default("USER_ENTERED"),
+  dryRun: z.boolean().optional().default(false),
+  maxCells: z.number().int().min(1).max(100000).optional().default(2000),
+  maxBytes: z.number().int().min(1024).max(4 * 1024 * 1024).optional().default(131072)
+}).refine(a => a.dryRun || a.expectedFingerprint !== undefined, {
+  message: "expectedFingerprint is required unless dryRun is true - call with dryRun first to obtain it"
 });
 
 const GetGoogleSheetContentSchema = z.object({
@@ -350,6 +370,39 @@ export const toolDefinitions: ToolDefinition[] = [
           enum: ["RAW", "USER_ENTERED"],
           description: "Applies to every range in the batch. RAW (default): values stored exactly as provided - formulas stored as text strings. Safe for untrusted data. USER_ENTERED: values parsed like the spreadsheet UI - formulas (=SUM, =IF, etc.) are evaluated. SECURITY WARNING: USER_ENTERED can execute formulas, only use with trusted data, never with user-provided input that could contain malicious formulas like =IMPORTDATA() or =IMPORTRANGE()."
         }
+      },
+      required: ["spreadsheetId", "updates"]
+    }
+  },
+  {
+    name: "updateGoogleSheetIfUnchanged",
+    description: "Write cell values only if the guarded area has not changed since you read it, and get back what was overwritten so the change can be undone. Call once with dryRun:true to obtain the fingerprint, then again passing it as expectedFingerprint. IMPORTANT: this is optimistic and NOT atomic. The Sheets API has no compare-and-swap - unlike Docs, where ifRevisionId is enforced by the API itself - so the check happens in this server, and a write landing in the gap between the read and the write (well under a second) is not caught. It catches the case that actually happens: the model changed since you last looked. To undo a write, call again with updates set to the returned preImage and expectedFingerprint set to the returned postFingerprint - nothing else, since guardRanges defaults to the ranges in updates and preImage already carries exactly the ranges that were written. Any cell listed in the returned hazards cannot be restored by feeding preImage back: updates carries strings, so re-writing the string re-interprets it as a formula, a number or a boolean and the cell changes type. Its native userEnteredValue is returned so that you can restore that one cell outside this server - through the Sheets API's own updateCells, or by hand - so an undo that touches a hazard cell needs that cell handled separately. The hazard list is deliberately not exhaustive: text kept as text via a leading apostrophe is only flagged when it reads as a formula, a number, or TRUE/FALSE - date-shaped text (e.g. '2024-01-01') is not detected.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        updates: {
+          type: "array",
+          description: "Ranges to write, ValueRange-shaped, same as batchUpdateGoogleSheetValues. Each one must name a bounded rectangle - a single cell, or both corners given as in \"Sheet1!A2:C50\". An open-ended range (\"Sheet1!A2:C\", \"A:C\", \"5:9\") or a bare sheet name is refused, because the returned preImage and postFingerprint would then describe a different area than the one actually written. guardRanges may still be open-ended.",
+          items: {
+            type: "object",
+            properties: {
+              range: { type: "string", description: "A1 range, e.g. \"'Entity Assumptions'!C52:E52\"" },
+              values: { type: "array", description: "Rows of cell values", items: { type: "array", items: { type: "string" } } }
+            },
+            required: ["range", "values"]
+          }
+        },
+        guardRanges: {
+          type: "array",
+          description: "Ranges whose contents must be unchanged. Defaults to the ranges in updates. They need NOT cover the writes - guarding a source block while writing a summary elsewhere is a valid pattern - but then the guard says nothing about what you are overwriting.",
+          items: { type: "string" }
+        },
+        expectedFingerprint: { type: "string", description: "The fingerprint returned by a previous dryRun call. Required unless dryRun is true." },
+        valueInputOption: { type: "string", enum: ["RAW", "USER_ENTERED"], description: "USER_ENTERED (default) parses formulas; RAW stores them as text. SECURITY: USER_ENTERED evaluates formulas, so never use it with untrusted input." },
+        dryRun: { type: "boolean", description: "Write nothing; return the current fingerprint, the guarded contents and what would be written. This is how the first fingerprint is obtained." },
+        maxCells: { type: "number", description: "Budget for the guarded contents returned on a dryRun or a refusal (default 2000)" },
+        maxBytes: { type: "number", description: "Byte budget for the same (default 131072)" }
       },
       required: ["spreadsheetId", "updates"]
     }
@@ -1068,6 +1121,247 @@ export async function handleTool(
           type: "text",
           text: `Updated ${d.totalUpdatedCells ?? 0} cell(s) across ${rangeCount} range(s)${rangeList} in one batch.`
         }],
+        isError: false
+      };
+    }
+
+    case "updateGoogleSheetIfUnchanged": {
+      const validation = UpdateGoogleSheetIfUnchangedSchema.safeParse(args);
+      if (!validation.success) {
+        return errorResponse(validation.error.errors[0].message);
+      }
+      const a = validation.data;
+
+      // padToDeclaredRange (via blockFromMatch, below) throws when a declared
+      // guard rectangle is absurdly large - see MAX_DECLARED_RECTANGLE_CELLS
+      // in sheetGuard.ts - rather than materializing it. That is a plain,
+      // user-facing "narrow your range" condition, exactly like the
+      // matchRangesToGridData `{error}` case below, so it is turned into an
+      // errorResponse here. Only the two blockFromMatch passes are wrapped,
+      // and nothing else: a catch-all around the whole handler would swallow
+      // every Google API error out of spreadsheets.get too and answer with
+      // the same errorResponse the dispatcher in index.ts already produces -
+      // minus its log() call, which is the only record such a failure leaves.
+      const blocksFor = (matches: RangeMatch[]):
+        { blocks: ReturnType<typeof blockFromMatch>[] } | { error: string } => {
+        try {
+          return { blocks: matches.map(m => blockFromMatch(m)) };
+        } catch (err) {
+          return { error: (err as Error).message };
+        }
+      };
+
+      const guardRanges = guardRangesFor(a.updates, a.guardRanges);
+      const writeRanges = a.updates.map(u => u.range);
+
+      // Before the read, not after it: an unbounded write range can never be
+      // honoured (see checkWriteRanges), so refusing it here costs no API
+      // call at all. dryRun is checked too - a fingerprint taken over such a
+      // request is only ever going to be spent on a write that is refused.
+      const writeRangeProblem = checkWriteRanges(writeRanges);
+      if (writeRangeProblem) return errorResponse(writeRangeProblem);
+
+      // When the guard set is exactly the write set (the common, default
+      // case), reading it twice would ask the API for the same range twice
+      // in one request for no reason - matchRangesToGridData legitimately
+      // hands back one grid entry per requested range, duplicates included,
+      // so a naive concatenation here would double every guarded write's read
+      // for nothing. Collapse to a single read and let guardMatches and
+      // writeMatches both be the one set of matches: the fingerprint is a
+      // pure function of the blocks' contents, titles, origins and
+      // dimensions, never of how many times a range was requested, so the
+      // same sheet state hashes identically whichever branch computed it -
+      // a fingerprint taken by a dryRun (which may take either branch) stays
+      // valid for the write that follows. When the sets genuinely differ,
+      // order and multiplicity must still match what the fingerprint is
+      // computed over, so no deduplication happens there: read guard ranges
+      // then write ranges, in that order, and slice back apart.
+      const sameRanges = guardRanges.length === writeRanges.length
+        && guardRanges.every((r, i) => r === writeRanges[i]);
+      // dryRun never reaches the write (it returns right after the
+      // fingerprint below), so when the guard set is genuinely distinct from
+      // the write set there is nothing to read the write ranges FOR - yet
+      // concatenating them here would still pull every write target out of
+      // Google only to throw the result away, defeating the documented
+      // "guard a source block while writing a summary elsewhere" pattern
+      // (the write targets may not even exist yet). Request only the guard
+      // ranges in that case.
+      const readRanges = sameRanges ? writeRanges
+        : a.dryRun ? guardRanges
+        : [...guardRanges, ...writeRanges];
+
+      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      const response = await sheets.spreadsheets.get({
+        spreadsheetId: a.spreadsheetId,
+        ranges: readRanges,
+        fields: buildFieldMask(['userEnteredValue'], [])
+      });
+
+      const matched = matchRangesToGridData(readRanges, (response.data.sheets ?? []) as SheetLike[]);
+      if ('error' in matched) return errorResponse(matched.error);
+
+      const guardMatches = sameRanges ? matched.matches : matched.matches.slice(0, guardRanges.length);
+      // When the guard set equals the write set (the default), guardMatches
+      // and writeMatches are literally the same array: computing
+      // blockFromMatch over it once here and again below for the pre-image
+      // would project and pad the identical matches twice. Compute the guard
+      // pass's blocks once and let the write pass reuse them instead of
+      // recomputing; when the sets genuinely differ writeMatches is a
+      // disjoint slice with its own matches, so its own pass is unavoidable
+      // and unaffected.
+      const guardBlocks = blocksFor(guardMatches);
+      if ('error' in guardBlocks) return errorResponse(guardBlocks.error);
+      const guardResults = guardBlocks.blocks;
+      const fingerprint = fingerprintOf(guardResults.map(r => r.block));
+
+      // extractRanges pays a full JSON.stringify + Buffer.byteLength per cell
+      // to build guardContents, which only the dryRun and refusal payloads
+      // below ever read - the success path never touches it. Compute it lazily,
+      // once, only on whichever of those two branches is actually taken.
+      let guardContentsCache: ReturnType<typeof extractRanges> | undefined;
+      const guardContents = () => guardContentsCache ??= extractRanges(guardMatches, ['userEnteredValue'],
+        { maxCells: a.maxCells, maxBytes: a.maxBytes, includeEmpty: false });
+
+      if (a.dryRun) {
+        const cells = a.updates.reduce((n, u) => n + u.values.reduce((m, r) => m + r.length, 0), 0);
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            dryRun: true, fingerprint, guardContents: guardContents(),
+            wouldWrite: { ranges: writeRanges.length, cells }
+          }) }],
+          isError: false
+        };
+      }
+
+      if (fingerprint !== a.expectedFingerprint) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            refused: "fingerprint-mismatch",
+            expectedFingerprint: a.expectedFingerprint,
+            actualFingerprint: fingerprint,
+            guardContents: guardContents()
+          }) }],
+          isError: true
+        };
+      }
+
+      const writeMatches = sameRanges ? matched.matches : matched.matches.slice(guardRanges.length);
+      let writeResults = guardResults;
+      if (!sameRanges) {
+        const writeBlocks = blocksFor(writeMatches);
+        if ('error' in writeBlocks) return errorResponse(writeBlocks.error);
+        writeResults = writeBlocks.blocks;
+      }
+
+      const preImage: PreImageRange[] = [];
+      const hazards: Hazard[] = [];
+      writeResults.forEach(({ block, raw }, i) => {
+        preImage.push(buildPreImage(writeRanges[i], block.cells));
+        hazards.push(...findHazards(block.startRow, block.startColumn, raw));
+      });
+
+      let written;
+      try {
+        written = await sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: a.spreadsheetId,
+          requestBody: {
+            valueInputOption: a.valueInputOption,
+            data: a.updates,
+            includeValuesInResponse: true,
+            responseValueRenderOption: 'FORMULA'
+          }
+        });
+      } catch (err) {
+        // The request may have reached Google and been applied before the
+        // connection failed - a throw here means the transport broke, not
+        // that the write didn't happen. preImage and hazards were computed
+        // above, before the call, so they survive regardless: this is the
+        // one thing the tool exists to hand back, and a bare transport error
+        // would discard it exactly when it matters most.
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            error: "write-outcome-unknown",
+            message: `The request to write to the spreadsheet failed: ${(err as Error).message}. Whether the write was actually applied by Google before the failure is UNKNOWN - the connection broke before a response could be read, so postFingerprint (and an automated rollback keyed on it) is unavailable. Use preImage below to restore the pre-write state if the write did land, or take a fresh dryRun to check the sheet's current state before retrying.`,
+            preImage,
+            hazards
+          }) }],
+          isError: true
+        };
+      }
+
+      // postFingerprint is computed from the write response - there is no
+      // second read. The post-write block has to rest on the SAME geometry as
+      // the guard fingerprint: the declared A1 rectangle, not whatever Google
+      // happened to send back. updatedData.range echoes the DECLARED written
+      // range in full (checked against the live API: writing a single value
+      // into a declared 3x3 range came back with updatedData.range as that
+      // same 3x3, with values trimmed to 1x1), so both the origin and the
+      // dimensions are taken from that string rather than from the preceding
+      // read (writeMatches[i].grid), which may describe a different geometry
+      // when the guard set and the write set differ.
+      const writeResponses = written.data.responses ?? [];
+      const responsesIncomplete = writeResponses.length !== writeMatches.length
+        || writeResponses.some(r => !r.updatedData?.range);
+      if (responsesIncomplete) {
+        // The write has ALREADY happened, so a silent fingerprintOf([]) over a
+        // well-formed but meaningless response would be worse than an honest
+        // failure: it would hand back a postFingerprint against which a later
+        // rollback would either always refuse or - on an accidental match -
+        // roll back the wrong thing. preImage and hazards are already computed
+        // and remain the only way to restore the previous state.
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            error: "post-write-fingerprint-unavailable",
+            message: "The write to the spreadsheet succeeded, but the API response did not include updatedData.range for every range written, so the post-write state could not be fingerprinted - postFingerprint (and an automated rollback keyed on it) is unavailable. Use preImage below for a manual rollback, or take a fresh dryRun before any further guarded write against these ranges.",
+            written: { ranges: writeRanges.length, cells: written.data.totalUpdatedCells ?? 0 },
+            preImage,
+            hazards
+          }) }],
+          isError: true
+        };
+      }
+
+      // Everything from here on runs AFTER the write has landed, so a throw
+      // that escaped to the caller as a bare error would take preImage and
+      // hazards with it on the one path where they are the only way back.
+      // padToDeclaredRange raises the cell cap over whatever rectangle Google
+      // echoes, which the up-front checkWriteRanges should already have made
+      // unreachable - but the guarantee is worth more than the assumption, so
+      // this block is wrapped exactly as the batchUpdate call above is, and
+      // reports the same "the write happened, the fingerprint did not"
+      // failure the incomplete-response branch does.
+      let postFingerprint: string;
+      try {
+        const postBlocks: CanonicalBlock[] = writeResponses.map((r, i) => {
+          const updatedData = r.updatedData!;
+          const values = (updatedData.values ?? []) as unknown[][];
+          const cells = values.map(row => row.map(v => projectResponseValue(v)));
+          return padToDeclaredRange(updatedData.range!, writeMatches[i]?.sheetTitle ?? '', cells,
+            writeMatches[i]?.grid.startRow ?? 0, writeMatches[i]?.grid.startColumn ?? 0);
+        });
+        postFingerprint = fingerprintOf(postBlocks);
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            error: "post-write-fingerprint-unavailable",
+            message: `The write to the spreadsheet succeeded, but the post-write state could not be fingerprinted: ${(err as Error).message} - postFingerprint (and an automated rollback keyed on it) is unavailable. Use preImage below for a manual rollback, or take a fresh dryRun before any further guarded write against these ranges.`,
+            written: { ranges: writeRanges.length, cells: written.data.totalUpdatedCells ?? 0 },
+            preImage,
+            hazards
+          }) }],
+          isError: true
+        };
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({
+          spreadsheetId: a.spreadsheetId,
+          written: { ranges: writeRanges.length, cells: written.data.totalUpdatedCells ?? 0 },
+          fingerprintVerified: fingerprint,
+          postFingerprint,
+          preImage,
+          hazards
+        }) }],
         isError: false
       };
     }

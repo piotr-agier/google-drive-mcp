@@ -424,8 +424,8 @@ different identifiers; neither is accepted as a lock.
 
 - **updateGoogleSheetIfUnchanged** - Write cell values only if the guarded area is unchanged, returning the overwritten contents so the write can be undone
   - `spreadsheetId`: Spreadsheet ID
-  - `updates`: ranges to write, ValueRange-shaped
-  - `guardRanges`: ranges that must be unchanged (optional, defaults to the ranges in `updates`)
+  - `updates`: ranges to write, ValueRange-shaped; each must name a bounded rectangle (`'Sheet1!A2:C50'` or a single cell), since an open-ended one (`'Sheet1!A2:C'`, `'A:C'`, `'5:9'`) or a bare sheet name would make `preImage` and `postFingerprint` describe a different area than the one written
+  - `guardRanges`: ranges that must be unchanged (optional, defaults to the ranges in `updates`; these may be open-ended)
   - `expectedFingerprint`: fingerprint from a previous `dryRun` call; required unless `dryRun`
   - `valueInputOption`: `USER_ENTERED` (default) or `RAW` (optional)
   - `dryRun`: return the fingerprint and guarded contents without writing (optional)

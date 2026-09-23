@@ -4,6 +4,7 @@ import test from 'node:test';
 import { fingerprintOf, projectCellData, projectResponseValue } from '../../src/tools/sheetGuard.js';
 import { buildPreImage, findHazards, renderForWrite } from '../../src/tools/sheetGuard.js';
 import { blockFromMatch, guardRangesFor, padToDeclaredRange } from '../../src/tools/sheetGuard.js';
+import { checkWriteRanges } from '../../src/tools/sheetGuard.js';
 
 test('projectCellData reduces CellData to one comparable scalar', () => {
   assert.equal(projectCellData({ formulaValue: '=SUM(A1:A3)' }), '=SUM(A1:A3)');
@@ -226,8 +227,8 @@ test('blockFromMatch treats an absent offset as zero, per proto3', () => {
 
 test('blockFromMatch on an entirely empty range pads out to the DECLARED rectangle, not a zero-sized block', () => {
   // Google omits rowData entirely for an all-empty range, but the declared
-  // range Z90:AA95 is still 6 rows x 2 columns - this is finding 1's bug from
-  // the final review: a block sized to the OBSERVED (here: zero) extent
+  // range Z90:AA95 is still 6 rows x 2 columns: a block sized to the
+  // OBSERVED (here: zero) extent
   // under-covers the guard, and a pre-image built from it would restore
   // nothing while reporting success.
   const match = { range: 'Probe!Z90:AA95', sheetId: 0, sheetTitle: 'Probe', sheet: {},
@@ -287,7 +288,7 @@ test('padToDeclaredRange falls back to the observed extent for a bare whole-shee
 });
 
 // ---------------------------------------------------------------------------
-// Finding A: convertA1ToGridRange FABRICATES a missing end row (defaulting it
+// convertA1ToGridRange FABRICATES a missing end row (defaulting it
 // to startRow+1, as though a lone anchor were a 1-cell range), so "A1:C" and
 // "A5:A" were previously treated as bounded 1-row rectangles instead of
 // open-ended ranges. That silently discarded every row past the first out of
@@ -325,10 +326,10 @@ test('padToDeclaredRange still falls back to the observed extent for "A:C" and "
 });
 
 // ---------------------------------------------------------------------------
-// Finding B: convertA1ToGridRange's regex is uppercase-only and does not
-// strip '$', so a lowercase or absolute-reference spelling of a perfectly
-// bounded range threw and fell back to the (trimming-dependent) observed
-// extent - exactly the geometry padding was added to eliminate.
+// convertA1ToGridRange's regex is uppercase-only and does not strip '$', so
+// a lowercase or absolute-reference spelling of a perfectly bounded range
+// threw and fell back to the (trimming-dependent) observed extent - exactly
+// the geometry padding was added to eliminate.
 // declaredRectangle now normalizes ($ stripped, upper-cased) before parsing,
 // matching collectSheetMetadata's existing precedent.
 // ---------------------------------------------------------------------------
@@ -352,11 +353,11 @@ test('padToDeclaredRange recognizes a $-absolute declared range as the same boun
 });
 
 // ---------------------------------------------------------------------------
-// Finding C (correctness half): the declared rectangle must be capped so an
-// absurd declared area is refused with a clear error instead of being
-// materialized - `Probe!A1:Z100000` is twelve characters of input for 2.6
-// million cells, almost all of which Google trims away in the read but which
-// padToDeclaredRange would otherwise allocate in full.
+// The declared rectangle must be capped so that an absurd declared area is
+// refused with a clear error instead of being materialized - `Probe!A1:Z100000`
+// is twelve characters of input for 2.6 million cells, almost all of which
+// Google trims away in the read but which padToDeclaredRange would otherwise
+// allocate in full.
 // ---------------------------------------------------------------------------
 
 test('padToDeclaredRange refuses an absurdly large declared rectangle instead of materializing it', () => {
@@ -371,4 +372,87 @@ test('padToDeclaredRange accepts a large-but-ordinary declared rectangle right a
   const block = padToDeclaredRange('Probe!A1:CV1000', 'Probe', [['x']], 0, 0);
   assert.equal(block.rows, 1000);
   assert.equal(block.columns, 100);
+});
+
+// ---------------------------------------------------------------------------
+// Google reads "C3:A1" as "A1:C3", so a reversed range comes back from a write
+// as a bounded, ascending rectangle. Dropping it here as "no rectangle" would
+// leave the guard side on the observed extent while the write echo sat on the
+// declared one - the same range with two geometries, which is exactly what the
+// padding exists to prevent. The two anchors are corners, not a start and an
+// end, so they are normalized by min/max just as spelling is normalized above.
+// ---------------------------------------------------------------------------
+
+// Each of these observes a single cell where the declared rectangle is 3x3:
+// treated as no rectangle, the block would stay the 1x1 observed extent, so
+// the padding is what is actually being pinned, not an accidental agreement
+// between two equally-sized blocks.
+test('padToDeclaredRange normalizes fully reversed anchors ("C3:A1") to the same rectangle as "A1:C3"', () => {
+  const reversed = padToDeclaredRange('Probe!C3:A1', 'Probe', [['x']], 0, 0);
+  assert.deepEqual(reversed, padToDeclaredRange('Probe!A1:C3', 'Probe', [['x']], 0, 0));
+  assert.equal(reversed.startRow, 0);
+  assert.equal(reversed.startColumn, 0);
+  assert.equal(reversed.rows, 3);
+  assert.equal(reversed.columns, 3);
+  assert.deepEqual(reversed.cells[2], [null, null, null]);
+});
+
+test('padToDeclaredRange normalizes a row-reversed range ("A3:C1") to the same rectangle as "A1:C3"', () => {
+  const rowReversed = padToDeclaredRange('Probe!A3:C1', 'Probe', [['x']], 0, 0);
+  assert.deepEqual(rowReversed, padToDeclaredRange('Probe!A1:C3', 'Probe', [['x']], 0, 0));
+  assert.equal(rowReversed.rows, 3);
+  assert.equal(rowReversed.columns, 3);
+});
+
+test('padToDeclaredRange normalizes a column-reversed range ("C1:A3") to the same rectangle as "A1:C3"', () => {
+  const colReversed = padToDeclaredRange('Probe!C1:A3', 'Probe', [['x']], 0, 0);
+  assert.deepEqual(colReversed, padToDeclaredRange('Probe!A1:C3', 'Probe', [['x']], 0, 0));
+  assert.equal(colReversed.startColumn, 0);
+  assert.equal(colReversed.columns, 3);
+});
+
+test('a reversed range away from the origin takes its origin from the upper-left corner, not from the fallback', () => {
+  // The fallback anchors the block wherever the observation says; the declared
+  // rectangle of "C5:A3" starts at A3 whichever way round it was written.
+  const block = padToDeclaredRange('Probe!C5:A3', 'Probe', [['x']], 0, 0);
+  assert.equal(block.startRow, 2, 'row 3, zero-based');
+  assert.equal(block.startColumn, 0);
+  assert.equal(block.rows, 3);
+  assert.equal(block.columns, 3);
+});
+
+// ---------------------------------------------------------------------------
+// Write ranges, unlike guard ranges, must name a bounded rectangle: preImage
+// covers the declared rectangle and postFingerprint is taken over it, so an
+// open-ended write range yields a pre-image trimmed to whatever data was there
+// before the write and a fingerprint no later guard read can reproduce.
+// ---------------------------------------------------------------------------
+
+test('checkWriteRanges accepts bounded write ranges, in every spelling declaredRectangle understands', () => {
+  assert.equal(checkWriteRanges(['Probe!A1']), null);
+  assert.equal(checkWriteRanges(['Probe!A2:C50', "'Entity Assumptions'!C52:E52"]), null);
+  assert.equal(checkWriteRanges(['Probe!a$1:c$3', 'Probe!C3:A1', 'A1:B2']), null);
+});
+
+test('checkWriteRanges refuses every open-ended write range, naming it and asking for a narrower one', () => {
+  for (const range of ['Probe!A2:C', 'Probe!A5:A', 'Probe!A:C', 'Probe!5:9', 'A:C', '5:9', 'Probe']) {
+    const message = checkWriteRanges([range]);
+    assert.ok(message, `"${range}" must be refused as a write range`);
+    assert.match(message, /does not name a bounded rectangle/);
+    assert.ok(message.includes(`"${range}"`), 'the message must name the offending range');
+    assert.match(message, /Narrow the range/);
+  }
+});
+
+test('checkWriteRanges reports the first offending range out of several, and passes a wholly bounded set', () => {
+  const message = checkWriteRanges(['Probe!A1:B2', 'Probe!D2:F', 'Probe!H1']);
+  assert.ok(message);
+  assert.ok(message.includes('"Probe!D2:F"'));
+  assert.equal(checkWriteRanges(['Probe!A1:B2', 'Probe!D2:F9', 'Probe!H1']), null);
+});
+
+test('checkWriteRanges surfaces the cell cap for a bounded but absurd write range, rather than throwing', () => {
+  const message = checkWriteRanges(['Probe!A1:Z100000']);
+  assert.ok(message);
+  assert.match(message, /exceeds the 100000-cell/);
 });

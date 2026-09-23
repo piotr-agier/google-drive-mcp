@@ -186,7 +186,7 @@ export function guardRangesFor(updates: { range: string }[], declared?: string[]
 // A DECLARED rectangle requires BOTH anchors to carry BOTH a column and a
 // row - "A1", or "A1:C3". Anything else (a dangling column-only or row-only
 // side, on either anchor) is open-ended and reports no rectangle: "A1:C" and
-// "A5:A" are the two forms this guards against directly (see finding A below),
+// "A5:A" are the two forms this guards against directly,
 // "1:3" and "A:C" the ones that were already open before it. This is
 // deliberately its OWN parser rather than utils.convertA1ToGridRange, which
 // does not report an open end at all - it fabricates one, defaulting a
@@ -202,7 +202,12 @@ export function guardRangesFor(updates: { range: string }[], declared?: string[]
 // collectSheetMetadata already applies before parsing (see sheetCells.ts) -
 // so "a1:c3" and "A$1:C$3" are recognized as the same bounded 3x3 rectangle
 // "A1:C3" is, rather than falling back to the (trimming-dependent) observed
-// extent merely because of spelling.
+// extent merely because of spelling. The two anchors are then normalized the
+// same way, by min/max rather than in the order they were written: Google
+// itself reads "C3:A1" as "A1:C3", so a reversed range comes back from a
+// write bounded and in ascending order, and treating it as no rectangle here
+// would leave the guard side on the observed extent while the write side sat
+// on the declared one - two geometries for one range.
 const STRICT_RECT_RE = /^([A-Z]+)([0-9]+)(?::([A-Z]+)([0-9]+))?$/;
 
 // Upper bound on the cell count of a DECLARED rectangle that padToDeclaredRange
@@ -224,11 +229,13 @@ const MAX_DECLARED_RECTANGLE_CELLS = 100_000;
  *  null when the range has no bounded rectangle to pad to: an open-ended
  *  range (`A1:C`, `A5:A`, `A:C`, `5:9`) or a bare whole-sheet reference
  *  (`Probe`). Those are legitimate inputs with no fixed extent of their own,
- *  so callers fall back to the observed extent for them instead.
+ *  so callers fall back to the observed extent for them instead. Reversed
+ *  anchors (`C3:A1`) are NOT in that set: they name a perfectly definite
+ *  rectangle and are normalized into it.
  *
  *  Throws when the declared rectangle IS bounded but absurdly large - see
  *  MAX_DECLARED_RECTANGLE_CELLS above - rather than materializing it. */
-function declaredRectangle(range: string): { startRow: number; startColumn: number; rows: number; columns: number } | null {
+export function declaredRectangle(range: string): { startRow: number; startColumn: number; rows: number; columns: number } | null {
   const { cellRange } = splitRange(range);
   if (cellRange === null) return null; // bare whole-sheet reference
 
@@ -236,15 +243,18 @@ function declaredRectangle(range: string): { startRow: number; startColumn: numb
   const match = normalized.match(STRICT_RECT_RE);
   if (!match) return null; // open-ended: no rectangle genuinely declared
 
-  const [, startColLetters, startRowDigits, endColLetters, endRowDigits] = match;
-  const startColumn = colToIndex(startColLetters);
-  const startRow = parseInt(startRowDigits, 10) - 1;
-  const endColumn = endColLetters ? colToIndex(endColLetters) + 1 : startColumn + 1;
-  const endRow = endRowDigits ? parseInt(endRowDigits, 10) : startRow + 1;
+  const [, firstColLetters, firstRowDigits, secondColLetters, secondRowDigits] = match;
+  const firstColumn = colToIndex(firstColLetters);
+  const firstRow = parseInt(firstRowDigits, 10) - 1;
+  // A lone anchor ("A1") is the 1x1 rectangle whose two corners coincide.
+  const secondColumn = secondColLetters ? colToIndex(secondColLetters) : firstColumn;
+  const secondRow = secondRowDigits ? parseInt(secondRowDigits, 10) - 1 : firstRow;
 
-  const rows = endRow - startRow;
-  const columns = endColumn - startColumn;
-  if (rows <= 0 || columns <= 0) return null; // reversed anchors: no rectangle to pad to
+  // Corners, not start and end: either anchor may be the lower-right one.
+  const startColumn = Math.min(firstColumn, secondColumn);
+  const startRow = Math.min(firstRow, secondRow);
+  const rows = Math.abs(secondRow - firstRow) + 1;
+  const columns = Math.abs(secondColumn - firstColumn) + 1;
 
   if (rows * columns > MAX_DECLARED_RECTANGLE_CELLS) {
     throw new Error(
@@ -255,6 +265,51 @@ function declaredRectangle(range: string): { startRow: number; startColumn: numb
   }
 
   return { startRow, startColumn, rows, columns };
+}
+
+/** Whether every range being WRITTEN names a bounded rectangle, returning the
+ *  refusal message for the first that does not, or null when all of them do.
+ *
+ *  A guard range may be open-ended: the dryRun and the write read it the same
+ *  way, so whatever extent Google trims it to is the same extent on both
+ *  sides and the fingerprint still compares like with like. A write range
+ *  cannot, because two of this tool's promises rest on its declared rectangle
+ *  being the rectangle that is actually written:
+ *
+ *   - `preImage` must cover every cell the write touches. A read of
+ *     `Probe!A2:C` is trimmed to the existing data, so writing 5 rows over a
+ *     2-row area yields a 2-row pre-image: applying it restores those 2 rows
+ *     and leaves 3 rows of overwritten output standing. Same failure as the
+ *     `A1:C` case on the guard side, on the write side instead.
+ *   - `postFingerprint` must match a later guard read of the same range. It is
+ *     built from the bounded rectangle Google echoes in `updatedData.range`,
+ *     while the undo call's guard read of `Probe!A2:C` observes down to the
+ *     last data row - a different geometry, so the undo is refused as a
+ *     fingerprint mismatch even though nothing changed.
+ *
+ *  Neither can be fixed after the fact, so an unbounded write range is refused
+ *  up front rather than silently honoured in a weaker sense. Also surfaces the
+ *  MAX_DECLARED_RECTANGLE_CELLS cap for write ranges before any API call is
+ *  made, since declaredRectangle raises it. */
+export function checkWriteRanges(ranges: string[]): string | null {
+  for (const range of ranges) {
+    let rect: ReturnType<typeof declaredRectangle>;
+    try {
+      rect = declaredRectangle(range);
+    } catch (err) {
+      return (err as Error).message;
+    }
+    if (rect === null) {
+      return `Write range "${range}" does not name a bounded rectangle. An open-ended range ` +
+        `("Sheet1!A2:C", "A:C", "5:9") or a bare sheet name covers whatever data happens to be ` +
+        `there rather than a fixed block of cells, so the returned preImage would cover only the ` +
+        `rows that existed before the write - leaving anything written past them in place on an ` +
+        `undo - and postFingerprint would not match a later guard read of the same range. Narrow ` +
+        `the range to an explicit rectangle with both ends given (e.g. "Sheet1!A2:C50"). Guard ` +
+        `ranges may stay open-ended; only the ranges being written must be bounded.`;
+    }
+  }
+  return null;
 }
 
 /** Pads an observed block of cells (top-left anchored at the range's own

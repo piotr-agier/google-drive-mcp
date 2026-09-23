@@ -123,9 +123,9 @@ test('a guardRanges set that differs from the write range requests both, guard f
   // Distinct from the write range, so the handler must NOT collapse this to
   // one read: two grid entries, one per requested range in guard-then-write
   // order. This is the ACTUAL WRITE path - preImage/hazards need the write
-  // range read too. (The dryRun path is deliberately different: see finding
-  // F's test above - it never touches writeMatches, so it must read only
-  // the guard range.)
+  // range read too. (The dryRun path is deliberately different, as the test
+  // below pins: it never touches writeMatches, so it must read only the
+  // guard range.)
   const grid = {
     properties: { title: 'Model' },
     sheets: [{ properties: { sheetId: 0, title: 'Probe' },
@@ -156,7 +156,7 @@ test('a guardRanges set that differs from the write range requests both, guard f
 });
 
 test('a dryRun with guardRanges distinct from the write range requests only the guard ranges - the write targets are never fetched', async () => {
-  // Finding F: the dryRun branch never touches writeMatches at all, so
+  // The dryRun branch never touches writeMatches at all, so
   // concatenating writeRanges onto readRanges pulled the write targets out of
   // Google for nothing - defeating the documented "guard a source block while
   // writing a summary elsewhere" pattern, where the write target may not even
@@ -183,7 +183,7 @@ test('a dryRun with guardRanges distinct from the write range requests only the 
 });
 
 test('guardContents is absent from the success payload - it is only ever needed by dryRun and the refusal path', async () => {
-  // Finding E: guardContents paid a full JSON.stringify + Buffer.byteLength
+  // guardContents pays a full JSON.stringify + Buffer.byteLength
   // per cell unconditionally, even though the success path never reads it.
   const grid = gridWith({ formulaValue: '=A2' });
   const fp = await dryFingerprint(grid);
@@ -195,13 +195,13 @@ test('guardContents is absent from the success payload - it is only ever needed 
   assert.equal('guardContents' in payload, false);
 });
 
-test('a successful guarded write with the default guard set projects each match only once (findings D and E)', async () => {
+test('a successful guarded write with the default guard set projects each match only once', async () => {
   // Both the fingerprint pass (blockFromMatch) and extractRanges (behind
   // guardContents) read match.grid.rowData exactly once per match they
   // actually process. Counting reads on a shared getter therefore catches
-  // EITHER finding D (blockFromMatch recomputed for the identical guard/write
-  // match) or finding E (guardContents computed even though unused): fixed,
-  // the only read of rowData on this success path is the single
+  // EITHER blockFromMatch being recomputed for the identical guard/write
+  // match or guardContents being computed even though it is never read: the
+  // only read of rowData on this success path is the single
   // blockFromMatch call whose block is reused for both the fingerprint and
   // the pre-image/hazards.
   let rowDataReads = 0;
@@ -223,7 +223,7 @@ test('a successful guarded write with the default guard set projects each match 
   assert.equal(rowDataReads, 1, 'rowData must be read exactly once - not twice for the same guard/write match');
 });
 
-test('an absurdly large declared guard range is refused with a clear error, not materialized (finding C)', async () => {
+test('an absurdly large declared guard range is refused with a clear error, not materialized', async () => {
   const grid = {
     properties: { title: 'Model' },
     sheets: [{ properties: { sheetId: 0, title: 'Probe' },
@@ -239,7 +239,7 @@ test('an absurdly large declared guard range is refused with a clear error, not 
   assert.equal(calls.write, 0);
 });
 
-test('a batchUpdate that throws after the request was sent still returns preImage and hazards, flagging the outcome as unknown (finding G)', async () => {
+test('a batchUpdate that throws after the request was sent still returns preImage and hazards, flagging the outcome as unknown', async () => {
   const grid = gridWith({ formulaValue: '=A2' });
   const fp = await dryFingerprint(grid);
   const { ctx } = fakeCtx(grid);
@@ -263,8 +263,8 @@ test('a batchUpdate that throws after the request was sent still returns preImag
 });
 
 test('a guardRanges set equal to the write range collapses to a single read of exactly that one range', async () => {
-  // Pins the branch finding 1/2's fixes touch: when the guard set equals the
-  // write set the handler must read it once, not twice.
+  // When the guard set equals the write set, the handler must read it once,
+  // not twice.
   const grid = gridWith({ formulaValue: '=A2' });
   const captured: { ranges?: string[] } = {};
   const ctx = {
@@ -407,8 +407,8 @@ function makeStatefulCtx(sheetTitle: string, sheetId: number, initial: Record<st
 
 test('a real round trip: writing into a previously empty cell and a formula cell, then applying the returned preImage, restores exactly the original state', async () => {
   const { ctx, calls } = makeStatefulCtx('Probe', 0, {
-    // A1 starts out with no entry at all - genuinely empty, the case finding
-    // 1 broke. A2 holds a formula.
+    // A1 starts out with no entry at all - genuinely empty. A2 holds a
+    // formula.
     A2: { formulaValue: '=SUM(B1:B2)' },
   });
 
@@ -426,18 +426,20 @@ test('a real round trip: writing into a previously empty cell and a formula cell
   assert.equal(write!.isError, false);
   const writePayload = JSON.parse(write!.content[0].text as string);
 
-  // Finding 1's exact bug: the empty cell's pre-image must be an empty
-  // string a write can apply, not an under-covering `[]`.
+  // The empty cell's pre-image must be an empty string a write can apply,
+  // not an under-covering `[]`.
   assert.deepEqual(writePayload.preImage, [
     { range: 'Probe!A1', values: [['']] },
     { range: 'Probe!A2', values: [['=SUM(B1:B2)']] },
   ]);
 
+  // Exactly what the description asks for, and nothing else: guardRanges is
+  // not passed, because it defaults to the ranges in updates and the preImage
+  // already carries the ranges that were written.
   const undo = await handleTool('updateGoogleSheetIfUnchanged',
     {
       spreadsheetId: 'x',
       updates: writePayload.preImage,
-      guardRanges: ['Probe!A1', 'Probe!A2'],
       expectedFingerprint: writePayload.postFingerprint,
     }, ctx);
   assert.equal(undo!.isError, false, JSON.stringify(JSON.parse(undo!.content[0].text as string)));
@@ -472,4 +474,104 @@ test('the post-block geometry matches the guard geometry for the same declared r
   const reguardFp = JSON.parse(reguard!.content[0].text as string).fingerprint as string;
 
   assert.equal(payload.postFingerprint, reguardFp);
+});
+
+// ---------------------------------------------------------------------------
+// Write ranges must name a bounded rectangle. Both of the tool's promises
+// about a write rest on the declared rectangle being the rectangle actually
+// written: preImage is padded out to it, and postFingerprint is taken over the
+// one Google echoes in updatedData.range. An open-ended write range breaks
+// both - the pre-image is trimmed to the data that happened to be there, and a
+// later guard read of the same range observes down to the last data row, a
+// different geometry - so it is refused, and refused before the read, since no
+// API call can make it work.
+// ---------------------------------------------------------------------------
+
+test('an open-ended write range is refused before any API call, with a narrow-the-range message', async () => {
+  const { ctx, calls } = fakeCtx(gridWith({ numberValue: 1 }));
+  const result = await handleTool('updateGoogleSheetIfUnchanged',
+    { spreadsheetId: 'x', updates: [{ range: 'Probe!A2:C', values: [['1', '2', '3']] }],
+      expectedFingerprint: 'v1:' + '0'.repeat(64) }, ctx);
+  assert.ok(result);
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text as string, /does not name a bounded rectangle/);
+  assert.match(result.content[0].text as string, /Probe!A2:C/);
+  assert.match(result.content[0].text as string, /Narrow the range/);
+  assert.equal(calls.get, 0, 'a request that cannot be honoured must cost no read');
+  assert.equal(calls.write, 0);
+});
+
+test('every open-ended write form is refused, including a bare sheet name', async () => {
+  for (const range of ['Probe!A5:A', 'Probe!A:C', 'Probe!5:9', 'Probe']) {
+    const { ctx, calls } = fakeCtx(gridWith({ numberValue: 1 }));
+    const result = await handleTool('updateGoogleSheetIfUnchanged',
+      { spreadsheetId: 'x', updates: [{ range, values: [['1']] }],
+        expectedFingerprint: 'v1:' + '0'.repeat(64) }, ctx);
+    assert.equal(result!.isError, true, `"${range}" must be refused`);
+    assert.match(result!.content[0].text as string, /bounded rectangle/);
+    assert.equal(calls.get, 0);
+  }
+});
+
+test('a dryRun over an open-ended write range is refused too - its fingerprint could only ever be spent on a refused write', async () => {
+  const { ctx, calls } = fakeCtx(gridWith({ numberValue: 1 }));
+  const result = await handleTool('updateGoogleSheetIfUnchanged',
+    { spreadsheetId: 'x', updates: [{ range: 'Probe!A2:C', values: [['1']] }], dryRun: true }, ctx);
+  assert.ok(result);
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text as string, /bounded rectangle/);
+  assert.equal(calls.get, 0);
+});
+
+test('an open-ended GUARD range is still accepted - only the ranges being written must be bounded', async () => {
+  const { ctx, calls } = fakeCtx(gridWith({ numberValue: 1 }));
+  const result = await handleTool('updateGoogleSheetIfUnchanged',
+    { spreadsheetId: 'x', updates: [{ range: 'Probe!A1', values: [['1']] }],
+      guardRanges: ['Probe!A1:C'], dryRun: true }, ctx);
+  assert.ok(result);
+  assert.equal(result.isError, false, result.content[0].text as string);
+  assert.equal(calls.get, 1);
+});
+
+test('a Google API error keeps its stack instead of being flattened into a local errorResponse', async () => {
+  // The cell-cap refusal is caught around the two blockFromMatch passes and
+  // nowhere else. A catch-all over the whole handler would turn this into the
+  // same errorResponse the dispatcher produces, minus the dispatcher's log()
+  // call - the only record such a failure leaves anywhere.
+  const { ctx } = fakeCtx(gridWith({ numberValue: 1 }));
+  (ctx as any).google.sheets = () => ({
+    spreadsheets: { get: async () => { throw new Error('Request had insufficient authentication scopes'); } },
+  });
+  await assert.rejects(
+    () => handleTool('updateGoogleSheetIfUnchanged',
+      { spreadsheetId: 'x', updates: [{ range: 'Probe!A1', values: [['1']] }], dryRun: true }, ctx),
+    /insufficient authentication scopes/,
+  );
+});
+
+test('a post-write failure still hands back preImage and hazards rather than losing them', async () => {
+  // Everything after the batchUpdate runs with the write already applied, so a
+  // throw there must not escape with the pre-image: it is the only way back.
+  // Forced here by an echoed updatedData.range far past the cell cap.
+  const grid = gridWith({ formulaValue: '=A2' });
+  const fp = await dryFingerprint(grid);
+  const { ctx, calls } = fakeCtx(grid, {
+    writeResponse: { responses: [{ updatedData: { range: 'Probe!A1:Z100000', values: [['1']] } }], totalUpdatedCells: 1 },
+  });
+  const result = await handleTool('updateGoogleSheetIfUnchanged',
+    { spreadsheetId: 'x', updates: [{ range: 'Probe!A1', values: [['1']] }], expectedFingerprint: fp }, ctx);
+  assert.ok(result);
+  assert.equal(result.isError, true);
+  assert.equal(calls.write, 1, 'the write itself did happen');
+  const payload = JSON.parse(result.content[0].text as string);
+  assert.equal(payload.error, 'post-write-fingerprint-unavailable');
+  assert.match(payload.message, /exceeds the 100000-cell/);
+  assert.deepEqual(payload.preImage, [{ range: 'Probe!A1', values: [['=A2']] }]);
+  assert.deepEqual(payload.hazards, []);
+});
+
+test('the description tells callers to undo with preImage and postFingerprint alone', async () => {
+  const def = toolDefinitions.find(d => d.name === 'updateGoogleSheetIfUnchanged')!;
+  assert.match(def.description, /To undo a write, call again with updates set to the returned preImage and expectedFingerprint set to the returned postFingerprint/);
+  assert.doesNotMatch(def.description, /guardRanges set to the ranges you wrote/);
 });

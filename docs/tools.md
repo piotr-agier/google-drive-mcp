@@ -463,7 +463,7 @@ different identifiers; neither is accepted as a lock.
 - **addSpreadsheetSheet** - Add a new sheet/tab to an existing spreadsheet
 - **addSheet** - Alias for `addSpreadsheetSheet`
   - `spreadsheetId`: Spreadsheet ID
-  - `sheetTitle`: Title for the new sheet
+  - `title`: Title for the new sheet
 
 - **listSheets** - List tabs/sheets in a spreadsheet
   - `spreadsheetId`: Spreadsheet ID

@@ -685,11 +685,12 @@ different identifiers; neither is accepted as a lock.
   - `slideObjectIds`: Array of slide object IDs to move
   - `insertionIndex`: Target insertion index
 
-- **replaceAllTextInSlides** - Replace text across a presentation
+- **replaceAllTextInSlides** - Replace text across a presentation. It reaches slides, speaker notes, layouts and masters, so a match on a layout or master changes every slide that uses it
   - `presentationId`: Presentation ID
   - `containsText`: Text to find
   - `replaceText`: Replacement text
   - `matchCase`: Match case (optional, default: `false`)
+  - `expectedCount`: Exact number of occurrences expected (optional). Counted before writing; a mismatch aborts without modifying the presentation, and a match locks the write to the counted revision
 
 - **exportSlideThumbnail** - Export a slide thumbnail URL (PNG/JPEG, SMALL/MEDIUM/LARGE)
   - `presentationId`: Presentation ID

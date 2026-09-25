@@ -5,6 +5,7 @@ import type { ToolDefinition, ToolResult, ToolContext } from '../types.js';
 import { errorResponse } from '../types.js';
 import { uploadImageToDrive, deleteDriveFile } from '../utils/driveImageUpload.js';
 import { withRetry } from '../utils/retry.js';
+import { countOccurrences, diagnoseZeroMatch } from './findDiagnostics.js';
 
 // ---------------------------------------------------------------------------
 // Zod Schemas
@@ -147,8 +148,48 @@ const ReplaceAllTextInSlidesSchema = z.object({
   presentationId: z.string().min(1, "Presentation ID is required"),
   containsText: z.string().min(1, "containsText is required"),
   replaceText: z.string(),
-  matchCase: z.boolean().optional().default(false)
+  matchCase: z.boolean().optional().default(false),
+  expectedCount: z.number().int().min(1).optional()
 });
+
+// The count read for replaceAllTextInSlides' expectedCount asks for exactly the
+// surface the count walks, plus the revision the write is then locked to.
+const REPLACE_SURFACE_FIELDS =
+  'revisionId,slides(pageElements,slideProperties(notesPage(pageElements))),layouts(pageElements),masters(pageElements)';
+
+/**
+ * Every text container a Slides replaceAllText reaches, one string each:
+ * shapes and table cells on the slides, on their speaker-notes pages, and on
+ * the layouts and masters, recursing into groups. Checked against the live
+ * API: a match can run across paragraphs inside one container but never across
+ * two, so containers are counted separately rather than joined. The notes
+ * master is left out: the API cannot write to it, and the reference answers its
+ * id in pageObjectIds with a 400.
+ */
+function collectReplaceableTexts(presentation: slides_v1.Schema$Presentation): string[] {
+  const texts: string[] = [];
+  const textOf = (text: slides_v1.Schema$TextContent) =>
+    (text.textElements ?? []).map((te) => te.textRun?.content ?? '').join('');
+  const visit = (elements: slides_v1.Schema$PageElement[] | undefined) => {
+    for (const el of elements ?? []) {
+      if (el.shape?.text) texts.push(textOf(el.shape.text));
+      for (const row of el.table?.tableRows ?? []) {
+        for (const cell of row.tableCells ?? []) {
+          if (cell.text) texts.push(textOf(cell.text));
+        }
+      }
+      visit(el.elementGroup?.children);
+    }
+  };
+  for (const slide of presentation.slides ?? []) {
+    visit(slide.pageElements);
+    visit(slide.slideProperties?.notesPage?.pageElements);
+  }
+  for (const page of [...(presentation.layouts ?? []), ...(presentation.masters ?? [])]) {
+    visit(page.pageElements);
+  }
+  return texts;
+}
 
 const ExportSlideThumbnailSchema = z.object({
   presentationId: z.string().min(1, "Presentation ID is required"),
@@ -571,14 +612,15 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "replaceAllTextInSlides",
-    description: "Replace all matching text across presentation slides",
+    description: "Replace all matching text across a presentation. It reaches slides, speaker notes, layouts and masters, so a match on a layout or master changes every slide that uses it. A match can run across paragraphs inside one text box or table cell, never across two. Pass expectedCount to refuse the write when the count differs.",
     inputSchema: {
       type: "object",
       properties: {
         presentationId: { type: "string", description: "Presentation ID" },
         containsText: { type: "string", description: "Text to find" },
         replaceText: { type: "string", description: "Replacement text" },
-        matchCase: { type: "boolean", description: "Case-sensitive match" }
+        matchCase: { type: "boolean", description: "Case-sensitive match" },
+        expectedCount: { type: "number", description: "Optional safety guard: the exact number of occurrences you expect to replace, counted across slides, speaker notes, layouts and masters before writing. On a mismatch the call aborts without modifying the presentation; on a match the write is locked to the revision that was counted, so an edit landing in between fails the write instead of changing an unchecked number of matches. Costs one extra presentation read." }
       },
       required: ["presentationId", "containsText", "replaceText"]
     }
@@ -1801,29 +1843,79 @@ export async function handleTool(
       const a = validation.data;
 
       const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
-      const response = await withRetry(
-        (signal) => slidesService.presentations.batchUpdate({
-          presentationId: a.presentationId,
-          requestBody: {
-            requests: [{
-              replaceAllText: {
-                containsText: {
-                  text: a.containsText,
-                  matchCase: a.matchCase,
-                },
-                replaceText: a.replaceText,
-              }
-            }]
+
+      // expectedCount is a pre-write guard, as on findAndReplaceInDoc: count
+      // first and refuse to write on a mismatch. The write is then locked to
+      // the revision that was counted, so an edit landing in between fails the
+      // write instead of changing a number of matches nobody checked.
+      let counted: number | undefined;
+      let lock: string | undefined;
+      if (a.expectedCount !== undefined) {
+        const presentation = await withRetry(
+          (signal) => slidesService.presentations.get({ presentationId: a.presentationId, fields: REPLACE_SURFACE_FIELDS }, { signal }),
+          ctx.runtimeConfig,
+          'slides.presentations.get(replaceAllTextInSlides.expectedCount)',
+          ctx.log
+        );
+        const texts = collectReplaceableTexts(presentation.data);
+        counted = texts.reduce((n, text) => n + countOccurrences(text, a.containsText, a.matchCase), 0);
+        if (counted !== a.expectedCount) {
+          let message = `Aborted without writing: expectedCount=${a.expectedCount} but found ${counted} occurrence(s) of "${a.containsText}" across slides, speaker notes, layouts and masters.`;
+          if (counted === 0) {
+            const hint = diagnoseZeroMatch(texts.join('\n'), a.containsText, a.matchCase);
+            if (hint) message += `\nLikely cause: ${hint}.`;
+          } else if (counted > a.expectedCount) {
+            message += ' The extra matches may be elsewhere in the deck, and a match on a layout or master changes every slide that uses it. Use a longer, unique containsText.';
           }
-        }, { signal }),
-        { ...ctx.runtimeConfig, retryMax: 0 },
-        'slides.presentations.batchUpdate(replaceAllText)',
-        ctx.log
-      );
+          return { content: [{ type: 'text', text: message }], isError: true };
+        }
+        lock = presentation.data.revisionId || undefined;
+      }
+
+      let response;
+      try {
+        response = await withRetry(
+          (signal) => slidesService.presentations.batchUpdate({
+            presentationId: a.presentationId,
+            requestBody: {
+              requests: [{
+                replaceAllText: {
+                  containsText: {
+                    text: a.containsText,
+                    matchCase: a.matchCase,
+                  },
+                  replaceText: a.replaceText,
+                }
+              }],
+              ...(lock !== undefined ? { writeControl: { requiredRevisionId: lock } } : {}),
+            }
+          }, { signal }),
+          { ...ctx.runtimeConfig, retryMax: 0 },
+          'slides.presentations.batchUpdate(replaceAllText)',
+          ctx.log
+        );
+      } catch (error: any) {
+        // A 400 on the locked write is the lock failing (Slides answers a stale
+        // requiredRevisionId with a 400, checked against the live API). As in
+        // the Docs multi-line path (#219), key on whether a lock was sent, not
+        // on Google's wording, and keep Google's message so a 400 from another
+        // cause stays diagnosable.
+        if (lock !== undefined && (error.status ?? error.code) === 400) {
+          throw new Error(
+            'The presentation changed between the count and the write (revision mismatch), so nothing was replaced. ' +
+              `Run it again to count afresh. (Google Slides API: ${error.message})`,
+          );
+        }
+        throw error;
+      }
 
       const count = response.data.replies?.[0]?.replaceAllText?.occurrencesChanged ?? 0;
+      let message = `Replaced ${count} occurrence(s) of "${a.containsText}" in slides.`;
+      if (counted !== undefined && count !== counted) {
+        message += `\nWARNING: ${counted} occurrence(s) were counted before writing, but the API changed ${count}. Re-read the presentation before further edits.`;
+      }
       return {
-        content: [{ type: 'text', text: `Replaced ${count} occurrence(s) of "${a.containsText}" in slides.` }],
+        content: [{ type: 'text', text: message }],
         isError: false,
       };
     }

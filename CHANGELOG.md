@@ -4,9 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Fixed
+### Changed
 
-- **docs:** the parameter gate from #222/#223 skipped every `(use one):` / `Provide either` targeting bullet outright — exactly the shape a targeting rework is most likely to touch — because it only ever read a leading run of backticked names before a colon. The claim parser now also recognizes a short prose label (with at most one parenthetical annotation) or the literal `Provide either`, immediately followed by two or more backticked names joined by `OR`/`or`, `+`, `,`, or `/`, each optionally carrying its own trailing parenthetical; requiring a real separator right after the prefix is what keeps an ordinary description bullet (one name, then prose) from being mistaken for a claim. That brings 8 previously-skipped bullets under the gate — the `Target (use one):` bullets on `insertText`, `deleteRange`, `applyTextStyle`, `applyParagraphStyle`, and `createParagraphBullets`; `addComment`'s `Provide either` bullet; `replaceSlideImage`'s `Source (use one):` bullet; and `styleDocTable`'s cell-subset bullet — and all 8 check out against their schemas today. Coverage goes from 438 to 446 of 467 parameter bullets; a run that continues past a separator this gate doesn't recognize (`with`, as in `styleDocTable`'s `rowSpan`/`columnSpan`) still stops there, and a free-form sentence that merely mentions a name is still skipped entirely ([#225](https://github.com/piotr-agier/google-drive-mcp/pull/225))
+- **docs:** the `docs/tools.md` parameter gate now also reads `(use one):` and `Provide either` targeting bullets, so a documented targeting parameter that drifts from its tool's schema fails the build ([#225](https://github.com/piotr-agier/google-drive-mcp/pull/225), [#229](https://github.com/piotr-agier/google-drive-mcp/pull/229))
 
 ## [2.12.0](https://github.com/piotr-agier/google-drive-mcp/compare/v2.11.0...v2.12.0) (2026-09-25)
 

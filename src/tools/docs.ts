@@ -5121,7 +5121,7 @@ export async function handleTool(toolName: string, args: Record<string, unknown>
       let result = `**Document Information:**\n\n`;
       result += `**Name:** ${file.name}\n`;
       result += `**ID:** ${file.id}\n`;
-      result += `**Type:** Google Document\n`;
+      result += `**Type:** ${file.mimeType || 'Unknown'}\n`;
       result += `**Created:** ${createdDate}\n`;
       result += `**Last Modified:** ${modifiedDate}\n`;
 

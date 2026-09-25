@@ -8,6 +8,10 @@ All notable changes to this project will be documented in this file.
 
 - **docs:** the `docs/tools.md` parameter gate now also reads `(use one):` and `Provide either` targeting bullets, so a documented targeting parameter that drifts from its tool's schema fails the build ([#225](https://github.com/piotr-agier/google-drive-mcp/pull/225), [#229](https://github.com/piotr-agier/google-drive-mcp/pull/229))
 
+### Fixed
+
+- **docs:** `getDocumentInfo` printed `Type: Google Document` for every file, including non-Doc Drive files it resolves just as well. It now prints the file's real `mimeType`, which its Drive read was already fetching ([#214](https://github.com/piotr-agier/google-drive-mcp/issues/214))
+
 ## [2.12.0](https://github.com/piotr-agier/google-drive-mcp/compare/v2.11.0...v2.12.0) (2026-09-25)
 
 ### Added

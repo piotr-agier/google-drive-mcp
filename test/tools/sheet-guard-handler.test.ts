@@ -10,6 +10,8 @@ function fakeCtx(grid: unknown, opts: { writeResponse?: unknown } = {}) {
   const calls = { get: 0, write: 0, lastWriteBody: null as any };
   const ctx = {
     authClient: {},
+    runtimeConfig: { apiTimeout: 120_000, retryMax: 3, retryBaseDelay: 1_000 },
+    log: () => {},
     google: {
       sheets: () => ({
         spreadsheets: {
@@ -137,6 +139,8 @@ test('a guardRanges set that differs from the write range requests both, guard f
   const captured: { ranges?: string[] } = {};
   const ctx = {
     authClient: {},
+    runtimeConfig: { apiTimeout: 120_000, retryMax: 3, retryBaseDelay: 1_000 },
+    log: () => {},
     google: { sheets: () => ({ spreadsheets: {
       get: async (params: any) => { captured.ranges = params.ranges; return { data: grid }; },
       values: { batchUpdate: async () => ({ data: { responses: [{ updatedData: { range: 'Probe!A1', values: [['1']] } }] } }) },
@@ -169,6 +173,8 @@ test('a dryRun with guardRanges distinct from the write range requests only the 
   const captured: { ranges?: string[] } = {};
   const ctx = {
     authClient: {},
+    runtimeConfig: { apiTimeout: 120_000, retryMax: 3, retryBaseDelay: 1_000 },
+    log: () => {},
     google: { sheets: () => ({ spreadsheets: { get: async (params: any) => {
       captured.ranges = params.ranges;
       return { data: grid };
@@ -269,6 +275,8 @@ test('a guardRanges set equal to the write range collapses to a single read of e
   const captured: { ranges?: string[] } = {};
   const ctx = {
     authClient: {},
+    runtimeConfig: { apiTimeout: 120_000, retryMax: 3, retryBaseDelay: 1_000 },
+    log: () => {},
     google: { sheets: () => ({ spreadsheets: { get: async (params: any) => {
       captured.ranges = params.ranges;
       return { data: grid };
@@ -378,6 +386,8 @@ function makeStatefulCtx(sheetTitle: string, sheetId: number, initial: Record<st
 
   const ctx = {
     authClient: {},
+    runtimeConfig: { apiTimeout: 120_000, retryMax: 3, retryBaseDelay: 1_000 },
+    log: () => {},
     google: {
       sheets: () => ({
         spreadsheets: {

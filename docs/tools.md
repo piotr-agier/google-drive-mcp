@@ -1,6 +1,6 @@
 # Tool reference
 
-This server exposes 129 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
+This server exposes 130 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
 
 ## Available Tools
 
@@ -422,6 +422,18 @@ different identifiers; neither is accepted as a lock.
   - `updates`: Array of `{range, values}` pairs; overlapping ranges have no documented precedence, so avoid them
   - `valueInputOption`: `RAW` (default, safe) or `USER_ENTERED` (evaluates formulas), applied to every range (optional)
 
+- **updateGoogleSheetIfUnchanged** - Write cell values only if the guarded area is unchanged, returning the overwritten contents so the write can be undone
+  - `spreadsheetId`: Spreadsheet ID
+  - `updates`: ranges to write, ValueRange-shaped; each must name a bounded rectangle (`'Sheet1!A2:C50'` or a single cell), since an open-ended one (`'Sheet1!A2:C'`, `'A:C'`, `'5:9'`) or a bare sheet name would make `preImage` and `postFingerprint` describe a different area than the one written
+  - `guardRanges`: ranges that must be unchanged (optional, defaults to the ranges in `updates`; these may be open-ended)
+  - `expectedFingerprint`: fingerprint from a previous `dryRun` call; required unless `dryRun`
+  - `valueInputOption`: `USER_ENTERED` (default) or `RAW` (optional)
+  - `dryRun`: return the fingerprint and guarded contents without writing (optional)
+  - `maxCells` / `maxBytes`: budget for the contents returned on a dryRun or refusal (optional)
+  - Optimistic, not atomic: the Sheets API has no compare-and-swap, so a write landing between the read and the write is not caught
+  - A cell listed in the returned `hazards` cannot be restored by feeding `preImage` back: `updates` carries strings, so re-writing the string re-interprets it as a formula, a number or a boolean and the cell changes type. Its native `userEnteredValue` is returned so that you can restore that one cell outside this server - through the Sheets API's own `updateCells`, or by hand - so an undo that touches a hazard cell needs that cell handled separately
+  - The hazard list is deliberately not exhaustive: date-shaped text (e.g. `'2024-01-01'`) and other apostrophe-forced text outside the detected cases (formula-, number-, and boolean-looking) are not flagged
+
 - **getGoogleSheetContent** - Get spreadsheet content with cell information
   - `spreadsheetId`: Spreadsheet ID
   - `range`: Range to get (e.g., 'Sheet1!A1:C10')
@@ -449,9 +461,11 @@ different identifiers; neither is accepted as a lock.
   - `valueInputOption`: `RAW` or `USER_ENTERED` (optional, default: USER_ENTERED)
 
 - **addSpreadsheetSheet** - Add a new sheet/tab to an existing spreadsheet
-- **addSheet** - Alias for `addSpreadsheetSheet`
   - `spreadsheetId`: Spreadsheet ID
   - `sheetTitle`: Title for the new sheet
+- **addSheet** - Alias for `addSpreadsheetSheet`; note it takes `title`, not `sheetTitle`
+  - `spreadsheetId`: Spreadsheet ID
+  - `title`: Title for the new sheet
 
 - **listSheets** - List tabs/sheets in a spreadsheet
   - `spreadsheetId`: Spreadsheet ID

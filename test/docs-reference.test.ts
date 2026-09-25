@@ -135,6 +135,82 @@ describe('Documentation reference', () => {
     assert.deepEqual(documented.sort(), registered.sort());
   });
 
+  // `docs/tools.md` and each tool's JSON schema both describe that tool's
+  // parameters, and nothing keeps them in sync -- `addSheet` once documented
+  // `sheetTitle` while its schema required `title`, so anyone who followed the
+  // docs got a validation error. A docs bullet "claims" the parameter(s) named
+  // in a leading run of one or more backticked identifiers, separated by `/`
+  // or `,`, immediately followed by a colon -- e.g. `` `spreadsheetId`,
+  // `sheetId`: Spreadsheet and sheet IDs ``. Backticks anywhere else in a
+  // bullet are routinely enum members, output field names, or other tools'
+  // names, so only that leading run counts; a bullet with no such leading run
+  // (e.g. `` Target (use one): `index` OR `textToFind` ``) is a free-form note
+  // and is skipped entirely. That is a known blind spot: the `(use one):` and
+  // `Provide either` bullets on the Docs write tools, `styleDocTable`, and
+  // `replaceSlideImage` name the parameters most likely to drift in a
+  // targeting rework, and this gate does not read them. This only checks the
+  // direction that produces a caller-facing bug -- a documented name the
+  // schema doesn't have -- not the reverse (schema parameters the docs omit).
+  it('never claims a parameter that is not in the tool\'s schema', () => {
+    const allTools = [...docsTools, ...sheetsTools, ...slidesTools, ...driveTools, ...calendarTools];
+    const schemaByName = new Map(
+      allTools.map((tool) => [
+        tool.name,
+        new Set(
+          Object.keys(
+            (tool.inputSchema as { properties?: Record<string, unknown> } | undefined)?.properties ?? {},
+          ),
+        ),
+      ]),
+    );
+
+    const toolReference = withoutFencedCode(
+      fs.readFileSync(path.join(repositoryRoot, 'docs', 'tools.md'), 'utf8'),
+    );
+    const toolBullet = /^- \*\*([A-Za-z_][A-Za-z0-9_]*)\*\*/;
+    const heading = /^#{1,6}\s/;
+    // Exactly two spaces: a deeper bullet documents a nested property or an
+    // enum (`type` / `value` under `addGoogleSheetConditionalFormat`), which is
+    // not a key of the top-level schema, so it is deliberately not a claim.
+    const paramBullet = /^ {2}- (.+)$/;
+    const leadingClaim = /^((?:`[A-Za-z0-9_]+`\s*[/,]\s*)*`[A-Za-z0-9_]+`)\s*:/;
+
+    const failures: string[] = [];
+    let currentTool: string | null = null;
+
+    for (const line of toolReference.split(/\r?\n/)) {
+      const toolMatch = toolBullet.exec(line);
+      if (toolMatch) {
+        currentTool = toolMatch[1];
+        continue;
+      }
+      // A heading ends the previous tool's section, so a bullet under it is
+      // not checked against whichever tool happened to come last.
+      if (heading.test(line)) {
+        currentTool = null;
+        continue;
+      }
+      if (!currentTool) continue;
+
+      const paramMatch = paramBullet.exec(line);
+      if (!paramMatch) continue;
+
+      const claim = leadingClaim.exec(paramMatch[1]);
+      if (!claim) continue; // a free-form note, not a parameter claim
+
+      const schema = schemaByName.get(currentTool);
+      if (!schema) continue; // an unregistered name is caught by the test above
+
+      for (const [, name] of claim[1].matchAll(/`([A-Za-z0-9_]+)`/g)) {
+        if (!schema.has(name)) {
+          failures.push(`${currentTool} claims \`${name}\`, which is not in its schema`);
+        }
+      }
+    }
+
+    assert.deepEqual(failures, []);
+  });
+
   it('states the registered tool count in the README and the tool reference', () => {
     const registered = String(Object.keys(TOOL_META).length);
     const failures: string[] = [];
@@ -174,7 +250,7 @@ describe('Documentation reference', () => {
       // JSON Schema
       'anyOf', 'maxItems',
       // Google API methods and request types
-      'batchUpdate', 'updatePageElementsZOrder', 'tableStartLocation',
+      'batchUpdate', 'updateCells', 'updatePageElementsZOrder', 'tableStartLocation',
       // Google API field names
       'byteLength', 'contentUri', 'createdTime', 'dataBase64', 'externalOnly',
       'fileOrganizer', 'fullText', 'hangoutsMeet', 'hiddenByUser', 'horizontalRule',
@@ -187,7 +263,7 @@ describe('Documentation reference', () => {
       'hiddenColumns', 'hiddenRows', 'textFormatRuns', 'userEnteredFormat',
       'userEnteredValue',
       // Output field names, named in prose by the tool that returns them
-      'nextRanges',
+      'nextRanges', 'postFingerprint', 'preImage',
     ]);
 
     // A tool may freely name its own parameters; only cross-tool references
@@ -223,6 +299,26 @@ describe('Documentation reference', () => {
     }
 
     assert.deepEqual([...new Set(failures)].sort(), []);
+  });
+
+  // The guarded-write hazard advice exists in two copies - the tool
+  // description and the docs/tools.md entry - with nothing tying them
+  // together, and they have drifted once already. Both told the caller to
+  // apply the returned userEnteredValue "through another tool", which no tool
+  // this server registers can do: the restore happens outside the server,
+  // through the Sheets API's own updateCells or by hand. Pin the shared
+  // sentence so the pair has to move together.
+  it('gives the guarded-write hazard advice identically in the description and the tool reference', () => {
+    const SHARED = 'restore that one cell outside this server';
+    const description = sheetsTools.find((tool) => tool.name === 'updateGoogleSheetIfUnchanged')!.description;
+    const reference = fs.readFileSync(path.join(repositoryRoot, 'docs', 'tools.md'), 'utf8');
+
+    assert.ok(description.includes(SHARED), 'the tool description must carry the shared hazard sentence');
+    assert.ok(reference.includes(SHARED), 'docs/tools.md must carry the same sentence');
+
+    for (const [where, text] of [['the description', description], ['docs/tools.md', reference]] as const) {
+      assert.doesNotMatch(text, /through another tool/, `${where} must not send the caller to a tool that does not exist`);
+    }
   });
 
   it('publishes every guide the README links to', () => {

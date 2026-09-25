@@ -143,14 +143,32 @@ describe('Documentation reference', () => {
   // or `,`, immediately followed by a colon -- e.g. `` `spreadsheetId`,
   // `sheetId`: Spreadsheet and sheet IDs ``. Backticks anywhere else in a
   // bullet are routinely enum members, output field names, or other tools'
-  // names, so only that leading run counts; a bullet with no such leading run
-  // (e.g. `` Target (use one): `index` OR `textToFind` ``) is a free-form note
-  // and is skipped entirely. That is a known blind spot: the `(use one):` and
-  // `Provide either` bullets on the Docs write tools, `styleDocTable`, and
-  // `replaceSlideImage` name the parameters most likely to drift in a
-  // targeting rework, and this gate does not read them. This only checks the
-  // direction that produces a caller-facing bug -- a documented name the
-  // schema doesn't have -- not the reverse (schema parameters the docs omit).
+  // names, so only that leading run counts.
+  //
+  // A second shape also counts as a claim: a short prose label -- optionally
+  // with one parenthetical annotation, e.g. `(use one)` -- followed by a
+  // colon, or the literal prefix `Provide either`, immediately followed by
+  // two or more backticked names joined by `OR`/`or`, `+`, `,`, or `/` (each
+  // name may carry its own trailing parenthetical, e.g. `` `startIndex`
+  // (1-based, inclusive) ``). `` Target (use one): `index` OR `textToFind`
+  // +`matchInstance` `` claims `index`, `textToFind`, and `matchInstance` this
+  // way. Requiring at least one real separator right after the prefix -- not
+  // just any bullet that happens to start with a label, a colon, and a single
+  // backtick -- is what keeps this from firing on an ordinary description
+  // bullet like `` Inline images are surfaced (not dropped): `markdown`
+  // renders ... `` (one name, then prose, no separator).
+  //
+  // Both shapes only ever capture a leading run: whatever comes after the
+  // last separator this gate recognizes goes unread. `styleDocTable`'s
+  // cell-subset bullet -- `` Cell subset targeting (optional; default whole
+  // table): `rowIndex`+`columnIndex` (0-based) with `rowSpan`/`columnSpan`
+  // (default 1) `` -- claims only `rowIndex` and `columnIndex`; `with` is not
+  // a recognized separator, so `rowSpan` and `columnSpan` are not read here.
+  // That, and any bullet whose backticks never follow one of these two
+  // shapes (a free-form sentence that merely mentions a name in passing), are
+  // the blind spot that remains. This only checks the direction that
+  // produces a caller-facing bug -- a documented name the schema doesn't have
+  // -- not the reverse (schema parameters the docs omit).
   it('never claims a parameter that is not in the tool\'s schema', () => {
     const allTools = [...docsTools, ...sheetsTools, ...slidesTools, ...driveTools, ...calendarTools];
     const schemaByName = new Map(
@@ -175,6 +193,18 @@ describe('Documentation reference', () => {
     const paramBullet = /^ {2}- (.+)$/;
     const leadingClaim = /^((?:`[A-Za-z0-9_]+`\s*[/,]\s*)*`[A-Za-z0-9_]+`)\s*:/;
 
+    // The second claim shape: `Label (annotation): <run>` or `Provide either
+    // <run>`, where `<run>` is two or more backticked names -- each optionally
+    // followed by its own parenthetical -- joined by OR/or, +, `,`, or `/`.
+    // Requiring a real separator between the first and second name is what
+    // makes this unambiguous: a free-form bullet that opens with a label, a
+    // colon, and a single backticked name (then prose) does not qualify.
+    const paramToken = '`[A-Za-z0-9_]+`(?:\\s*\\([^()]*\\))?';
+    const paramSep = '\\s*(?:OR|or|\\+|,|/)\\s*';
+    const targetingRun = new RegExp(`^(${paramToken}(?:${paramSep}${paramToken})+)`);
+    const targetingPrefix = /^(?:[A-Za-z][A-Za-z ]*)(?:\s*\([^()]*\))?:\s*/;
+    const provideEitherPrefix = /^Provide either\s+/;
+
     const failures: string[] = [];
     let currentTool: string | null = null;
 
@@ -195,13 +225,23 @@ describe('Documentation reference', () => {
       const paramMatch = paramBullet.exec(line);
       if (!paramMatch) continue;
 
+      let claimText: string | null = null;
       const claim = leadingClaim.exec(paramMatch[1]);
-      if (!claim) continue; // a free-form note, not a parameter claim
+      if (claim) {
+        claimText = claim[1];
+      } else {
+        const prefixMatch = targetingPrefix.exec(paramMatch[1]) ?? provideEitherPrefix.exec(paramMatch[1]);
+        if (prefixMatch) {
+          const run = targetingRun.exec(paramMatch[1].slice(prefixMatch[0].length));
+          if (run) claimText = run[1];
+        }
+      }
+      if (!claimText) continue; // a free-form note, not a parameter claim
 
       const schema = schemaByName.get(currentTool);
       if (!schema) continue; // an unregistered name is caught by the test above
 
-      for (const [, name] of claim[1].matchAll(/`([A-Za-z0-9_]+)`/g)) {
+      for (const [, name] of claimText.matchAll(/`([A-Za-z0-9_]+)`/g)) {
         if (!schema.has(name)) {
           failures.push(`${currentTool} claims \`${name}\`, which is not in its schema`);
         }

@@ -1228,11 +1228,16 @@ export async function handleTool(
         : [...guardRanges, ...writeRanges];
 
       const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
-      const response = await sheets.spreadsheets.get({
-        spreadsheetId: a.spreadsheetId,
-        ranges: readRanges,
-        fields: buildFieldMask(['userEnteredValue'], [])
-      });
+      const response = await withRetry(
+        (signal) => sheets.spreadsheets.get({
+          spreadsheetId: a.spreadsheetId,
+          ranges: readRanges,
+          fields: buildFieldMask(['userEnteredValue'], [])
+        }, { signal }),
+        ctx.runtimeConfig,
+        'sheets.spreadsheets.get(guard)',
+        ctx.log
+      );
 
       const matched = matchRangesToGridData(readRanges, (response.data.sheets ?? []) as SheetLike[]);
       if ('error' in matched) return errorResponse(matched.error);
@@ -1299,26 +1304,31 @@ export async function handleTool(
 
       let written;
       try {
-        written = await sheets.spreadsheets.values.batchUpdate({
-          spreadsheetId: a.spreadsheetId,
-          requestBody: {
-            valueInputOption: a.valueInputOption,
-            data: a.updates,
-            includeValuesInResponse: true,
-            responseValueRenderOption: 'FORMULA'
-          }
-        });
+        written = await withRetry(
+          (signal) => sheets.spreadsheets.values.batchUpdate({
+            spreadsheetId: a.spreadsheetId,
+            requestBody: {
+              valueInputOption: a.valueInputOption,
+              data: a.updates,
+              includeValuesInResponse: true,
+              responseValueRenderOption: 'FORMULA'
+            }
+          }, { signal }),
+          { ...ctx.runtimeConfig, retryMax: 0 },
+          'sheets.spreadsheets.values.batchUpdate(guarded)',
+          ctx.log
+        );
       } catch (err) {
         // The request may have reached Google and been applied before the
-        // connection failed - a throw here means the transport broke, not
-        // that the write didn't happen. preImage and hazards were computed
+        // connection failed or the deadline aborted it - a throw here means
+        // the response never arrived, not that the write didn't happen. preImage and hazards were computed
         // above, before the call, so they survive regardless: this is the
         // one thing the tool exists to hand back, and a bare transport error
         // would discard it exactly when it matters most.
         return {
           content: [{ type: "text", text: JSON.stringify({
             error: "write-outcome-unknown",
-            message: `The request to write to the spreadsheet failed: ${(err as Error).message}. Whether the write was actually applied by Google before the failure is UNKNOWN - the connection broke before a response could be read, so postFingerprint (and an automated rollback keyed on it) is unavailable. Use preImage below to restore the pre-write state if the write did land, or take a fresh dryRun to check the sheet's current state before retrying.`,
+            message: `The request to write to the spreadsheet failed: ${(err as Error).message}. Whether the write was actually applied by Google before the failure is UNKNOWN - the connection broke or the request timed out before a response could be read, so postFingerprint (and an automated rollback keyed on it) is unavailable. Use preImage below to restore the pre-write state if the write did land, or take a fresh dryRun to check the sheet's current state before retrying.`,
             preImage,
             hazards
           }) }],

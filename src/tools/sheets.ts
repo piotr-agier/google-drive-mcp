@@ -11,6 +11,7 @@ import {
   blockFromMatch, buildPreImage, checkWriteRanges, fingerprintOf, findHazards, guardRangesFor,
   padToDeclaredRange, projectResponseValue, type CanonicalBlock, type Hazard, type PreImageRange,
 } from './sheetGuard.js';
+import { withRetry } from '../utils/retry.js';
 
 // ---------------------------------------------------------------------------
 // Zod Schemas

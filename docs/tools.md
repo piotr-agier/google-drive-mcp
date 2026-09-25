@@ -461,7 +461,9 @@ different identifiers; neither is accepted as a lock.
   - `valueInputOption`: `RAW` or `USER_ENTERED` (optional, default: USER_ENTERED)
 
 - **addSpreadsheetSheet** - Add a new sheet/tab to an existing spreadsheet
-- **addSheet** - Alias for `addSpreadsheetSheet`
+  - `spreadsheetId`: Spreadsheet ID
+  - `sheetTitle`: Title for the new sheet
+- **addSheet** - Alias for `addSpreadsheetSheet`; note it takes `title`, not `sheetTitle`
   - `spreadsheetId`: Spreadsheet ID
   - `title`: Title for the new sheet
 

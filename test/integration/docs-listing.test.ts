@@ -73,6 +73,19 @@ describe('Docs listing tools', () => {
       const res = await callTool(ctx.client, 'getDocumentInfo', { documentId: 'doc-1' });
       assert.equal(res.isError, false);
       assert.ok(res.content[0].text!.includes('My Document'));
+      assert.ok(res.content[0].text!.includes('**Type:** application/vnd.google-apps.document'));
+    });
+
+    it('reports the file\'s real mimeType rather than assuming a Google Doc', async () => {
+      ctx.mocks.drive.service.files.get._setImpl(async () => ({
+        data: { id: 'f-1', name: 'notes.txt', mimeType: 'text/plain' },
+      }));
+      const res = await callTool(ctx.client, 'getDocumentInfo', { documentId: 'f-1' });
+      assert.equal(res.isError, false);
+      const text = res.content[0].text!;
+      assert.ok(text.includes('**Type:** text/plain'));
+      assert.ok(!text.includes('Google Document'));
+      ctx.mocks.drive.service.files.get._resetImpl();
     });
 
     it('passes supportsAllDrives so shared-drive documents resolve', async () => {

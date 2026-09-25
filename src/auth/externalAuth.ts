@@ -125,11 +125,14 @@ const ADC_CREDENTIAL_TYPES = new Set([
  * every later call would fail with a misleading `Method doesn't allow
  * unregistered callers`. v9 surfaced this immediately, so this restores that.
  *
+ * When `subject` is given (from `GOOGLE_DRIVE_MCP_SUBJECT`), the file must also
+ * be a service account key: see the check below.
+ *
  * Read errors (ENOENT and friends) propagate untouched — they already name the
  * path and are clear. Messages never include file contents: the file holds a
  * private key.
  */
-export function validateCredentialsFile(keyFile: string): void {
+export function validateCredentialsFile(keyFile: string, subject?: string): void {
   const raw = readFileSync(keyFile, 'utf-8');
 
   let parsed: unknown;
@@ -153,6 +156,21 @@ export function validateCredentialsFile(keyFile: string): void {
     throw new Error(
       `Credentials file at ${keyFile} has unrecognized type "${type}". ` +
         `Expected one of: ${[...ADC_CREDENTIAL_TYPES].join(', ')}.`,
+    );
+  }
+
+  // Domain-wide delegation is the `sub` claim of a JWT the service account
+  // signs, so only a service account key can impersonate. GoogleAuth builds a
+  // different client for every other type and drops `subject` without a word:
+  // the server would act as the file's own identity while the startup log
+  // claimed it was impersonating. A file with no `type` is treated as a
+  // service account key below, so it is allowed through.
+  if (subject && type !== undefined && type !== 'service_account') {
+    throw new Error(
+      `GOOGLE_DRIVE_MCP_SUBJECT is set, but the credentials file at ${keyFile} has type "${type}". ` +
+        'Domain-wide delegation needs a service account key (type "service_account"); ' +
+        'other credential types cannot impersonate a user and would act as their own identity. ' +
+        'Point GOOGLE_APPLICATION_CREDENTIALS at a service account key, or unset GOOGLE_DRIVE_MCP_SUBJECT.',
     );
   }
 
@@ -183,7 +201,7 @@ export async function createServiceAccountAuth(): Promise<any> {
       (subject ? ` (impersonating ${subject} via domain-wide delegation)` : ''),
   );
 
-  validateCredentialsFile(options.keyFile as string);
+  validateCredentialsFile(options.keyFile as string, subject);
 
   const auth = new GoogleAuth(options);
   const client = await auth.getClient();

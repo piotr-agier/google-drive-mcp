@@ -115,6 +115,8 @@ By default a service account acts as itself. Some Google APIs (for example Drive
 
 **Prerequisite:** a Workspace admin must authorize the service account's client ID for the requested scopes under **Admin console > Security > API controls > Manage Domain-wide Delegation**. The scopes granted there must cover the scopes the server requests (see [OAuth Scope Configuration](#oauth-scope-configuration)).
 
+`GOOGLE_APPLICATION_CREDENTIALS` must point at a service account key (`"type": "service_account"`) when `GOOGLE_DRIVE_MCP_SUBJECT` is set. Other credential files it can hold, such as the `authorized_user` file written by `gcloud auth application-default login`, cannot impersonate a user, so the server refuses to start rather than silently act as that file's own identity.
+
 `GOOGLE_DRIVE_MCP_SCOPES` applies in service-account mode too, so you can narrow the JWT to a subset of the delegated scopes.
 
 ### 2. External OAuth Token Mode

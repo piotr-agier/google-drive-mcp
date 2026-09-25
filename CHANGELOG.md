@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - **docs:** `getDocumentInfo` printed `Type: Google Document` for every file, including non-Doc Drive files it resolves just as well. It now prints the file's real `mimeType`, which its Drive read was already fetching ([#214](https://github.com/piotr-agier/google-drive-mcp/issues/214))
+- **auth:** `GOOGLE_DRIVE_MCP_SUBJECT` was silently ignored when `GOOGLE_APPLICATION_CREDENTIALS` pointed at anything other than a service account key, such as the `authorized_user` file `gcloud auth application-default login` writes. Domain-wide delegation is the `sub` claim of a JWT only a service account can sign; for every other credential type `GoogleAuth` builds a different client and drops the subject, so the server acted as the file's own identity while its startup log said it was impersonating the subject. That combination now fails at startup with an error naming the file's type and both ways out. A service account key, including one without a `type` field, is unaffected ([#214](https://github.com/piotr-agier/google-drive-mcp/issues/214))
 
 ## [2.12.0](https://github.com/piotr-agier/google-drive-mcp/compare/v2.11.0...v2.12.0) (2026-09-25)
 

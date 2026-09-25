@@ -362,6 +362,57 @@ test('validateCredentialsFile accepts non-service-account ADC credential types',
   assert.doesNotThrow(() => validateCredentialsFile(externalAccount));
 });
 
+test('validateCredentialsFile rejects a subject on a credential type that cannot impersonate', () => {
+  // GoogleAuth silently drops `subject` for every non-service-account type, so
+  // the server would run as the file's own identity instead of the subject.
+  const cases: Record<string, object> = {
+    authorized_user: { client_id: 'x.apps.googleusercontent.com', client_secret: 'shh', refresh_token: '1//token' },
+    impersonated_service_account: { service_account_impersonation_url: 'https://example.com', source_credentials: {} },
+    external_account: { audience: '//iam.googleapis.com/x', subject_token_type: 'urn:ietf:params:oauth:token-type:jwt' },
+  };
+  for (const [type, fields] of Object.entries(cases)) {
+    const file = writeCredFile(JSON.stringify({ type, ...fields }));
+    assert.throws(() => validateCredentialsFile(file, 'bot@example.com'), (err: Error) => {
+      assert.match(err.message, /GOOGLE_DRIVE_MCP_SUBJECT is set/);
+      assert.ok(err.message.includes(`type "${type}"`), `error should name ${type}`);
+      assert.ok(err.message.includes(file), 'error should name the file');
+      return true;
+    });
+    // Without a subject the same file is still a valid ADC target.
+    assert.doesNotThrow(() => validateCredentialsFile(file));
+  }
+});
+
+test('validateCredentialsFile accepts a subject on a service account key, typed or not', () => {
+  const typed = writeCredFile(JSON.stringify({
+    type: 'service_account',
+    client_email: 'sa@example.iam.gserviceaccount.com',
+    private_key: PRIVATE_KEY,
+  }));
+  assert.doesNotThrow(() => validateCredentialsFile(typed, 'bot@example.com'));
+
+  const untyped = writeCredFile(JSON.stringify({
+    client_email: 'sa@example.iam.gserviceaccount.com',
+    private_key: PRIVATE_KEY,
+  }));
+  assert.doesNotThrow(() => validateCredentialsFile(untyped, 'bot@example.com'));
+});
+
+test('createServiceAccountAuth refuses GOOGLE_DRIVE_MCP_SUBJECT with an authorized_user file', withEnv(
+  {
+    GOOGLE_APPLICATION_CREDENTIALS: writeCredFile(JSON.stringify({
+      type: 'authorized_user',
+      client_id: 'x.apps.googleusercontent.com',
+      client_secret: 'shh',
+      refresh_token: '1//token',
+    })),
+    GOOGLE_DRIVE_MCP_SUBJECT: 'bot@example.com',
+  },
+  async () => {
+    await assert.rejects(createServiceAccountAuth(), /type "authorized_user"/);
+  },
+));
+
 test('validateCredentialsFile never echoes key material into the error', () => {
   // The file holds a private key; a validation error must not leak it.
   const file = writeCredFile(JSON.stringify({ type: 'service_account', private_key: PRIVATE_KEY }));

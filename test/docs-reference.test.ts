@@ -145,9 +145,12 @@ describe('Documentation reference', () => {
   // bullet are routinely enum members, output field names, or other tools'
   // names, so only that leading run counts; a bullet with no such leading run
   // (e.g. `` Target (use one): `index` OR `textToFind` ``) is a free-form note
-  // and is skipped entirely. This only checks the direction that produces a
-  // caller-facing bug -- a documented name the schema doesn't have -- not the
-  // reverse (schema parameters the docs omit).
+  // and is skipped entirely. That is a known blind spot: the `(use one):` and
+  // `Provide either` bullets on the Docs write tools, `styleDocTable`, and
+  // `replaceSlideImage` name the parameters most likely to drift in a
+  // targeting rework, and this gate does not read them. This only checks the
+  // direction that produces a caller-facing bug -- a documented name the
+  // schema doesn't have -- not the reverse (schema parameters the docs omit).
   it('never claims a parameter that is not in the tool\'s schema', () => {
     const allTools = [...docsTools, ...sheetsTools, ...slidesTools, ...driveTools, ...calendarTools];
     const schemaByName = new Map(
@@ -165,6 +168,10 @@ describe('Documentation reference', () => {
       fs.readFileSync(path.join(repositoryRoot, 'docs', 'tools.md'), 'utf8'),
     );
     const toolBullet = /^- \*\*([A-Za-z_][A-Za-z0-9_]*)\*\*/;
+    const heading = /^#{1,6}\s/;
+    // Exactly two spaces: a deeper bullet documents a nested property or an
+    // enum (`type` / `value` under `addGoogleSheetConditionalFormat`), which is
+    // not a key of the top-level schema, so it is deliberately not a claim.
     const paramBullet = /^ {2}- (.+)$/;
     const leadingClaim = /^((?:`[A-Za-z0-9_]+`\s*[/,]\s*)*`[A-Za-z0-9_]+`)\s*:/;
 
@@ -175,6 +182,12 @@ describe('Documentation reference', () => {
       const toolMatch = toolBullet.exec(line);
       if (toolMatch) {
         currentTool = toolMatch[1];
+        continue;
+      }
+      // A heading ends the previous tool's section, so a bullet under it is
+      // not checked against whichever tool happened to come last.
+      if (heading.test(line)) {
+        currentTool = null;
         continue;
       }
       if (!currentTool) continue;

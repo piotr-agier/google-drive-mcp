@@ -12,7 +12,9 @@ import {
   buildServiceAccountAuthOptions,
   validateCredentialsFile,
   describeBypassedTokens,
+  createServiceAccountAuth,
 } from '../src/auth/externalAuth.js';
+import { JWT } from 'google-auth-library';
 import { SCOPE_ALIASES } from '../src/auth/scopes.js';
 import { setEnv } from './helpers/env.js';
 
@@ -374,4 +376,46 @@ test('validateCredentialsFile lets a missing file surface as ENOENT', () => {
     () => validateCredentialsFile(join(tmpdir(), 'gdrive-mcp-definitely-missing.json')),
     /ENOENT/,
   );
+});
+
+// ---------------------------------------------------------------------------
+// createServiceAccountAuth: domain-wide delegation subject
+//
+// #214 reported that on google-auth-library 9.15, GoogleAuth given
+// { keyFile, clientOptions: { subject } } produced a client that did not
+// impersonate. The buildServiceAccountAuthOptions tests above only pin the
+// options shape; these pin that the subject survives GoogleAuth all the way
+// onto the JWT client, which is what puts it in the token request's `sub`
+// claim. Offline: getClient() only parses the key file, it never signs.
+// ---------------------------------------------------------------------------
+
+function writeServiceAccountKey(): string {
+  return writeCredFile(JSON.stringify({
+    type: 'service_account',
+    client_email: 'sa@example.iam.gserviceaccount.com',
+    private_key: PRIVATE_KEY,
+  }));
+}
+
+test('createServiceAccountAuth hands GOOGLE_DRIVE_MCP_SUBJECT to the JWT client', async () => {
+  const keyFile = writeServiceAccountKey();
+  await withEnv(
+    { GOOGLE_APPLICATION_CREDENTIALS: keyFile, GOOGLE_DRIVE_MCP_SUBJECT: 'bot@example.com' },
+    async () => {
+      const client = await createServiceAccountAuth();
+      assert.ok(client instanceof JWT, 'a service account key must yield a JWT client');
+      assert.equal(client.subject, 'bot@example.com');
+      assert.equal(client.email, 'sa@example.iam.gserviceaccount.com');
+      assert.deepEqual(client.scopes, buildServiceAccountAuthOptions().scopes);
+    },
+  )();
+});
+
+test('createServiceAccountAuth leaves the JWT subject unset without GOOGLE_DRIVE_MCP_SUBJECT', async () => {
+  const keyFile = writeServiceAccountKey();
+  await withEnv({ GOOGLE_APPLICATION_CREDENTIALS: keyFile }, async () => {
+    const client = await createServiceAccountAuth();
+    assert.ok(client instanceof JWT);
+    assert.equal(client.subject, undefined);
+  })();
 });

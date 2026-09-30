@@ -3,7 +3,11 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
+import express from "express";
+import {
+  hostHeaderValidation,
+  localhostHostValidation,
+} from "@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js";
 import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import {
@@ -1046,6 +1050,8 @@ Options:
                              (default: 15000). A refresh is retried at most once.
   --retry-max=<n>            Max retry attempts on transient failures; 0 disables (default: 3)
   --retry-base-delay=<ms>    Base delay for retry backoff in ms (default: 1000)
+  --max-body-bytes=<n>       Maximum accepted request body on the HTTP transport, in bytes
+                             (default: 4194304). No effect on stdio.
 
 Examples:
   npx @piotr-agier/google-drive-mcp auth
@@ -1067,6 +1073,7 @@ Environment Variables:
   MCP_TRANSPORT                         Transport mode: stdio or http (default: stdio)
   MCP_HTTP_PORT                         HTTP listen port (default: 3100)
   MCP_HTTP_HOST                         HTTP bind address (default: 127.0.0.1)
+  GOOGLE_DRIVE_MCP_MAX_BODY_BYTES       Maximum accepted request body in bytes (default: 4194304). Mirrored by the --max-body-bytes=<n> flag. Raise it for large batchUpdate calls; no effect on stdio.
 
   Team Mode:
   MCP_TEAM_MODE                         Enable team mode (1/0, true/false; same as --team)
@@ -1332,6 +1339,64 @@ interface CreateHttpAppOptions {
   sessionIdleTimeoutMs?: number;
   /** Present = team mode: mount the OAuth 2.1 authorization-server surface. */
   teamAuth?: TeamRuntime;
+  /** Overrides RuntimeConfig.maxBodyBytes; tests use it to cap small. */
+  maxBodyBytes?: number;
+}
+
+/** The hostnames the SDK's localhostHostValidation() accepts. */
+const LOCALHOST_HOSTS = ['127.0.0.1', 'localhost', '::1'];
+
+/**
+ * The app the SDK's createMcpExpressApp would build, with one difference: the
+ * JSON body limit is ours to set. The helper calls express.json() with no
+ * options, so every server built from it stops at body-parser's 100 KiB
+ * default and answers an oversized request with an Express HTML error page —
+ * which an MCP client cannot read. A bulk sheets or docs batchUpdate passes
+ * 100 KiB routinely, so the ceiling is reachable in ordinary use.
+ *
+ * Middleware order matches the helper's (body first, then Host) so that
+ * dropping it changes only the limit.
+ */
+function buildMcpExpressApp(
+  host: string,
+  allowedHosts: string[] | undefined,
+  maxBodyBytes: number,
+) {
+  const app = express();
+  app.use(express.json({ limit: maxBodyBytes }));
+  if (allowedHosts) {
+    app.use(hostHeaderValidation(allowedHosts));
+  } else if (LOCALHOST_HOSTS.includes(host)) {
+    app.use(localhostHostValidation());
+  }
+  return app;
+}
+
+/**
+ * Express renders a body-parser failure as an HTML error page by default, so
+ * a client asking for JSON-RPC gets markup it cannot parse — the reason an
+ * oversized batchUpdate surfaced as an unreadable error rather than a clear
+ * limit. Reports both failure modes in the protocol the caller speaks.
+ */
+function jsonRpcBodyErrors(
+  maxBodyBytes: number,
+): (err: any, req: express.Request, res: express.Response, next: express.NextFunction) => void {
+  return (err, _req, res, next) => {
+    if (!err || res.headersSent) return next(err);
+    const tooLarge = err.type === 'entity.too.large';
+    const unparseable = err.type === 'entity.parse.failed';
+    if (!tooLarge && !unparseable) return next(err);
+    res.status(tooLarge ? 413 : 400).json({
+      jsonrpc: '2.0',
+      error: {
+        code: tooLarge ? -32600 : -32700,
+        message: tooLarge
+          ? `Request body too large (limit ${maxBodyBytes} bytes). Split the call into smaller batches, or raise GOOGLE_DRIVE_MCP_MAX_BODY_BYTES.`
+          : 'Parse error: request body is not valid JSON',
+      },
+      id: null,
+    });
+  };
 }
 
 function createHttpApp(host: string, options?: CreateHttpAppOptions) {
@@ -1340,8 +1405,11 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
   // In team mode the SDK's automatic (localhost-only) Host validation is
   // replaced with an explicit allowlist derived from the issuer URL — for
   // non-localhost binds the SDK otherwise applies no Host validation at all.
-  const app = createMcpExpressApp(
-    teamAuth ? { host, allowedHosts: teamAuth.config.allowedHosts } : { host },
+  const maxBodyBytes = options?.maxBodyBytes ?? runtimeConfig.maxBodyBytes;
+  const app = buildMcpExpressApp(
+    host,
+    teamAuth ? teamAuth.config.allowedHosts : undefined,
+    maxBodyBytes,
   );
   if (teamAuth) {
     if (teamAuth.config.trustProxy !== undefined) {
@@ -1579,6 +1647,9 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
       }
     }
   });
+
+  // Last: Express only reaches an error handler mounted after the routes.
+  app.use(jsonRpcBodyErrors(maxBodyBytes));
 
   return { app, sessions };
 }

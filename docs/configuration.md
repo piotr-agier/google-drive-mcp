@@ -25,6 +25,7 @@ CLI arguments take priority over their environment-variable equivalents. Authent
 | `--token-refresh-timeout=<ms>` | `15000` | Per-attempt timeout for an OAuth access-token refresh; `0` disables it |
 | `--retry-max=<n>` | `3` | Maximum retry attempts on retryable errors (429, 503, 504, timeouts, and network failures); `0` disables retries |
 | `--retry-base-delay=<ms>` | `1000` | Exponential-backoff base delay, capped at 30 seconds with jitter |
+| `--max-body-bytes=<n>` | `4194304` | Maximum accepted request body on the HTTP transport, in bytes; no effect on stdio |
 
 The timeout and retry settings apply to two paths; they are not applied to every Google API request:
 
@@ -75,6 +76,7 @@ Supported scope aliases are `drive`, `drive.file`, `drive.readonly`, `documents`
 | `GOOGLE_DRIVE_MCP_TOKEN_REFRESH_TIMEOUT` | `15000` | Fallback for `--token-refresh-timeout` |
 | `GOOGLE_DRIVE_MCP_RETRY_MAX` | `3` | Fallback for `--retry-max` |
 | `GOOGLE_DRIVE_MCP_RETRY_BASE_DELAY` | `1000` | Fallback for `--retry-base-delay` |
+| `GOOGLE_DRIVE_MCP_MAX_BODY_BYTES` | `4194304` | Fallback for `--max-body-bytes` |
 
 ## HTTP transport
 

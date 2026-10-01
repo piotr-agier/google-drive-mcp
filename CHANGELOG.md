@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **slides:** `replaceAllTextInSlides` takes `expectedCount`, the pre-write guard `findAndReplaceInDoc` already has: count first, and refuse to write when the count differs. The count walks everything the replace reaches, which is more than the slides. Checked against the live API with one token per location, `replaceAllText` changes text in slide shapes, table cells, grouped shapes, speaker notes, layouts and masters, so a match on a layout or master changes every slide that uses it. A match can run across paragraphs inside one text box or cell but never across two, so each is counted on its own rather than joined. The notes master is left out, since the API won't write to it and refuses its id in `pageObjectIds`. On a match, the write carries `requiredRevisionId` from the same read, so an edit landing between the count and the write fails with a 400 instead of changing a number of matches nobody checked. As in #219, that 400 is mapped only when a lock was sent, and Google's message is kept. The tool description now says where the replace reaches. Without `expectedCount` the tool makes the same single call it did before ([#230](https://github.com/piotr-agier/google-drive-mcp/pull/230))
+
 ### Changed
 
 - **docs:** the `docs/tools.md` parameter gate now also reads `(use one):` and `Provide either` targeting bullets, so a documented targeting parameter that drifts from its tool's schema fails the build ([#225](https://github.com/piotr-agier/google-drive-mcp/pull/225), [#229](https://github.com/piotr-agier/google-drive-mcp/pull/229))

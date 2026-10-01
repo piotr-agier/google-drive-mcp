@@ -10,6 +10,13 @@ export interface RuntimeConfig {
   retryMax: number;
   retryBaseDelay: number;
   disableResources: boolean;
+  /**
+   * Maximum accepted request body on the Streamable HTTP transport (bytes).
+   * The SDK's createMcpExpressApp leaves express.json() on body-parser's
+   * 100 KiB default, which a bulk sheets/docs batchUpdate exceeds routinely.
+   * Ignored by the stdio transport, which has no HTTP layer.
+   */
+  maxBodyBytes: number;
 }
 
 export const RUNTIME_DEFAULTS: Readonly<RuntimeConfig> = {
@@ -18,6 +25,7 @@ export const RUNTIME_DEFAULTS: Readonly<RuntimeConfig> = {
   retryMax: 3,
   retryBaseDelay: 1_000,
   disableResources: false,
+  maxBodyBytes: 4 * 1024 * 1024,
 };
 
 const DEFAULTS = RUNTIME_DEFAULTS;
@@ -56,6 +64,7 @@ export function loadRuntimeConfig(argv: string[] = process.argv.slice(2)): Runti
   cfg.retryMax = parseIntOr(process.env.GOOGLE_DRIVE_MCP_RETRY_MAX, cfg.retryMax);
   cfg.retryBaseDelay = parseIntOr(process.env.GOOGLE_DRIVE_MCP_RETRY_BASE_DELAY, cfg.retryBaseDelay);
   cfg.disableResources = parseBoolEnv(process.env.GOOGLE_DRIVE_MCP_DISABLE_RESOURCES, cfg.disableResources);
+  cfg.maxBodyBytes = parseIntOr(process.env.GOOGLE_DRIVE_MCP_MAX_BODY_BYTES, cfg.maxBodyBytes);
 
   // CLI args override (numeric flags: --key=value; boolean flags: presence)
   for (const arg of argv) {
@@ -67,6 +76,8 @@ export function loadRuntimeConfig(argv: string[] = process.argv.slice(2)): Runti
       cfg.retryMax = parseIntOr(arg.split('=')[1], cfg.retryMax);
     } else if (arg.startsWith('--retry-base-delay=')) {
       cfg.retryBaseDelay = parseIntOr(arg.split('=')[1], cfg.retryBaseDelay);
+    } else if (arg.startsWith('--max-body-bytes=')) {
+      cfg.maxBodyBytes = parseIntOr(arg.split('=')[1], cfg.maxBodyBytes);
     } else if (arg === '--no-resources') {
       cfg.disableResources = true;
     } else if (arg.startsWith('--no-resources=')) {

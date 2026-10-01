@@ -17,14 +17,18 @@ export const SCOPE_ALIASES: Record<string, string> = {
 export const SCOPE_PRESETS: Record<string, string[]> = {
   readonly: ['drive.readonly'],
   'content-editor': ['drive.file', 'documents', 'spreadsheets', 'presentations'],
-  full: ['drive', 'documents', 'spreadsheets', 'presentations', 'calendar', 'calendar.events', 'generative-language'],
+  full: ['drive', 'documents', 'spreadsheets', 'presentations', 'calendar', 'calendar.events'],
 };
 
+// Note: 'generative-language' is intentionally NOT part of the defaults or the
+// 'full' preset. Standard OAuth consent screens reject it with Error 400:
+// invalid_scope, which breaks the entire auth flow. Gemini-backed tools (imagen)
+// use GEMINI_API_KEY instead. Opt in explicitly via GOOGLE_DRIVE_MCP_SCOPES only
+// if your OAuth client has that scope enabled.
 export const DEFAULT_SCOPES: readonly string[] = [
   'drive', 'drive.file', 'drive.readonly',
   'documents', 'spreadsheets', 'presentations',
   'calendar', 'calendar.events',
-  'generative-language',
 ].map((s) => SCOPE_ALIASES[s]);
 
 /**

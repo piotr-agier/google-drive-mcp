@@ -213,9 +213,14 @@ export async function createServiceAccountAuth(): Promise<any> {
 // External OAuth Token mode
 // ---------------------------------------------------------------------------
 
-/** True when `GOOGLE_DRIVE_MCP_ACCESS_TOKEN` is set. */
+/**
+ * True when `GOOGLE_DRIVE_MCP_ACCESS_TOKEN` or `GOOGLE_DRIVE_MCP_REFRESH_TOKEN`
+ * is set. A refresh token alone is enough: it mints access tokens on demand,
+ * and keying the mode off the access token forced a long-lived deployment to
+ * keep a dead one around purely as a mode flag.
+ */
 export function isExternalTokenMode(): boolean {
-  return !!process.env.GOOGLE_DRIVE_MCP_ACCESS_TOKEN;
+  return !!(process.env.GOOGLE_DRIVE_MCP_ACCESS_TOKEN || process.env.GOOGLE_DRIVE_MCP_REFRESH_TOKEN);
 }
 
 /**
@@ -224,13 +229,13 @@ export function isExternalTokenMode(): boolean {
  */
 export function validateExternalTokenConfig(): void {
   const accessToken = process.env.GOOGLE_DRIVE_MCP_ACCESS_TOKEN?.trim();
-  if (!accessToken) {
+  const refreshToken = process.env.GOOGLE_DRIVE_MCP_REFRESH_TOKEN?.trim();
+  if (!accessToken && !refreshToken) {
     throw new Error(
-      'GOOGLE_DRIVE_MCP_ACCESS_TOKEN is set but empty. Provide a valid OAuth access token.'
+      'GOOGLE_DRIVE_MCP_ACCESS_TOKEN is set but empty. Provide a valid OAuth access token, ' +
+        'or set GOOGLE_DRIVE_MCP_REFRESH_TOKEN instead.'
     );
   }
-
-  const refreshToken = process.env.GOOGLE_DRIVE_MCP_REFRESH_TOKEN?.trim();
   const clientId = process.env.GOOGLE_DRIVE_MCP_CLIENT_ID?.trim();
   const clientSecret = process.env.GOOGLE_DRIVE_MCP_CLIENT_SECRET?.trim();
 
@@ -257,24 +262,32 @@ export function validateExternalTokenConfig(): void {
  * auto-refresh transparently.
  */
 export function createExternalOAuth2Client(): OAuth2Client {
-  const accessToken = process.env.GOOGLE_DRIVE_MCP_ACCESS_TOKEN!.trim();
+  const accessToken = process.env.GOOGLE_DRIVE_MCP_ACCESS_TOKEN?.trim();
   const refreshToken = process.env.GOOGLE_DRIVE_MCP_REFRESH_TOKEN?.trim();
   const clientId = process.env.GOOGLE_DRIVE_MCP_CLIENT_ID?.trim();
   const clientSecret = process.env.GOOGLE_DRIVE_MCP_CLIENT_SECRET?.trim();
 
   const oauth2Client = new OAuth2Client(clientId, clientSecret);
 
-  oauth2Client.setCredentials({
-    access_token: accessToken,
-    refresh_token: refreshToken || undefined,
-  });
-
-  if (!refreshToken) {
+  if (refreshToken) {
+    // Deliberately without the access token. A Google access token lives about
+    // an hour, but the configuration carrying it lives as long as the
+    // deployment, so by the time a process starts it is almost always expired.
+    // google-auth-library refreshes only when expiry_date says a refresh is
+    // due — and with no expiry_date its isTokenExpiring() returns false, so a
+    // seeded token is treated as valid forever and handed to the first
+    // request, which Google answers with "Request had invalid authentication
+    // credentials". Omitting it makes the library's own
+    // `!credentials.access_token || isTokenExpiring()` true, so a fresh token
+    // is minted before the first call. (expiry_date: 0 would NOT work here:
+    // the check is `expiryDate ? ... : false`, and 0 is falsy.)
+    oauth2Client.setCredentials({ refresh_token: refreshToken });
+    console.error('External OAuth tokens configured with auto-refresh support.');
+  } else {
+    oauth2Client.setCredentials({ access_token: accessToken });
     console.error(
       'Warning: No refresh token provided. The access token will not auto-refresh when it expires.'
     );
-  } else {
-    console.error('External OAuth tokens configured with auto-refresh support.');
   }
 
   return oauth2Client;

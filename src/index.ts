@@ -1088,8 +1088,8 @@ Environment Variables:
   GOOGLE_DRIVE_MCP_SUBJECT              Workspace user to impersonate via domain-wide delegation (optional)
 
   External OAuth Token Mode:
-  GOOGLE_DRIVE_MCP_ACCESS_TOKEN         Pre-obtained Google OAuth access token
-  GOOGLE_DRIVE_MCP_REFRESH_TOKEN        Refresh token for auto-refresh (optional)
+  GOOGLE_DRIVE_MCP_ACCESS_TOKEN         Pre-obtained Google OAuth access token; ignored when a refresh token is also set
+  GOOGLE_DRIVE_MCP_REFRESH_TOKEN        Refresh token for auto-refresh; activates this mode on its own and is preferred for a long-running server
   GOOGLE_DRIVE_MCP_CLIENT_ID            OAuth client ID (required with refresh token)
   GOOGLE_DRIVE_MCP_CLIENT_SECRET        OAuth client secret (required with refresh token)
 `);

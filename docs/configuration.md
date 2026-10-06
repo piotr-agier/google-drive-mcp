@@ -109,8 +109,8 @@ Supported scope aliases are `drive`, `drive.file`, `drive.readonly`, `documents`
 
 | Variable | Description |
 |---|---|
-| `GOOGLE_DRIVE_MCP_ACCESS_TOKEN` | Pre-obtained access token; activates external-token mode |
-| `GOOGLE_DRIVE_MCP_REFRESH_TOKEN` | Optional refresh token |
+| `GOOGLE_DRIVE_MCP_ACCESS_TOKEN` | Pre-obtained access token; activates external-token mode. Ignored when a refresh token is also set |
+| `GOOGLE_DRIVE_MCP_REFRESH_TOKEN` | Refresh token; also activates external-token mode on its own, and is the better choice for a long-running deployment |
 | `GOOGLE_DRIVE_MCP_CLIENT_ID` | Required with a refresh token |
 | `GOOGLE_DRIVE_MCP_CLIENT_SECRET` | Required with a refresh token |
 

@@ -197,7 +197,19 @@ test('creates OAuth2Client with access token', withEnv(
   },
 ));
 
-test('creates OAuth2Client with full credentials', withEnv(
+// A supplied access token lives about an hour, but the configuration that
+// carries it lives as long as the deployment — so by the time a process
+// starts, the token it was given is almost always long dead. google-auth-
+// library only refreshes when `expiry_date` says the token is expiring:
+//
+//   isTokenExpiring() { return expiryDate ? expiryDate <= now + threshold : false }
+//
+// With no expiry_date that is false, so the client would hand the dead token
+// to the very first request and let Google reject it. When a refresh token is
+// present we therefore do not seed the access token at all, which makes the
+// library's own `!credentials.access_token || isTokenExpiring()` true and
+// mints a fresh token before the first call.
+test('does not seed a supplied access token when a refresh token can replace it', withEnv(
   {
     GOOGLE_DRIVE_MCP_ACCESS_TOKEN: 'ya29.test-token',
     GOOGLE_DRIVE_MCP_REFRESH_TOKEN: '1//refresh-token',
@@ -206,9 +218,86 @@ test('creates OAuth2Client with full credentials', withEnv(
   },
   () => {
     const client = createExternalOAuth2Client();
-    assert.equal(client.credentials.access_token, 'ya29.test-token');
     assert.equal(client.credentials.refresh_token, '1//refresh-token');
+    assert.equal(
+      client.credentials.access_token,
+      undefined,
+      'a stale access token must not be handed to the first request',
+    );
   },
+));
+
+test('the client refreshes before its first request when a refresh token is set', withEnv(
+  {
+    GOOGLE_DRIVE_MCP_ACCESS_TOKEN: 'ya29.test-token',
+    GOOGLE_DRIVE_MCP_REFRESH_TOKEN: '1//refresh-token',
+    GOOGLE_DRIVE_MCP_CLIENT_ID: 'test-client-id',
+    GOOGLE_DRIVE_MCP_CLIENT_SECRET: 'test-client-secret',
+  },
+  () => {
+    const client = createExternalOAuth2Client();
+    // The library's own decision, asserted through it rather than restated:
+    // getAccessTokenAsync() refreshes when this is true. isTokenExpiring is
+    // private to TypeScript but present at runtime, which is what decides.
+    const isTokenExpiring = (client as unknown as { isTokenExpiring(): boolean })
+      .isTokenExpiring.bind(client);
+    const shouldRefresh = !client.credentials.access_token || isTokenExpiring();
+    assert.equal(shouldRefresh, true, 'the library must consider a refresh due');
+  },
+));
+
+test('keeps the access token when there is no refresh token to replace it', withEnv(
+  { GOOGLE_DRIVE_MCP_ACCESS_TOKEN: 'ya29.only-token' },
+  () => {
+    const client = createExternalOAuth2Client();
+    assert.equal(
+      client.credentials.access_token,
+      'ya29.only-token',
+      'without a refresh token the supplied token is all there is',
+    );
+  },
+));
+
+// ---------------------------------------------------------------------------
+// External mode entered by refresh token alone
+// ---------------------------------------------------------------------------
+
+// Keying the mode off the access token forced a deployment that refreshes to
+// keep a dead access token around purely as a mode flag.
+test('isExternalTokenMode returns true for a refresh token with no access token', withEnv(
+  {
+    GOOGLE_DRIVE_MCP_REFRESH_TOKEN: '1//refresh-token',
+    GOOGLE_DRIVE_MCP_CLIENT_ID: 'test-client-id',
+    GOOGLE_DRIVE_MCP_CLIENT_SECRET: 'test-client-secret',
+  },
+  () => { assert.equal(isExternalTokenMode(), true); },
+));
+
+test('validateExternalTokenConfig accepts a refresh token with no access token', withEnv(
+  {
+    GOOGLE_DRIVE_MCP_REFRESH_TOKEN: '1//refresh-token',
+    GOOGLE_DRIVE_MCP_CLIENT_ID: 'test-client-id',
+    GOOGLE_DRIVE_MCP_CLIENT_SECRET: 'test-client-secret',
+  },
+  () => { assert.doesNotThrow(() => validateExternalTokenConfig()); },
+));
+
+test('createExternalOAuth2Client works with a refresh token and no access token', withEnv(
+  {
+    GOOGLE_DRIVE_MCP_REFRESH_TOKEN: '1//refresh-token',
+    GOOGLE_DRIVE_MCP_CLIENT_ID: 'test-client-id',
+    GOOGLE_DRIVE_MCP_CLIENT_SECRET: 'test-client-secret',
+  },
+  () => {
+    const client = createExternalOAuth2Client();
+    assert.equal(client.credentials.refresh_token, '1//refresh-token');
+    assert.equal(client.credentials.access_token, undefined);
+  },
+));
+
+test('validateExternalTokenConfig still rejects neither token being usable', withEnv(
+  { GOOGLE_DRIVE_MCP_ACCESS_TOKEN: '   ' },
+  () => { assert.throws(() => validateExternalTokenConfig(), /ACCESS_TOKEN|REFRESH_TOKEN/); },
 ));
 
 // ---------------------------------------------------------------------------

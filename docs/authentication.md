@@ -158,10 +158,17 @@ Provide a pre-obtained OAuth access token via `GOOGLE_DRIVE_MCP_ACCESS_TOKEN`. T
 
 | Variable | Required | Description |
 |---|---|---|
-| `GOOGLE_DRIVE_MCP_ACCESS_TOKEN` | Yes (activates mode) | Google OAuth access token |
-| `GOOGLE_DRIVE_MCP_REFRESH_TOKEN` | No | Refresh token for auto-refresh |
+| `GOOGLE_DRIVE_MCP_ACCESS_TOKEN` | One of these two activates the mode | Google OAuth access token |
+| `GOOGLE_DRIVE_MCP_REFRESH_TOKEN` | One of these two activates the mode | Refresh token for auto-refresh |
 | `GOOGLE_DRIVE_MCP_CLIENT_ID` | Required with refresh token | OAuth client ID |
 | `GOOGLE_DRIVE_MCP_CLIENT_SECRET` | Required with refresh token | OAuth client secret |
+
+A refresh token is enough on its own, and for anything long-running it is the
+better configuration: an access token lives about an hour, while the
+configuration carrying it lives as long as the deployment, so a stored access
+token is almost always expired by the time a process starts. When a refresh
+token is present the server ignores any supplied access token and mints a
+fresh one before the first request.
 
 ### 3. Local OAuth Flow (Default)
 

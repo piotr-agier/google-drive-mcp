@@ -12,6 +12,7 @@ import {
   buildServiceAccountAuthOptions,
   validateCredentialsFile,
   describeBypassedTokens,
+  AUTH_MODE_OVERRIDE_ENV_VARS,
   createServiceAccountAuth,
 } from '../src/auth/externalAuth.js';
 import { JWT } from 'google-auth-library';
@@ -558,4 +559,56 @@ test('createServiceAccountAuth leaves the JWT subject unset without GOOGLE_DRIVE
     assert.ok(client instanceof JWT);
     assert.equal(client.subject, undefined);
   })();
+});
+
+// ---------------------------------------------------------------------------
+// Messages must name the variable that is actually in force
+// ---------------------------------------------------------------------------
+
+// External-token mode can be activated by either variable, so advice that
+// names only the access token is unactionable for a deployment that sets just
+// the refresh token: unset it and the mode is still on.
+
+test('the bypass warning names the refresh token when that is what forces the mode', withEnv(
+  {
+    GOOGLE_DRIVE_MCP_REFRESH_TOKEN: '1//refresh-token',
+    GOOGLE_DRIVE_MCP_CLIENT_ID: 'id',
+    GOOGLE_DRIVE_MCP_CLIENT_SECRET: 'secret',
+  },
+  () => {
+    const msg = describeBypassedTokens('external_token', '/tmp/tokens.json', true);
+    assert.ok(msg, 'a bypass warning is expected when tokens.json exists');
+    assert.match(msg!, /GOOGLE_DRIVE_MCP_REFRESH_TOKEN/);
+    assert.doesNotMatch(
+      msg!,
+      /Unset GOOGLE_DRIVE_MCP_ACCESS_TOKEN to/,
+      'must not tell the user to unset a variable that is not set',
+    );
+  },
+));
+
+test('the bypass warning lists both token variables when both are set', withEnv(
+  {
+    GOOGLE_DRIVE_MCP_ACCESS_TOKEN: 'ya29.token',
+    GOOGLE_DRIVE_MCP_REFRESH_TOKEN: '1//refresh-token',
+    GOOGLE_DRIVE_MCP_CLIENT_ID: 'id',
+    GOOGLE_DRIVE_MCP_CLIENT_SECRET: 'secret',
+  },
+  () => {
+    const msg = describeBypassedTokens('external_token', '/tmp/tokens.json', true);
+    assert.ok(msg);
+    assert.match(msg!, /GOOGLE_DRIVE_MCP_ACCESS_TOKEN/);
+    assert.match(msg!, /GOOGLE_DRIVE_MCP_REFRESH_TOKEN/);
+  },
+));
+
+test('AUTH_MODE_OVERRIDE_ENV_VARS covers every variable that can force a mode', () => {
+  const all = Object.values(AUTH_MODE_OVERRIDE_ENV_VARS).flat();
+  for (const v of [
+    'GOOGLE_APPLICATION_CREDENTIALS',
+    'GOOGLE_DRIVE_MCP_ACCESS_TOKEN',
+    'GOOGLE_DRIVE_MCP_REFRESH_TOKEN',
+  ]) {
+    assert.ok(all.includes(v), `${v} forces a mode, so it must be listed`);
+  }
 });

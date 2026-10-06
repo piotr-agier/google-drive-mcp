@@ -15,7 +15,7 @@ import { toNodeReadable } from '../utils/streams.js';
 import { downloadDriveFile, GOOGLE_WORKSPACE_EXPORT_FORMATS } from '../download-file.js';
 import { getSecureTokenPath } from '../auth/utils.js';
 import { SCOPE_ALIASES, SCOPE_PRESETS, resolveOAuthScopes, splitScopes } from '../auth/scopes.js';
-import { getActiveAuthMode, describeBypassedTokens, AUTH_MODE_OVERRIDE_ENV_VARS, type ActiveAuthMode } from '../auth/externalAuth.js';
+import { getActiveAuthMode, describeBypassedTokens, allAuthModeOverrideEnvVars, type ActiveAuthMode } from '../auth/externalAuth.js';
 import { getEffectiveIdentity } from '../auth/identity.js';
 import { withRetry, UPLOAD_TIMEOUT_MS } from '../utils/retry.js';
 
@@ -2354,7 +2354,7 @@ export async function handleTool(
       const envOverrides: Record<string, boolean> = {};
       // Mode-forcing vars come from the single source of truth so this list
       // can't drift from the modes authenticate() actually selects (#137).
-      for (const varName of Object.values(AUTH_MODE_OVERRIDE_ENV_VARS)) {
+      for (const varName of allAuthModeOverrideEnvVars()) {
         envOverrides[varName] = !!process.env[varName];
       }
       // These don't force a mode but change which tokens.json is read.

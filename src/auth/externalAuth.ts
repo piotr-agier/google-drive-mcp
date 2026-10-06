@@ -23,10 +23,18 @@ export type ActiveAuthMode = 'service_account' | 'external_token' | 'oauth';
  * Keyed by the mode they force. Used to explain to users *why* their
  * authenticated `tokens.json` is being bypassed (see issue #137).
  */
-export const AUTH_MODE_OVERRIDE_ENV_VARS: Record<Exclude<ActiveAuthMode, 'oauth'>, string> = {
-  service_account: 'GOOGLE_APPLICATION_CREDENTIALS',
-  external_token: 'GOOGLE_DRIVE_MCP_ACCESS_TOKEN',
+export const AUTH_MODE_OVERRIDE_ENV_VARS: Record<Exclude<ActiveAuthMode, 'oauth'>, string[]> = {
+  service_account: ['GOOGLE_APPLICATION_CREDENTIALS'],
+  // Either activates external-token mode, so advice that names only the first
+  // is unactionable for a deployment that sets only the second: unsetting the
+  // access token leaves the mode on.
+  external_token: ['GOOGLE_DRIVE_MCP_ACCESS_TOKEN', 'GOOGLE_DRIVE_MCP_REFRESH_TOKEN'],
 };
+
+/** Every env var that can force a non-OAuth mode, across all modes. */
+export function allAuthModeOverrideEnvVars(): string[] {
+  return Object.values(AUTH_MODE_OVERRIDE_ENV_VARS).flat();
+}
 
 /**
  * The single source of truth for which auth mode `authenticate()` (src/auth.ts)
@@ -55,14 +63,15 @@ export function describeBypassedTokens(
   tokenExists: boolean,
 ): string | null {
   if (!tokenExists) return null;
-  const envVar = AUTH_MODE_OVERRIDE_ENV_VARS[mode];
+  // Name the variables that actually forced this mode, not the first one that
+  // could have: a deployment may set only the refresh token.
+  const setForMode = AUTH_MODE_OVERRIDE_ENV_VARS[mode].filter((v) => !!process.env[v]);
+  const envVar = (setForMode.length ? setForMode : AUTH_MODE_OVERRIDE_ENV_VARS[mode]).join(' and ');
   // Every override var that is currently set — unsetting only the winning one
   // just hands control to the next override, so tokens.json stays bypassed.
-  const setOverrideVars = Object.values(AUTH_MODE_OVERRIDE_ENV_VARS).filter(
-    (v) => !!process.env[v],
-  );
+  const setOverrideVars = allAuthModeOverrideEnvVars().filter((v) => !!process.env[v]);
   const remedy =
-    setOverrideVars.length > 1
+    setOverrideVars.length > setForMode.length
       ? `Unset ${setOverrideVars.join(' and ')} to use your authenticated Google account`
       : `Unset ${envVar} to use your authenticated Google account`;
   return `The local OAuth token at ${tokenPath} exists but is IGNORED because ` +

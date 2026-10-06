@@ -6,7 +6,11 @@
 // ---------------------------------------------------------------------------
 
 import * as path from 'path';
-import { isExternalTokenMode, isServiceAccountMode } from '../externalAuth.js';
+import {
+  isExternalTokenMode,
+  isServiceAccountMode,
+  AUTH_MODE_OVERRIDE_ENV_VARS,
+} from '../externalAuth.js';
 import { resolveOAuthScopes, USERINFO_SCOPES } from '../scopes.js';
 import { getSecureTokenPath } from '../utils.js';
 
@@ -65,8 +69,12 @@ export function loadTeamConfig(opts: {
     );
   }
   if (isExternalTokenMode()) {
+    // Name whichever variable is actually set: either one activates the mode,
+    // so naming only the access token sends a refresh-token deployment to
+    // unset something it never set.
+    const set = AUTH_MODE_OVERRIDE_ENV_VARS.external_token.filter((v) => !!process.env[v]);
     throw new Error(
-      'Team mode is incompatible with external-token mode. Unset GOOGLE_DRIVE_MCP_ACCESS_TOKEN.',
+      `Team mode is incompatible with external-token mode. Unset ${set.join(' and ')}.`,
     );
   }
 

@@ -124,7 +124,9 @@ describe('Streamable HTTP request body limit', () => {
     );
     const parsed = JSON.parse(text);
     assert.equal(parsed.jsonrpc, '2.0');
-    assert.equal(parsed.error.code, -32600);
+    // Transport-level rejection, so the SDK's -32000 rather than -32600:
+    // that is what clients already get from the transport for 403/406/409.
+    assert.equal(parsed.error.code, -32000);
     assert.match(parsed.error.message, /too large/i);
   });
 
@@ -182,5 +184,154 @@ describe('Streamable HTTP request body limit', () => {
     );
     assert.equal(status, 403, 'dropping createMcpExpressApp must not drop DNS-rebinding protection');
     assert.match(JSON.parse(text).error.message, /Invalid Host/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Where the large limit may apply
+// ---------------------------------------------------------------------------
+
+describe('the raised limit is scoped to authenticated /mcp', () => {
+  const servers: HttpServer[] = [];
+  const sessionMaps: Map<string, any>[] = [];
+  let mod: any;
+  let teamBaseUrl: string;
+
+  before(async () => {
+    mod = await setupMocks();
+    const { InMemoryTeamStore } = await import('../../src/auth/team/memoryStore.js');
+    const { createTeamRuntime } = await import('../../src/auth/team/runtime.js');
+    const idp = {
+      buildConsentUrl: () => 'https://fake-google.example/consent',
+      exchangeCode: async () => { throw new Error('not used'); },
+      revokeGrant: async () => {},
+    };
+    const runtime = await createTeamRuntime(
+      {
+        issuerUrl: new URL('http://127.0.0.1:3100'),
+        googleRedirectUri: 'http://127.0.0.1:3100/oauth/google/callback',
+        allowedDomains: [],
+        allowedRedirectUris: [],
+        tokenTtlMs: 3600_000,
+        store: 'memory',
+        storePath: '/unused',
+        allowedHosts: ['127.0.0.1', 'localhost', '[::1]'],
+        googleScopes: ['https://www.googleapis.com/auth/drive'],
+        advertisedScopes: ['https://www.googleapis.com/auth/drive'],
+      } as any,
+      { store: new InMemoryTeamStore(), idp: idp as any },
+    );
+    mod._setTeamRuntimeForTesting(runtime);
+    const created = mod.createHttpApp('127.0.0.1', { teamAuth: runtime });
+    sessionMaps.push(created.sessions);
+    const started = await startServer(created.app);
+    servers.push(started.httpServer);
+    teamBaseUrl = started.baseUrl;
+  });
+
+  after(async () => {
+    mod._setTeamRuntimeForTesting(undefined);
+    for (const sessions of sessionMaps) {
+      for (const [, s] of sessions) { await s.transport.close(); await s.server.close(); }
+      sessions.clear();
+    }
+    for (const httpServer of servers) {
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    }
+  });
+
+  // The parser runs before the bearer guard, so a limit raised for every route
+  // lets an unauthenticated caller make the server read and parse megabytes.
+  it('refuses a large unauthenticated body before parsing it', async () => {
+    const res = await fetch(`${teamBaseUrl}/mcp`, {
+      method: 'POST',
+      headers: MCP_HEADERS,
+      body: paddedInitialize(3 * 1024 * 1024),
+    });
+    await res.text();
+    assert.equal(res.status, 401, 'no token must be rejected, not parsed at the raised limit');
+  });
+
+  it('answers a large unauthenticated malformed body without parsing it at the raised limit', async () => {
+    const res = await fetch(`${teamBaseUrl}/mcp`, {
+      method: 'POST',
+      headers: MCP_HEADERS,
+      body: '{"jsonrpc":"2.0",' + 'x'.repeat(3 * 1024 * 1024),
+    });
+    await res.text();
+    assert.notEqual(res.status, 400, 'must not reach the JSON parser before the guard');
+    assert.equal(res.status, 401);
+  });
+
+  // Our JSON-RPC body handler is scoped to /mcp. At the root it also answered
+  // the OAuth routes, which speak OAuth rather than JSON-RPC and are parsed by
+  // the SDK's own parsers — so it stated a limit and a remedy belonging to a
+  // different route.
+  it('does not answer an OAuth route with a JSON-RPC envelope', async () => {
+    const res = await fetch(`${teamBaseUrl}/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{"redirect_uris":',
+    });
+    const text = await res.text();
+    assert.doesNotMatch(
+      text,
+      /"jsonrpc"\s*:\s*"2\.0"/,
+      `/register is not a JSON-RPC endpoint, got: ${text.slice(0, 120)}`,
+    );
+  });
+
+  it('does not name the /mcp limit on an oversized OAuth request', async () => {
+    // The SDK's token handler parses with its own urlencoded limit, so our
+    // number and our environment variable would both be wrong here.
+    const res = await fetch(`${teamBaseUrl}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `grant_type=authorization_code&code=${'x'.repeat(200 * 1024)}`,
+    });
+    const text = await res.text();
+    assert.doesNotMatch(text, /GOOGLE_DRIVE_MCP_MAX_BODY_BYTES/);
+    assert.doesNotMatch(text, /"jsonrpc"\s*:\s*"2\.0"/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DNS-rebinding warning for an all-interfaces bind
+// ---------------------------------------------------------------------------
+
+describe('binding to all interfaces still warns', () => {
+  for (const host of ['0.0.0.0', '::']) {
+    it(`warns for ${host} when no Host allowlist is configured`, async () => {
+      const mod = await setupMocks();
+      const seen: string[] = [];
+      const original = console.warn;
+      console.warn = (...args: unknown[]) => { seen.push(args.join(' ')); };
+      let created: any;
+      try {
+        created = mod.createHttpApp(host);
+      } finally {
+        console.warn = original;
+      }
+      created.sessions.clear();
+      assert.ok(
+        seen.some((line) => /without DNS rebinding protection/.test(line)),
+        `expected a rebinding warning for ${host}, got: ${JSON.stringify(seen)}`,
+      );
+    });
+  }
+
+  it('does not warn for a loopback bind, which is protected', async () => {
+    const mod = await setupMocks();
+    const seen: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => { seen.push(args.join(' ')); };
+    let created: any;
+    try {
+      created = mod.createHttpApp('127.0.0.1');
+    } finally {
+      console.warn = original;
+    }
+    created.sessions.clear();
+    assert.ok(!seen.some((line) => /without DNS rebinding protection/.test(line)));
   });
 });

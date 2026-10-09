@@ -1050,8 +1050,9 @@ Options:
                              (default: 15000). A refresh is retried at most once.
   --retry-max=<n>            Max retry attempts on transient failures; 0 disables (default: 3)
   --retry-base-delay=<ms>    Base delay for retry backoff in ms (default: 1000)
-  --max-body-bytes=<n>       Maximum accepted request body on the HTTP transport, in bytes
-                             (default: 4194304). No effect on stdio.
+  --max-body-bytes=<n>       Maximum accepted request body on POST /mcp, in bytes (default:
+                             4194304). Other routes keep body-parser's default. Below 1 falls
+                             back to the default. No effect on stdio.
 
 Examples:
   npx @piotr-agier/google-drive-mcp auth
@@ -1073,7 +1074,7 @@ Environment Variables:
   MCP_TRANSPORT                         Transport mode: stdio or http (default: stdio)
   MCP_HTTP_PORT                         HTTP listen port (default: 3100)
   MCP_HTTP_HOST                         HTTP bind address (default: 127.0.0.1)
-  GOOGLE_DRIVE_MCP_MAX_BODY_BYTES       Maximum accepted request body in bytes (default: 4194304). Mirrored by the --max-body-bytes=<n> flag. Raise it for large batchUpdate calls; no effect on stdio.
+  GOOGLE_DRIVE_MCP_MAX_BODY_BYTES       Maximum accepted request body on POST /mcp in bytes (default: 4194304); other routes keep body-parser's default, and a value below 1 falls back. Mirrored by the --max-body-bytes=<n> flag. Raise it for large batchUpdate calls; no effect on stdio.
 
   Team Mode:
   MCP_TEAM_MODE                         Enable team mode (1/0, true/false; same as --team)
@@ -1347,27 +1348,40 @@ interface CreateHttpAppOptions {
 const LOCALHOST_HOSTS = ['127.0.0.1', 'localhost', '::1'];
 
 /**
- * The app the SDK's createMcpExpressApp would build, with one difference: the
- * JSON body limit is ours to set. The helper calls express.json() with no
- * options, so every server built from it stops at body-parser's 100 KiB
- * default and answers an oversized request with an Express HTML error page —
- * which an MCP client cannot read. A bulk sheets or docs batchUpdate passes
- * 100 KiB routinely, so the ceiling is reachable in ordinary use.
+ * The app the SDK's createMcpExpressApp would build, with one difference: POST
+ * /mcp gets a configurable body limit, mounted later by the route itself.
  *
- * Middleware order matches the helper's (body first, then Host) so that
- * dropping it changes only the limit.
+ * The helper calls express.json() with no options, so every server built from
+ * it stops at body-parser's 100 KiB default and answers an oversized request
+ * with an Express HTML error page, which an MCP client cannot read. A bulk
+ * sheets or docs batchUpdate passes 100 KiB routinely.
+ *
+ * The raised limit deliberately does NOT apply here. This parser runs before
+ * Host validation, before requireBearerAuth and before the SDK's per-handler
+ * rate limiters, so raising it for every route would let an unauthenticated
+ * caller make the server read and parse megabytes per request — and get past a
+ * spent rate limit with a parse error instead of a 429. Every route except
+ * /mcp keeps body-parser's default; POST /mcp mounts the large parser after
+ * its guards.
  */
-function buildMcpExpressApp(
-  host: string,
-  allowedHosts: string[] | undefined,
-  maxBodyBytes: number,
-) {
+function buildMcpExpressApp(host: string, allowedHosts: string[] | undefined) {
   const app = express();
-  app.use(express.json({ limit: maxBodyBytes }));
+  const defaultJson = express.json();
+  app.use((req, res, next) => (req.path === '/mcp' ? next() : defaultJson(req, res, next)));
   if (allowedHosts) {
     app.use(hostHeaderValidation(allowedHosts));
   } else if (LOCALHOST_HOSTS.includes(host)) {
     app.use(localhostHostValidation());
+  } else if (host === '0.0.0.0' || host === '::') {
+    // The helper's third branch. Without it a server bound to all interfaces
+    // starts with neither DNS-rebinding protection nor any notice of its
+    // absence.
+    // eslint-disable-next-line no-console
+    console.warn(
+      `Warning: Server is binding to ${host} without DNS rebinding protection. ` +
+        'Consider using the allowedHosts option to restrict allowed hosts, ' +
+        'or use authentication to protect your server.',
+    );
   }
   return app;
 }
@@ -1389,7 +1403,9 @@ function jsonRpcBodyErrors(
     res.status(tooLarge ? 413 : 400).json({
       jsonrpc: '2.0',
       error: {
-        code: tooLarge ? -32600 : -32700,
+        // -32000 is what the SDK's transport uses for its own transport-level
+        // rejections (403/406/409); a 413 is the same kind of refusal.
+        code: tooLarge ? -32000 : -32700,
         message: tooLarge
           ? `Request body too large (limit ${maxBodyBytes} bytes). Split the call into smaller batches, or raise GOOGLE_DRIVE_MCP_MAX_BODY_BYTES.`
           : 'Parse error: request body is not valid JSON',
@@ -1406,11 +1422,7 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
   // replaced with an explicit allowlist derived from the issuer URL — for
   // non-localhost binds the SDK otherwise applies no Host validation at all.
   const maxBodyBytes = options?.maxBodyBytes ?? runtimeConfig.maxBodyBytes;
-  const app = buildMcpExpressApp(
-    host,
-    teamAuth ? teamAuth.config.allowedHosts : undefined,
-    maxBodyBytes,
-  );
+  const app = buildMcpExpressApp(host, teamAuth ? teamAuth.config.allowedHosts : undefined);
   if (teamAuth) {
     if (teamAuth.config.trustProxy !== undefined) {
       // Without this, every user behind a reverse proxy shares the proxy's IP
@@ -1518,7 +1530,7 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
     }
   }
 
-  app.post('/mcp', ...mcpGuards, async (req, res) => {
+  app.post('/mcp', ...mcpGuards, express.json({ limit: maxBodyBytes }), async (req, res) => {
     try {
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
@@ -1649,7 +1661,10 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
   });
 
   // Last: Express only reaches an error handler mounted after the routes.
-  app.use(jsonRpcBodyErrors(maxBodyBytes));
+  // Scoped to /mcp — at the root it also answered body-parser failures from the
+  // OAuth routes, where it would name this limit and this environment variable,
+  // neither of which applies to the SDK's own urlencoded parser there.
+  app.use('/mcp', jsonRpcBodyErrors(maxBodyBytes));
 
   return { app, sessions };
 }

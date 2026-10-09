@@ -25,7 +25,7 @@ CLI arguments take priority over their environment-variable equivalents. Authent
 | `--token-refresh-timeout=<ms>` | `15000` | Per-attempt timeout for an OAuth access-token refresh; `0` disables it |
 | `--retry-max=<n>` | `3` | Maximum retry attempts on retryable errors (429, 503, 504, timeouts, and network failures); `0` disables retries |
 | `--retry-base-delay=<ms>` | `1000` | Exponential-backoff base delay, capped at 30 seconds with jitter |
-| `--max-body-bytes=<n>` | `4194304` | Maximum accepted request body on the HTTP transport, in bytes; no effect on stdio |
+| `--max-body-bytes=<n>` | `4194304` | Maximum accepted request body on `POST /mcp`, in bytes. Applied after Host validation and bearer auth, so an unauthenticated caller is still held to body-parser's default; every other route keeps that default too. A value below 1 falls back to the default, since `express.json({ limit: 0 })` rejects every request. No effect on stdio |
 
 The timeout and retry settings apply to two paths; they are not applied to every Google API request:
 

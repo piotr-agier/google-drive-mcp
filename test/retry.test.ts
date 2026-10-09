@@ -10,6 +10,7 @@ const cfg = (o: Partial<RuntimeConfig> = {}): RuntimeConfig => ({
   retryMax: 0,
   retryBaseDelay: 0,
   disableResources: false,
+  maxBodyBytes: 0,
   ...o,
 });
 

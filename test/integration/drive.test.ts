@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { PDFDocument } from 'pdf-lib';
 import { setupTestServer, callTool, type TestContext } from '../helpers/setup-server.js';
-import { setEnv } from '../helpers/env.js';
+import { clearAuthModeOverrides } from '../helpers/env.js';
 
 describe('Drive tools', () => {
   let ctx: TestContext;
@@ -887,7 +887,7 @@ describe('Drive tools', () => {
     });
 
     it('authGetStatus reports the effective identity and oauth mode', async () => {
-      const saved = setEnv({ GOOGLE_APPLICATION_CREDENTIALS: undefined, GOOGLE_DRIVE_MCP_ACCESS_TOKEN: undefined });
+      const saved = clearAuthModeOverrides();
       ctx.mocks.drive.service.about.get._setImpl(async () => ({
         data: { user: { displayName: 'Ada L', emailAddress: 'ada@example.com' }, storageQuota: { limit: '100', usage: '1' } },
       }));
@@ -907,7 +907,9 @@ describe('Drive tools', () => {
       const dir = await mkdtemp(join(tmpdir(), 'gdmcp-tok-'));
       const tokenFile = join(dir, 'tokens.json');
       await writeFile(tokenFile, '{}');
-      const saved = setEnv({
+      // Clear every mode-forcing variable first: a stray one from the shell
+      // would change the mode this test asserts on.
+      const saved = clearAuthModeOverrides({
         GOOGLE_APPLICATION_CREDENTIALS: '/tmp/fake-service-account.json',
         GOOGLE_DRIVE_MCP_TOKEN_PATH: tokenFile,
       });
@@ -929,9 +931,7 @@ describe('Drive tools', () => {
       // credentials (making about.get throw is exactly what the old ladder
       // mislabeled as identity_error). A non-existent token path makes
       // tokenFileExists false.
-      const saved = setEnv({
-        GOOGLE_APPLICATION_CREDENTIALS: undefined,
-        GOOGLE_DRIVE_MCP_ACCESS_TOKEN: undefined,
+      const saved = clearAuthModeOverrides({
         GOOGLE_DRIVE_MCP_TOKEN_PATH: '/tmp/gdmcp-nonexistent-token-path/tokens.json',
       });
       ctx.mocks.drive.service.about.get._setImpl(async () => { throw new Error('No refresh token is set.'); });
@@ -949,9 +949,8 @@ describe('Drive tools', () => {
     it('authGetStatus surfaces an identity-resolution failure as identity_error', async () => {
       // Use service_account mode so the oauth-only needs_reauth branch is
       // skipped and a failing about.get genuinely surfaces as identity_error.
-      const saved = setEnv({
+      const saved = clearAuthModeOverrides({
         GOOGLE_APPLICATION_CREDENTIALS: '/tmp/fake-service-account.json',
-        GOOGLE_DRIVE_MCP_ACCESS_TOKEN: undefined,
         GOOGLE_DRIVE_MCP_TOKEN_PATH: '/tmp/gdmcp-nonexistent-token-path/tokens.json',
       });
       ctx.mocks.drive.service.about.get._setImpl(async () => { throw new Error('Insufficient Permission'); });

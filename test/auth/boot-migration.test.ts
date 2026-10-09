@@ -4,6 +4,8 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { clearAuthModeOverrides } from '../helpers/env.js';
+
 // ---------------------------------------------------------------------------
 // Boot-time migration via buildAuthSystem.
 //
@@ -19,18 +21,15 @@ async function withTokenPath<T>(fn: (tokenPath: string) => Promise<T>): Promise<
   const tokenPath = path.join(dir, 'tokens.json');
   const saved = process.env.GOOGLE_DRIVE_MCP_TOKEN_PATH;
   process.env.GOOGLE_DRIVE_MCP_TOKEN_PATH = tokenPath;
-  // Make sure no synthetic-mode env vars sneak in from the parent shell.
-  const savedSA = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  const savedET = process.env.GOOGLE_DRIVE_MCP_ACCESS_TOKEN;
-  delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  delete process.env.GOOGLE_DRIVE_MCP_ACCESS_TOKEN;
+  // Make sure no mode-forcing env var sneaks in from the parent shell. Named
+  // individually this drifts the moment the map grows; the helper reads the map.
+  const overrides = clearAuthModeOverrides();
   try {
     return await fn(tokenPath);
   } finally {
+    overrides.restore();
     if (saved === undefined) delete process.env.GOOGLE_DRIVE_MCP_TOKEN_PATH;
     else process.env.GOOGLE_DRIVE_MCP_TOKEN_PATH = saved;
-    if (savedSA !== undefined) process.env.GOOGLE_APPLICATION_CREDENTIALS = savedSA;
-    if (savedET !== undefined) process.env.GOOGLE_DRIVE_MCP_ACCESS_TOKEN = savedET;
   }
 }
 

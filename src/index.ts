@@ -43,6 +43,7 @@ import {
 import type { AccountOps, AddAccountResult, ToolContext, ToolResult } from './types.js';
 import { errorResponse } from './types.js';
 import { loadRuntimeConfig, parseBoolEnv, type RuntimeConfig } from './utils/cliArgs.js';
+import { allAuthModeOverrideEnvVars } from './auth/externalAuth.js';
 import { GOOGLE_CALLBACK_PATH, isLoopbackHost, loadTeamConfig } from './auth/team/config.js';
 import { createTeamRuntime, type TeamRuntime } from './auth/team/runtime.js';
 import { coversScopes } from './auth/accountResolver.js';
@@ -204,10 +205,14 @@ function evictAccountClients(alias: string): void {
 function requireLocalOAuthMode(action: string): void {
   const sys = requireAuthSystem();
   if (sys.mode !== 'local-oauth') {
+    // Name the variables actually set rather than a fixed pair: a deployment
+    // forced into this mode by one the list omits would unset what it never
+    // set and hit the same error again.
+    const forcing = allAuthModeOverrideEnvVars().filter((v) => !!process.env[v]);
+    const names = (forcing.length ? forcing : allAuthModeOverrideEnvVars()).join(' and ');
     throw new Error(
       `manage_accounts ${action} is only supported in local-OAuth mode. ` +
-        `Current mode: ${sys.mode}. Unset GOOGLE_APPLICATION_CREDENTIALS and ` +
-        `GOOGLE_DRIVE_MCP_ACCESS_TOKEN to switch to multi-account local OAuth.`,
+        `Current mode: ${sys.mode}. Unset ${names} to switch to multi-account local OAuth.`,
     );
   }
 }

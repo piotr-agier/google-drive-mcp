@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { spawn } from 'node:child_process';
+
+import { allAuthModeOverrideEnvVars } from '../../src/auth/externalAuth.js';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,8 +24,13 @@ interface RunResult {
  * runs in parallel; the pattern-match exit keeps the common case fast.
  */
 function run(args: string[], env: Record<string, string> = {}, until?: RegExp): Promise<RunResult> {
-  // Remove MCP_TESTING so main() actually runs in the subprocess
-  const { MCP_TESTING: _, ...cleanEnv } = process.env;
+  // Remove MCP_TESTING so main() actually runs in the subprocess, and every
+  // variable that would force an auth mode: the child inherits this shell, and
+  // one left over from it changes which mode the server picks — so a test
+  // asserting on the transport guard would fail on an auth error instead.
+  const { MCP_TESTING: _, ...inherited } = process.env;
+  const cleanEnv: NodeJS.ProcessEnv = { ...inherited };
+  for (const name of allAuthModeOverrideEnvVars()) delete cleanEnv[name];
   return new Promise((resolve) => {
     const child = spawn('node', [DIST_INDEX, ...args], {
       env: { ...cleanEnv, ...env },

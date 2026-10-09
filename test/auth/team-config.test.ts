@@ -1,12 +1,20 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { after, before } from 'node:test';
 
 import { loadTeamConfig } from '../../src/auth/team/config.js';
+import { clearAuthModeOverrides } from '../helpers/env.js';
 
 // ---------------------------------------------------------------------------
-// loadTeamConfig validation. env is passed explicitly so these are hermetic
-// (no process.env mutation).
+// loadTeamConfig validation. env is passed explicitly, but the mode predicates
+// it calls (isServiceAccountMode / isExternalTokenMode) read process.env
+// directly, so the injected env alone does not make these hermetic: a
+// mode-forcing variable in the shell makes loadTeamConfig throw on the
+// team-mode incompatibility check before any of this is reached.
 // ---------------------------------------------------------------------------
+
+let overrides: { restore: () => void };
+before(() => { overrides = clearAuthModeOverrides(); });
+after(() => overrides.restore());
 
 function makeEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
   return { MCP_TEAM_ISSUER_URL: 'https://drive-mcp.example.com', ...overrides };

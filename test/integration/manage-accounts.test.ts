@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it, before, after } from 'node:test';
 import { setupTestServer, callTool, type TestContext } from '../helpers/setup-server.js';
+import { clearAuthModeOverrides } from '../helpers/env.js';
 import { resolveSetDefaultTarget, awaitConsentCompletion } from '../../src/tools/drive.js';
 
 // The test harness seeds an AccountStore in 'test' mode with a single synthetic
@@ -44,6 +45,30 @@ describe('manage_accounts (test-mode harness)', () => {
       result.content[0].text!,
       /only supported in local-OAuth mode.*test/,
     );
+  });
+
+  it('the refusal names the variable that is actually forcing the mode', async () => {
+    // The message used to name GOOGLE_APPLICATION_CREDENTIALS and
+    // GOOGLE_DRIVE_MCP_ACCESS_TOKEN unconditionally. A deployment forced out of
+    // local OAuth by a refresh token alone would unset a variable it never set
+    // and hit the same error again.
+    const saved = clearAuthModeOverrides({ GOOGLE_DRIVE_MCP_REFRESH_TOKEN: '1//refresh-only' });
+    try {
+      const result = await callTool(ctx.client, 'manage_accounts', {
+        action: 'add',
+        account_id: 'work',
+      });
+      assert.equal(result.isError, true);
+      const text = result.content[0].text!;
+      assert.match(text, /GOOGLE_DRIVE_MCP_REFRESH_TOKEN/);
+      assert.doesNotMatch(
+        text,
+        /Unset GOOGLE_APPLICATION_CREDENTIALS and GOOGLE_DRIVE_MCP_ACCESS_TOKEN/,
+        'must not name variables that are not set',
+      );
+    } finally {
+      saved.restore();
+    }
   });
 
   it('add rejects invalid aliases before attempting a flow', async () => {

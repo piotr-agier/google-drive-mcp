@@ -227,6 +227,13 @@ export async function createServiceAccountAuth(): Promise<any> {
  * is set. A refresh token alone is enough: it mints access tokens on demand,
  * and keying the mode off the access token forced a long-lived deployment to
  * keep a dead one around purely as a mode flag.
+ *
+ * BEHAVIOUR CHANGE: a refresh token used to be ignored here, so one left in an
+ * environment changed nothing. It now selects external-token mode, which takes
+ * priority over the local `tokens.json` OAuth flow — the same trap as issue
+ * #137, with one more variable that can spring it. Anything that tells a user
+ * how to get back to local OAuth must therefore read
+ * `allAuthModeOverrideEnvVars()` rather than naming variables inline.
  */
 export function isExternalTokenMode(): boolean {
   return !!(process.env.GOOGLE_DRIVE_MCP_ACCESS_TOKEN || process.env.GOOGLE_DRIVE_MCP_REFRESH_TOKEN);

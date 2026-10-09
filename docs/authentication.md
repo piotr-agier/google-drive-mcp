@@ -121,7 +121,7 @@ By default a service account acts as itself. Some Google APIs (for example Drive
 
 ### 2. External OAuth Token Mode
 
-Provide a pre-obtained OAuth access token via `GOOGLE_DRIVE_MCP_ACCESS_TOKEN`. This is useful when an external service handles the OAuth flow (e.g., a web app that obtains tokens on behalf of the user).
+Provide pre-obtained OAuth credentials via `GOOGLE_DRIVE_MCP_ACCESS_TOKEN` or `GOOGLE_DRIVE_MCP_REFRESH_TOKEN` — either one activates this mode. This is useful when an external service handles the OAuth flow (e.g., a web app that obtains tokens on behalf of the user). For anything long-running, prefer the refresh token: an access token lives about an hour, while the configuration carrying it lives as long as the deployment.
 
 **Access token only** (no auto-refresh — token will eventually expire):
 ```json
@@ -146,7 +146,6 @@ Provide a pre-obtained OAuth access token via `GOOGLE_DRIVE_MCP_ACCESS_TOKEN`. T
       "command": "npx",
       "args": ["@piotr-agier/google-drive-mcp"],
       "env": {
-        "GOOGLE_DRIVE_MCP_ACCESS_TOKEN": "ya29.a0AfH6SM...",
         "GOOGLE_DRIVE_MCP_REFRESH_TOKEN": "1//0dx...",
         "GOOGLE_DRIVE_MCP_CLIENT_ID": "123456789.apps.googleusercontent.com",
         "GOOGLE_DRIVE_MCP_CLIENT_SECRET": "GOCSPX-..."

@@ -74,8 +74,9 @@ export function describeBypassedTokens(
     setOverrideVars.length > setForMode.length
       ? `Unset ${setOverrideVars.join(' and ')} to use your authenticated Google account`
       : `Unset ${envVar} to use your authenticated Google account`;
+  const verb = setForMode.length > 1 ? 'are' : 'is';
   return `The local OAuth token at ${tokenPath} exists but is IGNORED because ` +
-    `${envVar} is set (active auth mode: ${mode}). ${remedy} (see issue #137).`;
+    `${envVar} ${verb} set (active auth mode: ${mode}). ${remedy} (see issue #137).`;
 }
 
 /**
@@ -247,8 +248,15 @@ export function validateExternalTokenConfig(): void {
   const accessToken = process.env.GOOGLE_DRIVE_MCP_ACCESS_TOKEN?.trim();
   const refreshToken = process.env.GOOGLE_DRIVE_MCP_REFRESH_TOKEN?.trim();
   if (!accessToken && !refreshToken) {
+    // Either variable can enter the mode, so blame the one actually present:
+    // a whitespace-only refresh token used to be reported as an empty access
+    // token the caller never set.
+    const present = AUTH_MODE_OVERRIDE_ENV_VARS.external_token.filter(
+      (v) => process.env[v] !== undefined,
+    );
+    const culprit = present.length ? present.join(' and ') : 'GOOGLE_DRIVE_MCP_ACCESS_TOKEN';
     throw new Error(
-      'GOOGLE_DRIVE_MCP_ACCESS_TOKEN is set but empty. Provide a valid OAuth access token, ' +
+      `${culprit} is set but empty. Provide a valid OAuth access token, ` +
         'or set GOOGLE_DRIVE_MCP_REFRESH_TOKEN instead.'
     );
   }

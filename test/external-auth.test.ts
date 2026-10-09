@@ -13,11 +13,12 @@ import {
   validateCredentialsFile,
   describeBypassedTokens,
   AUTH_MODE_OVERRIDE_ENV_VARS,
+  getActiveAuthMode,
   createServiceAccountAuth,
 } from '../src/auth/externalAuth.js';
 import { JWT } from 'google-auth-library';
 import { SCOPE_ALIASES } from '../src/auth/scopes.js';
-import { setEnv } from './helpers/env.js';
+import { setEnv, clearAuthModeOverrides } from './helpers/env.js';
 
 // ---------------------------------------------------------------------------
 // Helpers — save & restore env vars around each test
@@ -602,13 +603,83 @@ test('the bypass warning lists both token variables when both are set', withEnv(
   },
 ));
 
-test('AUTH_MODE_OVERRIDE_ENV_VARS covers every variable that can force a mode', () => {
-  const all = Object.values(AUTH_MODE_OVERRIDE_ENV_VARS).flat();
-  for (const v of [
-    'GOOGLE_APPLICATION_CREDENTIALS',
-    'GOOGLE_DRIVE_MCP_ACCESS_TOKEN',
-    'GOOGLE_DRIVE_MCP_REFRESH_TOKEN',
-  ]) {
-    assert.ok(all.includes(v), `${v} forces a mode, so it must be listed`);
+// Checking the map against a list copied out of it only proves the two were
+// edited together. Check it against behaviour instead: every variable the map
+// claims forces a mode must actually force that mode on its own. (A variable
+// missing from the map still cannot be found this way — nothing here knows it
+// exists — but every listed one is proven to do what the map says.)
+test('every variable the map lists forces the mode it is listed under', () => {
+  for (const [mode, vars] of Object.entries(AUTH_MODE_OVERRIDE_ENV_VARS)) {
+    for (const name of vars) {
+      const restore = clearAuthModeOverrides({ [name]: 'set-by-the-test' });
+      try {
+        assert.equal(
+          getActiveAuthMode(),
+          mode,
+          `${name} alone should select ${mode}`,
+        );
+      } finally {
+        restore.restore();
+      }
+    }
   }
 });
+
+test('with nothing set, the mode is local OAuth', () => {
+  const restore = clearAuthModeOverrides();
+  try {
+    assert.equal(getActiveAuthMode(), 'oauth');
+  } finally {
+    restore.restore();
+  }
+});
+
+
+// A variable that is set but empty should be named as the one at fault. Either
+// can enter the mode now, so a fixed name is wrong half the time.
+test('an empty refresh token is reported as the refresh token, not the access token', withEnv(
+  { GOOGLE_DRIVE_MCP_REFRESH_TOKEN: '  ' },
+  () => {
+    assert.throws(
+      () => validateExternalTokenConfig(),
+      (e: Error) => {
+        assert.match(e.message, /GOOGLE_DRIVE_MCP_REFRESH_TOKEN is set but empty/);
+        assert.doesNotMatch(
+          e.message,
+          /GOOGLE_DRIVE_MCP_ACCESS_TOKEN is set but empty/,
+          'must not blame a variable that is not set',
+        );
+        return true;
+      },
+    );
+  },
+));
+
+test('an empty access token is still reported as the access token', withEnv(
+  { GOOGLE_DRIVE_MCP_ACCESS_TOKEN: '   ' },
+  () => {
+    assert.throws(() => validateExternalTokenConfig(), /GOOGLE_DRIVE_MCP_ACCESS_TOKEN is set but empty/);
+  },
+));
+
+test('the bypass warning agrees in number when two variables are set', withEnv(
+  {
+    GOOGLE_DRIVE_MCP_ACCESS_TOKEN: 'ya29.token',
+    GOOGLE_DRIVE_MCP_REFRESH_TOKEN: '1//refresh-token',
+    GOOGLE_DRIVE_MCP_CLIENT_ID: 'id',
+    GOOGLE_DRIVE_MCP_CLIENT_SECRET: 'secret',
+  },
+  () => {
+    const msg = describeBypassedTokens('external_token', '/tmp/tokens.json', true)!;
+    assert.match(msg, /GOOGLE_DRIVE_MCP_ACCESS_TOKEN and GOOGLE_DRIVE_MCP_REFRESH_TOKEN are set/);
+    assert.doesNotMatch(msg, /and GOOGLE_DRIVE_MCP_REFRESH_TOKEN is set/);
+  },
+));
+
+test('the bypass warning stays singular for one variable', withEnv(
+  { GOOGLE_APPLICATION_CREDENTIALS: '/tmp/sa.json' },
+  () => {
+    const msg = describeBypassedTokens('service_account', '/tmp/tokens.json', true)!;
+    assert.match(msg, /GOOGLE_APPLICATION_CREDENTIALS is set/);
+  },
+));

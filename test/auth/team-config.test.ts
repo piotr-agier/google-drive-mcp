@@ -63,3 +63,39 @@ test('a query string or fragment on the issuer is still rejected', () => {
     /query string or fragment/,
   );
 });
+
+// Either token variable enters external-token mode, and team mode refuses to
+// run beside it. The refusal has to name the variable actually set, or a
+// refresh-token-only deployment is told to unset something it never set.
+test('team mode refuses beside a refresh token and names that variable', () => {
+  const overrides = clearAuthModeOverrides({ GOOGLE_DRIVE_MCP_REFRESH_TOKEN: '1//refresh-only' });
+  try {
+    assert.throws(
+      () => loadTeamConfig({ transport: 'http', env: makeEnv() }),
+      (e: Error) => {
+        assert.match(e.message, /incompatible with external-token mode/);
+        assert.match(e.message, /Unset GOOGLE_DRIVE_MCP_REFRESH_TOKEN/);
+        assert.doesNotMatch(
+          e.message,
+          /Unset GOOGLE_DRIVE_MCP_ACCESS_TOKEN/,
+          'must not name a variable that is not set',
+        );
+        return true;
+      },
+    );
+  } finally {
+    overrides.restore();
+  }
+});
+
+test('team mode names the access token when that is the one set', () => {
+  const overrides = clearAuthModeOverrides({ GOOGLE_DRIVE_MCP_ACCESS_TOKEN: 'ya29.x' });
+  try {
+    assert.throws(
+      () => loadTeamConfig({ transport: 'http', env: makeEnv() }),
+      /Unset GOOGLE_DRIVE_MCP_ACCESS_TOKEN/,
+    );
+  } finally {
+    overrides.restore();
+  }
+});

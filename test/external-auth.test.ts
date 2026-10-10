@@ -12,11 +12,13 @@ import {
   buildServiceAccountAuthOptions,
   validateCredentialsFile,
   describeBypassedTokens,
+  AUTH_MODE_OVERRIDE_ENV_VARS,
+  getActiveAuthMode,
   createServiceAccountAuth,
 } from '../src/auth/externalAuth.js';
 import { JWT } from 'google-auth-library';
 import { SCOPE_ALIASES } from '../src/auth/scopes.js';
-import { setEnv } from './helpers/env.js';
+import { setEnv, clearAuthModeOverrides } from './helpers/env.js';
 
 // ---------------------------------------------------------------------------
 // Helpers — save & restore env vars around each test
@@ -197,7 +199,19 @@ test('creates OAuth2Client with access token', withEnv(
   },
 ));
 
-test('creates OAuth2Client with full credentials', withEnv(
+// A supplied access token lives about an hour, but the configuration that
+// carries it lives as long as the deployment — so by the time a process
+// starts, the token it was given is almost always long dead. google-auth-
+// library only refreshes when `expiry_date` says the token is expiring:
+//
+//   isTokenExpiring() { return expiryDate ? expiryDate <= now + threshold : false }
+//
+// With no expiry_date that is false, so the client would hand the dead token
+// to the very first request and let Google reject it. When a refresh token is
+// present we therefore do not seed the access token at all, which makes the
+// library's own `!credentials.access_token || isTokenExpiring()` true and
+// mints a fresh token before the first call.
+test('does not seed a supplied access token when a refresh token can replace it', withEnv(
   {
     GOOGLE_DRIVE_MCP_ACCESS_TOKEN: 'ya29.test-token',
     GOOGLE_DRIVE_MCP_REFRESH_TOKEN: '1//refresh-token',
@@ -206,9 +220,86 @@ test('creates OAuth2Client with full credentials', withEnv(
   },
   () => {
     const client = createExternalOAuth2Client();
-    assert.equal(client.credentials.access_token, 'ya29.test-token');
     assert.equal(client.credentials.refresh_token, '1//refresh-token');
+    assert.equal(
+      client.credentials.access_token,
+      undefined,
+      'a stale access token must not be handed to the first request',
+    );
   },
+));
+
+test('the client refreshes before its first request when a refresh token is set', withEnv(
+  {
+    GOOGLE_DRIVE_MCP_ACCESS_TOKEN: 'ya29.test-token',
+    GOOGLE_DRIVE_MCP_REFRESH_TOKEN: '1//refresh-token',
+    GOOGLE_DRIVE_MCP_CLIENT_ID: 'test-client-id',
+    GOOGLE_DRIVE_MCP_CLIENT_SECRET: 'test-client-secret',
+  },
+  () => {
+    const client = createExternalOAuth2Client();
+    // The library's own decision, asserted through it rather than restated:
+    // getAccessTokenAsync() refreshes when this is true. isTokenExpiring is
+    // private to TypeScript but present at runtime, which is what decides.
+    const isTokenExpiring = (client as unknown as { isTokenExpiring(): boolean })
+      .isTokenExpiring.bind(client);
+    const shouldRefresh = !client.credentials.access_token || isTokenExpiring();
+    assert.equal(shouldRefresh, true, 'the library must consider a refresh due');
+  },
+));
+
+test('keeps the access token when there is no refresh token to replace it', withEnv(
+  { GOOGLE_DRIVE_MCP_ACCESS_TOKEN: 'ya29.only-token' },
+  () => {
+    const client = createExternalOAuth2Client();
+    assert.equal(
+      client.credentials.access_token,
+      'ya29.only-token',
+      'without a refresh token the supplied token is all there is',
+    );
+  },
+));
+
+// ---------------------------------------------------------------------------
+// External mode entered by refresh token alone
+// ---------------------------------------------------------------------------
+
+// Keying the mode off the access token forced a deployment that refreshes to
+// keep a dead access token around purely as a mode flag.
+test('isExternalTokenMode returns true for a refresh token with no access token', withEnv(
+  {
+    GOOGLE_DRIVE_MCP_REFRESH_TOKEN: '1//refresh-token',
+    GOOGLE_DRIVE_MCP_CLIENT_ID: 'test-client-id',
+    GOOGLE_DRIVE_MCP_CLIENT_SECRET: 'test-client-secret',
+  },
+  () => { assert.equal(isExternalTokenMode(), true); },
+));
+
+test('validateExternalTokenConfig accepts a refresh token with no access token', withEnv(
+  {
+    GOOGLE_DRIVE_MCP_REFRESH_TOKEN: '1//refresh-token',
+    GOOGLE_DRIVE_MCP_CLIENT_ID: 'test-client-id',
+    GOOGLE_DRIVE_MCP_CLIENT_SECRET: 'test-client-secret',
+  },
+  () => { assert.doesNotThrow(() => validateExternalTokenConfig()); },
+));
+
+test('createExternalOAuth2Client works with a refresh token and no access token', withEnv(
+  {
+    GOOGLE_DRIVE_MCP_REFRESH_TOKEN: '1//refresh-token',
+    GOOGLE_DRIVE_MCP_CLIENT_ID: 'test-client-id',
+    GOOGLE_DRIVE_MCP_CLIENT_SECRET: 'test-client-secret',
+  },
+  () => {
+    const client = createExternalOAuth2Client();
+    assert.equal(client.credentials.refresh_token, '1//refresh-token');
+    assert.equal(client.credentials.access_token, undefined);
+  },
+));
+
+test('validateExternalTokenConfig still rejects neither token being usable', withEnv(
+  { GOOGLE_DRIVE_MCP_ACCESS_TOKEN: '   ' },
+  () => { assert.throws(() => validateExternalTokenConfig(), /ACCESS_TOKEN|REFRESH_TOKEN/); },
 ));
 
 // ---------------------------------------------------------------------------
@@ -470,3 +561,125 @@ test('createServiceAccountAuth leaves the JWT subject unset without GOOGLE_DRIVE
     assert.equal(client.subject, undefined);
   })();
 });
+
+// ---------------------------------------------------------------------------
+// Messages must name the variable that is actually in force
+// ---------------------------------------------------------------------------
+
+// External-token mode can be activated by either variable, so advice that
+// names only the access token is unactionable for a deployment that sets just
+// the refresh token: unset it and the mode is still on.
+
+test('the bypass warning names the refresh token when that is what forces the mode', withEnv(
+  {
+    GOOGLE_DRIVE_MCP_REFRESH_TOKEN: '1//refresh-token',
+    GOOGLE_DRIVE_MCP_CLIENT_ID: 'id',
+    GOOGLE_DRIVE_MCP_CLIENT_SECRET: 'secret',
+  },
+  () => {
+    const msg = describeBypassedTokens('external_token', '/tmp/tokens.json', true);
+    assert.ok(msg, 'a bypass warning is expected when tokens.json exists');
+    assert.match(msg!, /GOOGLE_DRIVE_MCP_REFRESH_TOKEN/);
+    assert.doesNotMatch(
+      msg!,
+      /Unset GOOGLE_DRIVE_MCP_ACCESS_TOKEN to/,
+      'must not tell the user to unset a variable that is not set',
+    );
+  },
+));
+
+test('the bypass warning lists both token variables when both are set', withEnv(
+  {
+    GOOGLE_DRIVE_MCP_ACCESS_TOKEN: 'ya29.token',
+    GOOGLE_DRIVE_MCP_REFRESH_TOKEN: '1//refresh-token',
+    GOOGLE_DRIVE_MCP_CLIENT_ID: 'id',
+    GOOGLE_DRIVE_MCP_CLIENT_SECRET: 'secret',
+  },
+  () => {
+    const msg = describeBypassedTokens('external_token', '/tmp/tokens.json', true);
+    assert.ok(msg);
+    assert.match(msg!, /GOOGLE_DRIVE_MCP_ACCESS_TOKEN/);
+    assert.match(msg!, /GOOGLE_DRIVE_MCP_REFRESH_TOKEN/);
+  },
+));
+
+// Checking the map against a list copied out of it only proves the two were
+// edited together. Check it against behaviour instead: every variable the map
+// claims forces a mode must actually force that mode on its own. (A variable
+// missing from the map still cannot be found this way — nothing here knows it
+// exists — but every listed one is proven to do what the map says.)
+test('every variable the map lists forces the mode it is listed under', () => {
+  for (const [mode, vars] of Object.entries(AUTH_MODE_OVERRIDE_ENV_VARS)) {
+    for (const name of vars) {
+      const restore = clearAuthModeOverrides({ [name]: 'set-by-the-test' });
+      try {
+        assert.equal(
+          getActiveAuthMode(),
+          mode,
+          `${name} alone should select ${mode}`,
+        );
+      } finally {
+        restore.restore();
+      }
+    }
+  }
+});
+
+test('with nothing set, the mode is local OAuth', () => {
+  const restore = clearAuthModeOverrides();
+  try {
+    assert.equal(getActiveAuthMode(), 'oauth');
+  } finally {
+    restore.restore();
+  }
+});
+
+
+// A variable that is set but empty should be named as the one at fault. Either
+// can enter the mode now, so a fixed name is wrong half the time.
+test('an empty refresh token is reported as the refresh token, not the access token', withEnv(
+  { GOOGLE_DRIVE_MCP_REFRESH_TOKEN: '  ' },
+  () => {
+    assert.throws(
+      () => validateExternalTokenConfig(),
+      (e: Error) => {
+        assert.match(e.message, /GOOGLE_DRIVE_MCP_REFRESH_TOKEN is set but empty/);
+        assert.doesNotMatch(
+          e.message,
+          /GOOGLE_DRIVE_MCP_ACCESS_TOKEN is set but empty/,
+          'must not blame a variable that is not set',
+        );
+        return true;
+      },
+    );
+  },
+));
+
+test('an empty access token is still reported as the access token', withEnv(
+  { GOOGLE_DRIVE_MCP_ACCESS_TOKEN: '   ' },
+  () => {
+    assert.throws(() => validateExternalTokenConfig(), /GOOGLE_DRIVE_MCP_ACCESS_TOKEN is set but empty/);
+  },
+));
+
+test('the bypass warning agrees in number when two variables are set', withEnv(
+  {
+    GOOGLE_DRIVE_MCP_ACCESS_TOKEN: 'ya29.token',
+    GOOGLE_DRIVE_MCP_REFRESH_TOKEN: '1//refresh-token',
+    GOOGLE_DRIVE_MCP_CLIENT_ID: 'id',
+    GOOGLE_DRIVE_MCP_CLIENT_SECRET: 'secret',
+  },
+  () => {
+    const msg = describeBypassedTokens('external_token', '/tmp/tokens.json', true)!;
+    assert.match(msg, /GOOGLE_DRIVE_MCP_ACCESS_TOKEN and GOOGLE_DRIVE_MCP_REFRESH_TOKEN are set/);
+    assert.doesNotMatch(msg, /and GOOGLE_DRIVE_MCP_REFRESH_TOKEN is set/);
+  },
+));
+
+test('the bypass warning stays singular for one variable', withEnv(
+  { GOOGLE_APPLICATION_CREDENTIALS: '/tmp/sa.json' },
+  () => {
+    const msg = describeBypassedTokens('service_account', '/tmp/tokens.json', true)!;
+    assert.match(msg, /GOOGLE_APPLICATION_CREDENTIALS is set/);
+  },
+));

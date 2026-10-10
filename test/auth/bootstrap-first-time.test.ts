@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+
+import { clearAuthModeOverrides } from '../helpers/env.js';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -49,7 +51,13 @@ async function setupTmpEnv(authPort: number): Promise<{
   process.env.GOOGLE_DRIVE_OAUTH_CREDENTIALS = credsPath;
   process.env.GOOGLE_DRIVE_MCP_AUTH_PORT = String(authPort);
 
+  // A mode-forcing variable in the shell sends buildAuthSystem down the
+  // service-account or external-token path instead of the local OAuth one
+  // these tests exercise.
+  const overrides = clearAuthModeOverrides();
+
   const restore = () => {
+    overrides.restore();
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;

@@ -23,10 +23,18 @@ export type ActiveAuthMode = 'service_account' | 'external_token' | 'oauth';
  * Keyed by the mode they force. Used to explain to users *why* their
  * authenticated `tokens.json` is being bypassed (see issue #137).
  */
-export const AUTH_MODE_OVERRIDE_ENV_VARS: Record<Exclude<ActiveAuthMode, 'oauth'>, string> = {
-  service_account: 'GOOGLE_APPLICATION_CREDENTIALS',
-  external_token: 'GOOGLE_DRIVE_MCP_ACCESS_TOKEN',
+export const AUTH_MODE_OVERRIDE_ENV_VARS: Record<Exclude<ActiveAuthMode, 'oauth'>, string[]> = {
+  service_account: ['GOOGLE_APPLICATION_CREDENTIALS'],
+  // Either activates external-token mode, so advice that names only the first
+  // is unactionable for a deployment that sets only the second: unsetting the
+  // access token leaves the mode on.
+  external_token: ['GOOGLE_DRIVE_MCP_ACCESS_TOKEN', 'GOOGLE_DRIVE_MCP_REFRESH_TOKEN'],
 };
+
+/** Every env var that can force a non-OAuth mode, across all modes. */
+export function allAuthModeOverrideEnvVars(): string[] {
+  return Object.values(AUTH_MODE_OVERRIDE_ENV_VARS).flat();
+}
 
 /**
  * The single source of truth for which auth mode `authenticate()` (src/auth.ts)
@@ -55,18 +63,20 @@ export function describeBypassedTokens(
   tokenExists: boolean,
 ): string | null {
   if (!tokenExists) return null;
-  const envVar = AUTH_MODE_OVERRIDE_ENV_VARS[mode];
+  // Name the variables that actually forced this mode, not the first one that
+  // could have: a deployment may set only the refresh token.
+  const setForMode = AUTH_MODE_OVERRIDE_ENV_VARS[mode].filter((v) => !!process.env[v]);
+  const envVar = (setForMode.length ? setForMode : AUTH_MODE_OVERRIDE_ENV_VARS[mode]).join(' and ');
   // Every override var that is currently set — unsetting only the winning one
   // just hands control to the next override, so tokens.json stays bypassed.
-  const setOverrideVars = Object.values(AUTH_MODE_OVERRIDE_ENV_VARS).filter(
-    (v) => !!process.env[v],
-  );
+  const setOverrideVars = allAuthModeOverrideEnvVars().filter((v) => !!process.env[v]);
   const remedy =
-    setOverrideVars.length > 1
+    setOverrideVars.length > setForMode.length
       ? `Unset ${setOverrideVars.join(' and ')} to use your authenticated Google account`
       : `Unset ${envVar} to use your authenticated Google account`;
+  const verb = setForMode.length > 1 ? 'are' : 'is';
   return `The local OAuth token at ${tokenPath} exists but is IGNORED because ` +
-    `${envVar} is set (active auth mode: ${mode}). ${remedy} (see issue #137).`;
+    `${envVar} ${verb} set (active auth mode: ${mode}). ${remedy} (see issue #137).`;
 }
 
 /**
@@ -213,9 +223,21 @@ export async function createServiceAccountAuth(): Promise<any> {
 // External OAuth Token mode
 // ---------------------------------------------------------------------------
 
-/** True when `GOOGLE_DRIVE_MCP_ACCESS_TOKEN` is set. */
+/**
+ * True when `GOOGLE_DRIVE_MCP_ACCESS_TOKEN` or `GOOGLE_DRIVE_MCP_REFRESH_TOKEN`
+ * is set. A refresh token alone is enough: it mints access tokens on demand,
+ * and keying the mode off the access token forced a long-lived deployment to
+ * keep a dead one around purely as a mode flag.
+ *
+ * BEHAVIOUR CHANGE: a refresh token used to be ignored here, so one left in an
+ * environment changed nothing. It now selects external-token mode, which takes
+ * priority over the local `tokens.json` OAuth flow — the same trap as issue
+ * #137, with one more variable that can spring it. Anything that tells a user
+ * how to get back to local OAuth must therefore read
+ * `allAuthModeOverrideEnvVars()` rather than naming variables inline.
+ */
 export function isExternalTokenMode(): boolean {
-  return !!process.env.GOOGLE_DRIVE_MCP_ACCESS_TOKEN;
+  return !!(process.env.GOOGLE_DRIVE_MCP_ACCESS_TOKEN || process.env.GOOGLE_DRIVE_MCP_REFRESH_TOKEN);
 }
 
 /**
@@ -224,13 +246,20 @@ export function isExternalTokenMode(): boolean {
  */
 export function validateExternalTokenConfig(): void {
   const accessToken = process.env.GOOGLE_DRIVE_MCP_ACCESS_TOKEN?.trim();
-  if (!accessToken) {
+  const refreshToken = process.env.GOOGLE_DRIVE_MCP_REFRESH_TOKEN?.trim();
+  if (!accessToken && !refreshToken) {
+    // Either variable can enter the mode, so blame the one actually present:
+    // a whitespace-only refresh token used to be reported as an empty access
+    // token the caller never set.
+    const present = AUTH_MODE_OVERRIDE_ENV_VARS.external_token.filter(
+      (v) => process.env[v] !== undefined,
+    );
+    const culprit = present.length ? present.join(' and ') : 'GOOGLE_DRIVE_MCP_ACCESS_TOKEN';
     throw new Error(
-      'GOOGLE_DRIVE_MCP_ACCESS_TOKEN is set but empty. Provide a valid OAuth access token.'
+      `${culprit} is set but empty. Provide a valid OAuth access token, ` +
+        'or set GOOGLE_DRIVE_MCP_REFRESH_TOKEN instead.'
     );
   }
-
-  const refreshToken = process.env.GOOGLE_DRIVE_MCP_REFRESH_TOKEN?.trim();
   const clientId = process.env.GOOGLE_DRIVE_MCP_CLIENT_ID?.trim();
   const clientSecret = process.env.GOOGLE_DRIVE_MCP_CLIENT_SECRET?.trim();
 
@@ -257,24 +286,32 @@ export function validateExternalTokenConfig(): void {
  * auto-refresh transparently.
  */
 export function createExternalOAuth2Client(): OAuth2Client {
-  const accessToken = process.env.GOOGLE_DRIVE_MCP_ACCESS_TOKEN!.trim();
+  const accessToken = process.env.GOOGLE_DRIVE_MCP_ACCESS_TOKEN?.trim();
   const refreshToken = process.env.GOOGLE_DRIVE_MCP_REFRESH_TOKEN?.trim();
   const clientId = process.env.GOOGLE_DRIVE_MCP_CLIENT_ID?.trim();
   const clientSecret = process.env.GOOGLE_DRIVE_MCP_CLIENT_SECRET?.trim();
 
   const oauth2Client = new OAuth2Client(clientId, clientSecret);
 
-  oauth2Client.setCredentials({
-    access_token: accessToken,
-    refresh_token: refreshToken || undefined,
-  });
-
-  if (!refreshToken) {
+  if (refreshToken) {
+    // Deliberately without the access token. A Google access token lives about
+    // an hour, but the configuration carrying it lives as long as the
+    // deployment, so by the time a process starts it is almost always expired.
+    // google-auth-library refreshes only when expiry_date says a refresh is
+    // due — and with no expiry_date its isTokenExpiring() returns false, so a
+    // seeded token is treated as valid forever and handed to the first
+    // request, which Google answers with "Request had invalid authentication
+    // credentials". Omitting it makes the library's own
+    // `!credentials.access_token || isTokenExpiring()` true, so a fresh token
+    // is minted before the first call. (expiry_date: 0 would NOT work here:
+    // the check is `expiryDate ? ... : false`, and 0 is falsy.)
+    oauth2Client.setCredentials({ refresh_token: refreshToken });
+    console.error('External OAuth tokens configured with auto-refresh support.');
+  } else {
+    oauth2Client.setCredentials({ access_token: accessToken });
     console.error(
       'Warning: No refresh token provided. The access token will not auto-refresh when it expires.'
     );
-  } else {
-    console.error('External OAuth tokens configured with auto-refresh support.');
   }
 
   return oauth2Client;

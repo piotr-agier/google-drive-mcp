@@ -69,7 +69,7 @@ npx -y @piotr-agier/google-drive-mcp auth
 ### `search` returns 0 results and Shared Drives are invisible, despite a valid token
 **Symptom:** `search` returns `Found 0 files (ordered by modifiedTime desc):` (even for My Drive), `listSharedDrives` shows none, and `authTestFileAccess` reports "File not found" — yet `authGetStatus` shows a valid token with full Drive scope, and the same account works via the Drive REST API directly.
 
-**Most common cause:** an environment variable is silently overriding your interactive OAuth `tokens.json`. Service-account mode (`GOOGLE_APPLICATION_CREDENTIALS`) and external-token mode (`GOOGLE_DRIVE_MCP_ACCESS_TOKEN`) take **priority** over `tokens.json` whenever they are present in the server's environment. If the process inherits one of these (common when `gcloud`, CI runners, or other Google tooling set `GOOGLE_APPLICATION_CREDENTIALS` globally), every call runs as that other identity — often an empty service account with no files and no Shared Drive membership — which returns empty results with no error.
+**Most common cause:** an environment variable is silently overriding your interactive OAuth `tokens.json`. Service-account mode (`GOOGLE_APPLICATION_CREDENTIALS`) and external-token mode (`GOOGLE_DRIVE_MCP_ACCESS_TOKEN` **or** `GOOGLE_DRIVE_MCP_REFRESH_TOKEN` — either one activates it) take **priority** over `tokens.json` whenever they are present in the server's environment. If the process inherits one of these (common when `gcloud`, CI runners, or other Google tooling set `GOOGLE_APPLICATION_CREDENTIALS` globally), every call runs as that other identity — often an empty service account with no files and no Shared Drive membership — which returns empty results with no error.
 
 **Diagnose:**
 ```bash
@@ -77,7 +77,7 @@ npx -y @piotr-agier/google-drive-mcp auth
 # If authMode is "service_account"/"external_token" (not "oauth"), or the reported
 # identity email is not your account, that env var is the culprit.
 ```
-Check your environment for `GOOGLE_APPLICATION_CREDENTIALS` and `GOOGLE_DRIVE_MCP_ACCESS_TOKEN` (Windows: `echo %GOOGLE_APPLICATION_CREDENTIALS%` / `$env:GOOGLE_APPLICATION_CREDENTIALS`). The server also logs a warning on startup when a present `tokens.json` is being bypassed.
+Check your environment for `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_DRIVE_MCP_ACCESS_TOKEN` and `GOOGLE_DRIVE_MCP_REFRESH_TOKEN` — a refresh token alone activates external-token mode, and it is the one most easily left behind in a shell (Windows: `echo %GOOGLE_APPLICATION_CREDENTIALS%` / `$env:GOOGLE_APPLICATION_CREDENTIALS`). The server also logs a warning on startup when a present `tokens.json` is being bypassed.
 
 **Solution:** unset the overriding variable for the MCP server's environment (or, if you intend to use a service account, grant its email address access to the files/Shared Drives you need — and set `GOOGLE_DRIVE_MCP_SUBJECT` for domain-wide delegation if you need to act as a real Workspace user).
 

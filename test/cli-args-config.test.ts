@@ -156,3 +156,56 @@ test('--token-refresh-timeout leaves --api-timeout alone', withRefreshVar(undefi
   const cfg = loadRuntimeConfig(['--token-refresh-timeout=2500']);
   assert.equal(cfg.apiTimeout, 120_000);
 }));
+
+// ---------------------------------------------------------------------------
+// maxBodyBytes
+// ---------------------------------------------------------------------------
+
+const BODY_VAR = 'GOOGLE_DRIVE_MCP_MAX_BODY_BYTES';
+
+function withBodyVar(value: string | undefined, fn: () => void) {
+  return () => {
+    const saved = process.env[BODY_VAR];
+    if (value === undefined) delete process.env[BODY_VAR];
+    else process.env[BODY_VAR] = value;
+    try {
+      fn();
+    } finally {
+      if (saved === undefined) delete process.env[BODY_VAR];
+      else process.env[BODY_VAR] = saved;
+    }
+  };
+}
+
+test('maxBodyBytes is read from the env var', withBodyVar('1048576', () => {
+  assert.equal(loadRuntimeConfig([]).maxBodyBytes, 1_048_576);
+}));
+
+test('--max-body-bytes sets maxBodyBytes', withBodyVar(undefined, () => {
+  assert.equal(loadRuntimeConfig(['--max-body-bytes=2097152']).maxBodyBytes, 2_097_152);
+}));
+
+test('--max-body-bytes overrides the env var', withBodyVar('1048576', () => {
+  assert.equal(loadRuntimeConfig(['--max-body-bytes=2097152']).maxBodyBytes, 2_097_152);
+}));
+
+test('a garbage maxBodyBytes falls back to the default', withBodyVar('plenty', () => {
+  assert.equal(loadRuntimeConfig([]).maxBodyBytes, 4 * 1024 * 1024);
+}));
+
+// 0 means "off" for retryMax and apiTimeout, but express.json({ limit: 0 })
+// rejects every POST with 413 — including `{}`. There is no "off" to express
+// here, so anything below 1 falls back to the default rather than bricking the
+// transport.
+test('maxBodyBytes of 0 falls back to the default rather than rejecting everything',
+  withBodyVar('0', () => {
+    assert.equal(loadRuntimeConfig([]).maxBodyBytes, 4 * 1024 * 1024);
+  }));
+
+test('--max-body-bytes=0 falls back to the default too', withBodyVar(undefined, () => {
+  assert.equal(loadRuntimeConfig(['--max-body-bytes=0']).maxBodyBytes, 4 * 1024 * 1024);
+}));
+
+test('--max-body-bytes leaves --api-timeout alone', withBodyVar(undefined, () => {
+  assert.equal(loadRuntimeConfig(['--max-body-bytes=2097152']).apiTimeout, 120_000);
+}));

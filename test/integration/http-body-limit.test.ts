@@ -3,6 +3,9 @@ import { describe, it, before, after } from 'node:test';
 import http, { type Server as HttpServer } from 'node:http';
 import { google } from 'googleapis';
 import { createAllMocks } from '../helpers/mock-google-apis.js';
+import type { TeamConfig } from '../../src/auth/team/config.js';
+import type { GoogleIdp } from '../../src/auth/team/googleIdp.js';
+import type { TeamRuntime } from '../../src/auth/team/runtime.js';
 
 // ---------------------------------------------------------------------------
 // Request body size limit on the Streamable HTTP transport.
@@ -196,31 +199,32 @@ describe('the raised limit is scoped to authenticated /mcp', () => {
   const sessionMaps: Map<string, any>[] = [];
   let mod: any;
   let teamBaseUrl: string;
+  let runtime: TeamRuntime;
 
   before(async () => {
     mod = await setupMocks();
     const { InMemoryTeamStore } = await import('../../src/auth/team/memoryStore.js');
     const { createTeamRuntime } = await import('../../src/auth/team/runtime.js');
-    const idp = {
+    const idp: GoogleIdp = {
       buildConsentUrl: () => 'https://fake-google.example/consent',
-      exchangeCode: async () => { throw new Error('not used'); },
+      exchangeCode: async () => {
+        throw new Error('not used: these tests never complete a sign-in');
+      },
       revokeGrant: async () => {},
     };
-    const runtime = await createTeamRuntime(
-      {
-        issuerUrl: new URL('http://127.0.0.1:3100'),
-        googleRedirectUri: 'http://127.0.0.1:3100/oauth/google/callback',
-        allowedDomains: [],
-        allowedRedirectUris: [],
-        tokenTtlMs: 3600_000,
-        store: 'memory',
-        storePath: '/unused',
-        allowedHosts: ['127.0.0.1', 'localhost', '[::1]'],
-        googleScopes: ['https://www.googleapis.com/auth/drive'],
-        advertisedScopes: ['https://www.googleapis.com/auth/drive'],
-      } as any,
-      { store: new InMemoryTeamStore(), idp: idp as any },
-    );
+    const config: TeamConfig = {
+      issuerUrl: new URL('http://127.0.0.1:3100'),
+      googleRedirectUri: 'http://127.0.0.1:3100/oauth/google/callback',
+      allowedDomains: [],
+      allowedRedirectUris: [],
+      tokenTtlMs: 3600_000,
+      store: 'memory',
+      storePath: '/unused',
+      allowedHosts: ['127.0.0.1', 'localhost', '[::1]'],
+      googleScopes: ['https://www.googleapis.com/auth/drive'],
+      advertisedScopes: ['https://www.googleapis.com/auth/drive'],
+    };
+    runtime = await createTeamRuntime(config, { store: new InMemoryTeamStore(), idp });
     mod._setTeamRuntimeForTesting(runtime);
     const created = mod.createHttpApp('127.0.0.1', { teamAuth: runtime });
     sessionMaps.push(created.sessions);
@@ -230,7 +234,8 @@ describe('the raised limit is scoped to authenticated /mcp', () => {
   });
 
   after(async () => {
-    mod._setTeamRuntimeForTesting(undefined);
+    runtime.stop();
+    mod._setTeamRuntimeForTesting(null);
     for (const sessions of sessionMaps) {
       for (const [, s] of sessions) { await s.transport.close(); await s.server.close(); }
       sessions.clear();
@@ -242,16 +247,8 @@ describe('the raised limit is scoped to authenticated /mcp', () => {
 
   // The parser runs before the bearer guard, so a limit raised for every route
   // lets an unauthenticated caller make the server read and parse megabytes.
-  it('refuses a large unauthenticated body before parsing it', async () => {
-    const res = await fetch(`${teamBaseUrl}/mcp`, {
-      method: 'POST',
-      headers: MCP_HEADERS,
-      body: paddedInitialize(3 * 1024 * 1024),
-    });
-    await res.text();
-    assert.equal(res.status, 401, 'no token must be rejected, not parsed at the raised limit');
-  });
-
+  // Only a malformed body shows it: a valid one returns 401 either way, after
+  // being read.
   it('answers a large unauthenticated malformed body without parsing it at the raised limit', async () => {
     const res = await fetch(`${teamBaseUrl}/mcp`, {
       method: 'POST',
@@ -259,14 +256,26 @@ describe('the raised limit is scoped to authenticated /mcp', () => {
       body: '{"jsonrpc":"2.0",' + 'x'.repeat(3 * 1024 * 1024),
     });
     await res.text();
-    assert.notEqual(res.status, 400, 'must not reach the JSON parser before the guard');
-    assert.equal(res.status, 401);
+    assert.equal(res.status, 401, 'must not reach the JSON parser before the guard');
   });
 
   // Our JSON-RPC body handler is scoped to /mcp. At the root it also answered
   // the OAuth routes, which speak OAuth rather than JSON-RPC and are parsed by
   // the SDK's own parsers — so it stated a limit and a remedy belonging to a
   // different route.
+  // The point of the scoping: the routes an unauthenticated caller can reach
+  // keep body-parser's default. Without this, raising the non-/mcp parser to
+  // the /mcp limit passes every other test in this file.
+  it("keeps body-parser's 100 KiB default on /register", async () => {
+    const res = await fetch(`${teamBaseUrl}/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_name: 'x'.repeat(200 * 1024) }),
+    });
+    await res.text();
+    assert.equal(res.status, 413, 'an unauthenticated route must not accept 200 KiB');
+  });
+
   it('does not answer an OAuth route with a JSON-RPC envelope', async () => {
     const res = await fetch(`${teamBaseUrl}/register`, {
       method: 'POST',
@@ -300,38 +309,73 @@ describe('the raised limit is scoped to authenticated /mcp', () => {
 // ---------------------------------------------------------------------------
 
 describe('binding to all interfaces still warns', () => {
+  // The SDK's helper warns here; replacing it dropped the branch, so a server
+  // bound to every interface started with neither DNS-rebinding protection nor
+  // any notice of its absence. t.mock.method restores console.warn when the
+  // test ends, so no try/finally is needed.
   for (const host of ['0.0.0.0', '::']) {
-    it(`warns for ${host} when no Host allowlist is configured`, async () => {
+    it(`warns for ${host} when no Host allowlist is configured`, async (t) => {
       const mod = await setupMocks();
-      const seen: string[] = [];
-      const original = console.warn;
-      console.warn = (...args: unknown[]) => { seen.push(args.join(' ')); };
-      let created: any;
-      try {
-        created = mod.createHttpApp(host);
-      } finally {
-        console.warn = original;
-      }
-      created.sessions.clear();
+      const warn = t.mock.method(console, 'warn', () => {});
+      mod.createHttpApp(host);
+      const lines = warn.mock.calls.map((c) => c.arguments.join(' '));
       assert.ok(
-        seen.some((line) => /without DNS rebinding protection/.test(line)),
-        `expected a rebinding warning for ${host}, got: ${JSON.stringify(seen)}`,
+        lines.some((line) => /without DNS rebinding protection/.test(line)),
+        `expected a rebinding warning for ${host}, got: ${JSON.stringify(lines)}`,
       );
     });
   }
 
-  it('does not warn for a loopback bind, which is protected', async () => {
+  it('does not warn for a loopback bind, which is protected', async (t) => {
     const mod = await setupMocks();
-    const seen: string[] = [];
-    const original = console.warn;
-    console.warn = (...args: unknown[]) => { seen.push(args.join(' ')); };
-    let created: any;
-    try {
-      created = mod.createHttpApp('127.0.0.1');
-    } finally {
-      console.warn = original;
-    }
-    created.sessions.clear();
-    assert.ok(!seen.some((line) => /without DNS rebinding protection/.test(line)));
+    const warn = t.mock.method(console, 'warn', () => {});
+    mod.createHttpApp('127.0.0.1');
+    const lines = warn.mock.calls.map((c) => c.arguments.join(' '));
+    assert.ok(!lines.some((line) => /without DNS rebinding protection/.test(line)));
   });
+});
+
+// ---------------------------------------------------------------------------
+// The skip must match what the route matches
+// ---------------------------------------------------------------------------
+
+describe('every path the /mcp route accepts gets the raised limit', () => {
+  const servers: HttpServer[] = [];
+  const sessionMaps: Map<string, any>[] = [];
+  let baseUrl: string;
+
+  before(async () => {
+    const mod = await setupMocks();
+    const created = mod.createHttpApp('127.0.0.1');
+    sessionMaps.push(created.sessions);
+    const started = await startServer(created.app);
+    servers.push(started.httpServer);
+    baseUrl = started.baseUrl;
+  });
+
+  after(async () => {
+    for (const sessions of sessionMaps) {
+      for (const [, s] of sessions) { await s.transport.close(); await s.server.close(); }
+      sessions.clear();
+    }
+    for (const httpServer of servers) {
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    }
+  });
+
+  // Express routing is case-insensitive and accepts one trailing slash, so all
+  // of these reach app.post('/mcp'). A client configured with a trailing slash
+  // would otherwise be held to 100 KiB on every large batchUpdate — and told to
+  // raise a setting that would not help.
+  for (const path of ['/mcp', '/mcp/', '/MCP', '/Mcp/']) {
+    it(`accepts a 400 KiB body on ${path}`, async () => {
+      const res = await fetch(`${baseUrl}${path}`, {
+        method: 'POST',
+        headers: MCP_HEADERS,
+        body: paddedInitialize(400 * 1024),
+      });
+      await res.text();
+      assert.equal(res.status, 200, `${path} reaches the /mcp route, so it gets the /mcp limit`);
+    });
+  }
 });

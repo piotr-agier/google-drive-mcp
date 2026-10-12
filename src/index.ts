@@ -1344,6 +1344,9 @@ interface CreateHttpAppOptions {
   maxBodyBytes?: number;
 }
 
+/** Every path `app.post('/mcp')` matches, for middleware that must agree with it. */
+const MCP_PATH = /^\/mcp\/?$/i;
+
 /** The hostnames the SDK's localhostHostValidation() accepts. */
 const LOCALHOST_HOSTS = ['127.0.0.1', 'localhost', '::1'];
 
@@ -1366,8 +1369,12 @@ const LOCALHOST_HOSTS = ['127.0.0.1', 'localhost', '::1'];
  */
 function buildMcpExpressApp(host: string, allowedHosts: string[] | undefined) {
   const app = express();
+  // Every path app.post('/mcp') matches: Express routing is case-insensitive
+  // and accepts one trailing slash by default, so an exact '/mcp' comparison
+  // sends /mcp/ and /MCP through the default parser and then answers that
+  // parser's 413 with this route's much larger limit.
   const defaultJson = express.json();
-  app.use((req, res, next) => (req.path === '/mcp' ? next() : defaultJson(req, res, next)));
+  app.use((req, res, next) => (MCP_PATH.test(req.path) ? next() : defaultJson(req, res, next)));
   if (allowedHosts) {
     app.use(hostHeaderValidation(allowedHosts));
   } else if (LOCALHOST_HOSTS.includes(host)) {
@@ -1376,7 +1383,6 @@ function buildMcpExpressApp(host: string, allowedHosts: string[] | undefined) {
     // The helper's third branch. Without it a server bound to all interfaces
     // starts with neither DNS-rebinding protection nor any notice of its
     // absence.
-    // eslint-disable-next-line no-console
     console.warn(
       `Warning: Server is binding to ${host} without DNS rebinding protection. ` +
         'Consider using the allowedHosts option to restrict allowed hosts, ' +
@@ -1387,32 +1393,39 @@ function buildMcpExpressApp(host: string, allowedHosts: string[] | undefined) {
 }
 
 /**
- * Express renders a body-parser failure as an HTML error page by default, so
- * a client asking for JSON-RPC gets markup it cannot parse — the reason an
- * oversized batchUpdate surfaced as an unreadable error rather than a clear
- * limit. Reports both failure modes in the protocol the caller speaks.
+ * The /mcp body parser, with its failures reported in the protocol the caller
+ * speaks. Express renders a body-parser failure as an HTML error page carrying
+ * a stack trace and absolute paths, which an MCP client cannot parse — the
+ * reason an oversized batchUpdate surfaced as an unreadable error rather than
+ * a stated limit.
+ *
+ * Mapping them here rather than in a trailing error handler keeps the quoted
+ * limit honest: only this parser's failures are answered, so the number in the
+ * message is always the one that fired. A handler mounted at '/mcp' would also
+ * catch the default parser's 413 on /mcp/x, and one at the root would catch the
+ * OAuth routes, which have their own parsers and their own limits.
  */
-function jsonRpcBodyErrors(
-  maxBodyBytes: number,
-): (err: any, req: express.Request, res: express.Response, next: express.NextFunction) => void {
-  return (err, _req, res, next) => {
-    if (!err || res.headersSent) return next(err);
-    const tooLarge = err.type === 'entity.too.large';
-    const unparseable = err.type === 'entity.parse.failed';
-    if (!tooLarge && !unparseable) return next(err);
-    res.status(tooLarge ? 413 : 400).json({
-      jsonrpc: '2.0',
-      error: {
-        // -32000 is what the SDK's transport uses for its own transport-level
-        // rejections (403/406/409); a 413 is the same kind of refusal.
-        code: tooLarge ? -32000 : -32700,
-        message: tooLarge
-          ? `Request body too large (limit ${maxBodyBytes} bytes). Split the call into smaller batches, or raise GOOGLE_DRIVE_MCP_MAX_BODY_BYTES.`
-          : 'Parse error: request body is not valid JSON',
-      },
-      id: null,
+function jsonRpcBodyParser(maxBodyBytes: number): express.RequestHandler {
+  const parse = express.json({ limit: maxBodyBytes });
+  return (req, res, next) =>
+    parse(req, res, (err?: unknown) => {
+      const type = (err as { type?: string } | undefined)?.type;
+      const tooLarge = type === 'entity.too.large';
+      const unparseable = type === 'entity.parse.failed';
+      if (!tooLarge && !unparseable) return next(err);
+      res.status(tooLarge ? 413 : 400).json({
+        jsonrpc: '2.0',
+        error: {
+          // -32000 is what the SDK's transport uses for its own transport-level
+          // rejections (403/406/409); a 413 is the same kind of refusal.
+          code: tooLarge ? -32000 : -32700,
+          message: tooLarge
+            ? `Request body too large (limit ${maxBodyBytes} bytes). Split the call into smaller batches, or raise GOOGLE_DRIVE_MCP_MAX_BODY_BYTES.`
+            : 'Parse error: request body is not valid JSON',
+        },
+        id: null,
+      });
     });
-  };
 }
 
 function createHttpApp(host: string, options?: CreateHttpAppOptions) {
@@ -1530,7 +1543,7 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
     }
   }
 
-  app.post('/mcp', ...mcpGuards, express.json({ limit: maxBodyBytes }), async (req, res) => {
+  app.post('/mcp', ...mcpGuards, jsonRpcBodyParser(maxBodyBytes), async (req, res) => {
     try {
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
@@ -1659,12 +1672,6 @@ function createHttpApp(host: string, options?: CreateHttpAppOptions) {
       }
     }
   });
-
-  // Last: Express only reaches an error handler mounted after the routes.
-  // Scoped to /mcp — at the root it also answered body-parser failures from the
-  // OAuth routes, where it would name this limit and this environment variable,
-  // neither of which applies to the SDK's own urlencoded parser there.
-  app.use('/mcp', jsonRpcBodyErrors(maxBodyBytes));
 
   return { app, sessions };
 }

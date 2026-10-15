@@ -17,6 +17,7 @@ import { getSecureTokenPath } from '../auth/utils.js';
 import { SCOPE_ALIASES, SCOPE_PRESETS, resolveOAuthScopes, splitScopes } from '../auth/scopes.js';
 import { getActiveAuthMode, describeBypassedTokens, allAuthModeOverrideEnvVars, type ActiveAuthMode } from '../auth/externalAuth.js';
 import { getEffectiveIdentity } from '../auth/identity.js';
+import { runApiProbe, type ApiProbeResult } from './apiProbe.js';
 import { withRetry, UPLOAD_TIMEOUT_MS } from '../utils/retry.js';
 
 // ---------------------------------------------------------------------------
@@ -251,6 +252,10 @@ const RestoreRevisionSchema = z.object({
   confirm: z.boolean().optional().default(false),
 });
 
+const AuthGetStatusSchema = z.object({
+  checkApis: z.boolean().optional(),
+});
+
 const AuthTestFileAccessSchema = z.object({
   fileId: z.string().optional(),
 });
@@ -356,6 +361,41 @@ export function computeAuthStatus(input: {
     : input.missingScopes.length > 0 ? 'scope_mismatch'
     : input.warningCount > 0 ? 'warning'
     : 'ok';
+}
+
+type ProbedApi = 'drive' | 'docs' | 'sheets' | 'slides' | 'calendar';
+
+const API_PROBE_LABELS: Record<ProbedApi, string> = {
+  drive: 'Google Drive',
+  docs: 'Google Docs',
+  sheets: 'Google Sheets',
+  slides: 'Google Slides',
+  calendar: 'Google Calendar',
+};
+
+/** An id no file or calendar has, so a probe reads nothing: an enabled API answers 404. */
+const API_PROBE_ID = 'mcp-api-probe-nonexistent';
+
+/**
+ * authGetStatus' `checkApis`: one read-only request per API, in parallel. A
+ * client that cannot be built is reported as unknown rather than failing the
+ * whole status call.
+ */
+async function probeApis(
+  ctx: ToolContext,
+  drive: drive_v3.Drive | undefined,
+): Promise<Record<ProbedApi, ApiProbeResult>> {
+  const auth = ctx.authClient;
+  const [driveResult, docs, sheets, slides, calendar] = await Promise.all([
+    drive
+      ? runApiProbe((signal) => drive.about.get({ fields: 'kind' }, { signal }))
+      : Promise.resolve<ApiProbeResult>({ status: 'unknown', message: 'No authenticated Drive client' }),
+    runApiProbe((signal) => ctx.google.docs({ version: 'v1', auth }).documents.get({ documentId: API_PROBE_ID, fields: 'documentId' }, { signal })),
+    runApiProbe((signal) => ctx.google.sheets({ version: 'v4', auth }).spreadsheets.get({ spreadsheetId: API_PROBE_ID, fields: 'spreadsheetId' }, { signal })),
+    runApiProbe((signal) => ctx.google.slides({ version: 'v1', auth }).presentations.get({ presentationId: API_PROBE_ID, fields: 'presentationId' }, { signal })),
+    runApiProbe((signal) => ctx.getCalendar().calendars.get({ calendarId: API_PROBE_ID, fields: 'id' }, { signal })),
+  ]);
+  return { drive: driveResult, docs, sheets, slides, calendar };
 }
 
 // ---------------------------------------------------------------------------
@@ -697,7 +737,12 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "authGetStatus",
     description: "Show authentication/token status and scope diagnostics",
-    inputSchema: { type: "object", properties: {} }
+    inputSchema: {
+      type: "object",
+      properties: {
+        checkApis: { type: "boolean", description: "Also check whether the Drive, Docs, Sheets, Slides and Calendar APIs are enabled for the OAuth client's Google Cloud project, with one read-only request to each (five extra API calls). Each is reported as enabled, disabled (with the URL to enable it) or unknown. Default false" }
+      }
+    }
   },
   {
     name: "authListScopes",
@@ -2335,6 +2380,9 @@ export async function handleTool(
     }
 
     case "authGetStatus": {
+      const validation = AuthGetStatusSchema.safeParse(args ?? {});
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const { checkApis = false } = validation.data;
       const tokenPath = getSecureTokenPath();
       const tokenFileExists = existsSync(tokenPath);
       let scopeStatus: ReturnType<typeof resolveScopeStatus>;
@@ -2375,6 +2423,7 @@ export async function handleTool(
         drive = undefined;
       }
       const identity = await getEffectiveIdentity(drive);
+      const apis = checkApis ? await probeApis(ctx, drive) : undefined;
 
       const warnings: string[] = [];
       if (authMode !== 'oauth') {
@@ -2385,6 +2434,11 @@ export async function handleTool(
         warnings.push(`Could not resolve the acting Google account via about.get: ${identity.error}`);
       } else if (!identity.emailAddress) {
         warnings.push('The acting Google account has no email — this is often an empty or misconfigured service account.');
+      }
+      for (const [api, result] of Object.entries(apis ?? {})) {
+        if (result.status !== 'disabled') continue;
+        const where = result.activationUrl ? `Enable it at ${result.activationUrl}` : `Google said: ${result.message}`;
+        warnings.push(`The ${API_PROBE_LABELS[api as ProbedApi]} API is disabled for this OAuth client's Google Cloud project. ${where}`);
       }
 
       const payload = {
@@ -2400,6 +2454,7 @@ export async function handleTool(
         requestedScopes,
         grantedScopes,
         missingScopes,
+        ...(apis ? { apis } : {}),
         warnings,
       };
 
@@ -2417,7 +2472,10 @@ export async function handleTool(
         ? `identity=UNRESOLVED (${identity.error})`
         : `identity=${identity.emailAddress || '(no email)'}`;
 
-      let text = `Auth status (${status}):\n${JSON.stringify(payload, null, 2)}\n\nSummary: mode=${authMode}, ${identityLine}, token file ${tokenFileExists ? 'found' : 'missing'}, missing scopes=${missingScopes.length}.`;
+      const apisLine = apis
+        ? `, APIs: ${Object.entries(apis).map(([api, r]) => `${api} ${r.status}`).join(', ')}`
+        : '';
+      let text = `Auth status (${status}):\n${JSON.stringify(payload, null, 2)}\n\nSummary: mode=${authMode}, ${identityLine}, token file ${tokenFileExists ? 'found' : 'missing'}, missing scopes=${missingScopes.length}${apisLine}.`;
       if (warnings.length > 0) {
         text += `\n\n⚠ ${warnings.join('\n⚠ ')}`;
       }

@@ -539,6 +539,27 @@ function withAnnotations<T extends { name: string }>(def: T): T {
   return { ...def, annotations: { readOnlyHint: true } };
 }
 
+/**
+ * With more than one account connected, a write that landed on the default
+ * instead of the intended account reads exactly like success. Ending each
+ * successful write reply with the account that took it makes that visible.
+ * Errors pass through unchanged, and so does every reply in single-account
+ * mode, where there is nothing to tell apart.
+ */
+function withActingAccount(result: ToolResult, account: AccountRecord): ToolResult {
+  if (result.isError) return result;
+  const blocks = result.content;
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const block = blocks[i];
+    if (block.type === 'text' && typeof block.text === 'string') {
+      const content = [...blocks];
+      content[i] = { ...block, text: `${block.text}\n[acting as ${account.email} (${account.alias})]` };
+      return { ...result, content };
+    }
+  }
+  return result;
+}
+
 function normalizeAccountArg(raw: unknown): string | undefined {
   // `null`/`undefined`/empty → "not provided" (resolve against the default).
   // Check null first: `typeof null === 'object'` would otherwise fall into the
@@ -857,6 +878,7 @@ function createMcpServer(config: RuntimeConfig = runtimeConfig): Server {
     try {
       let ctx: ToolContext;
       let toolArgs: Record<string, unknown>;
+      let actingAccount: AccountRecord | undefined;
 
       if (ADMIN_TOOLS.has(toolName)) {
         // Admin tools operate on system-wide state; they run with the default
@@ -885,11 +907,14 @@ function createMcpServer(config: RuntimeConfig = runtimeConfig): Server {
         const account = targeting.accounts[0];
         ctx = await buildToolContext(sessionId, account);
         toolArgs = stripAccountArg(rawArgs);
+        if (meta.opKind === 'write' && sys.store.list().length > 1) {
+          actingAccount = account;
+        }
       }
 
       for (const mod of domainModules) {
         const result = await mod.handleTool(toolName, toolArgs, ctx);
-        if (result !== null) return result;
+        if (result !== null) return actingAccount ? withActingAccount(result, actingAccount) : result;
       }
       return errorResponse('Tool not found');
     } catch (error) {

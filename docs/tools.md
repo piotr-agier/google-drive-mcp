@@ -106,6 +106,7 @@ This server exposes 130 MCP tools across Google Drive, Docs, Sheets, Slides, and
 
 #### Auth Diagnostics (v1.7.0)
 - **authGetStatus** - Show token/scopes/auth health diagnostics (machine + human readable). Reports the **active auth mode** (`oauth`/`service_account`/`external_token`) and the **effective Google identity** the live Drive client is actually acting as (via Drive `about.get`), and warns when an environment variable is causing your `tokens.json` to be ignored
+  - `checkApis`: Also check that the Drive, Docs, Sheets, Slides and Calendar APIs are enabled for the OAuth client's Google Cloud project, with one read-only request to each (five extra API calls). Each is reported as `enabled`, `disabled` (with the URL to enable it, plus a warning) or `unknown` with Google's message. A 400 or 404 counts as enabled, since the API answered (optional, default `false`)
 - **authListScopes** - Show configured/requested scopes, granted scopes, missing scopes, and presets
 - **authTestFileAccess** - Test Drive access (optionally against a specific `fileId`)
 

@@ -279,7 +279,10 @@ export function createCalendarMock() {
     }),
     delete: stub(tracker, 'events.delete', {}),
   };
-  return { service: { calendarList, events }, tracker };
+  const calendars = {
+    get: stub(tracker, 'calendars.get', { id: 'primary', summary: 'My Calendar' }),
+  };
+  return { service: { calendarList, calendars, events }, tracker };
 }
 
 // ---------------------------------------------------------------------------

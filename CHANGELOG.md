@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **auth:** `authGetStatus` takes `checkApis`. When true it sends one read-only request to each of the Drive, Docs, Sheets, Slides and Calendar APIs and reports each as `enabled`, `disabled` or `unknown`, with a warning and the activation URL for each disabled one. A disabled API is recognized by `SERVICE_DISABLED` in the `ErrorInfo`, `accessNotConfigured` in `errors[]`, or the "has not been used in project … before or it is disabled" message, checked before anything is read from the status code, since a missing scope is also a 403. A 400 or 404 means the method answered, so the API is enabled; any other failure, a missing scope or a network error included, is `unknown` and carries Google's message. Each probe gives up after 10 seconds. Off by default, so a plain `authGetStatus` makes the same calls as before ([#214](https://github.com/piotr-agier/google-drive-mcp/issues/214))
+
 ## [2.13.0](https://github.com/piotr-agier/google-drive-mcp/compare/v2.12.0...v2.13.0) (2026-10-15)
 
 ### Added

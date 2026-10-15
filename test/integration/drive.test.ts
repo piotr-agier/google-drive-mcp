@@ -7,6 +7,7 @@ import { Readable } from 'node:stream';
 import { PDFDocument } from 'pdf-lib';
 import { setupTestServer, callTool, type TestContext } from '../helpers/setup-server.js';
 import { clearAuthModeOverrides } from '../helpers/env.js';
+import { apiErrorFixture, gaxiosErrorFor } from '../helpers/gaxios-error.js';
 
 describe('Drive tools', () => {
   let ctx: TestContext;
@@ -962,6 +963,63 @@ describe('Drive tools', () => {
       } finally {
         ctx.mocks.drive.service.about.get._resetImpl();
         saved.restore();
+      }
+    });
+
+    it('authGetStatus makes no API probe calls unless checkApis is set', async () => {
+      ctx.mocks.docs.tracker.reset();
+      ctx.mocks.sheets.tracker.reset();
+      ctx.mocks.slides.tracker.reset();
+      ctx.mocks.calendar.tracker.reset();
+      const res = await callTool(ctx.client, 'authGetStatus', {});
+      assert.equal(res.isError, false);
+      assert.equal(ctx.mocks.drive.tracker.getCalls('about.get').length, 1, 'only the identity lookup');
+      assert.equal(ctx.mocks.docs.tracker.calls.length, 0);
+      assert.equal(ctx.mocks.sheets.tracker.calls.length, 0);
+      assert.equal(ctx.mocks.slides.tracker.calls.length, 0);
+      assert.equal(ctx.mocks.calendar.tracker.calls.length, 0);
+      assert.ok(!res.content[0].text!.includes('"apis"'), 'no apis section in the payload');
+    });
+
+    it('authGetStatus with checkApis reports a disabled API, its activation URL and a warning', async () => {
+      ctx.mocks.docs.tracker.reset();
+      ctx.mocks.sheets.tracker.reset();
+      ctx.mocks.slides.tracker.reset();
+      ctx.mocks.calendar.tracker.reset();
+      const disabled = await gaxiosErrorFor(403, apiErrorFixture('service-disabled-legacy.json'));
+      const notFound = await gaxiosErrorFor(404, apiErrorFixture('not-found.json'));
+      ctx.mocks.sheets.service.spreadsheets.get._setImpl(async () => { throw disabled; });
+      ctx.mocks.docs.service.documents.get._setImpl(async () => { throw notFound; });
+      ctx.mocks.drive.service.about.get._setImpl(async () => ({
+        data: { user: { displayName: 'Ada L', emailAddress: 'ada@example.com' } },
+      }));
+      try {
+        const res = await callTool(ctx.client, 'authGetStatus', { checkApis: true });
+        assert.equal(res.isError, false);
+        const text = res.content[0].text!;
+        const payload = JSON.parse(text.slice(text.indexOf('{'), text.indexOf('\n\nSummary:')));
+        assert.deepEqual(Object.keys(payload.apis).sort(), ['calendar', 'docs', 'drive', 'sheets', 'slides']);
+        assert.equal(payload.apis.sheets.status, 'disabled');
+        const url = 'https://console.developers.google.com/apis/api/sheets.googleapis.com/overview?project=565782413738';
+        assert.equal(payload.apis.sheets.activationUrl, url);
+        for (const api of ['drive', 'docs', 'slides', 'calendar']) {
+          assert.equal(payload.apis[api].status, 'enabled', `${api} answered`);
+        }
+        assert.ok(
+          payload.warnings.some((w: string) => w.includes('Sheets') && w.includes(url)),
+          'a warning names the disabled API and where to enable it',
+        );
+        assert.match(text, /APIs: drive enabled, docs enabled, sheets disabled, slides enabled, calendar enabled\./);
+        // One read per API: about.get is the identity lookup plus the Drive probe.
+        assert.equal(ctx.mocks.drive.tracker.getCalls('about.get').length, 2);
+        assert.equal(ctx.mocks.docs.tracker.getCalls('documents.get').length, 1);
+        assert.equal(ctx.mocks.sheets.tracker.getCalls('spreadsheets.get').length, 1);
+        assert.equal(ctx.mocks.slides.tracker.getCalls('presentations.get').length, 1);
+        assert.equal(ctx.mocks.calendar.tracker.getCalls('calendars.get').length, 1);
+      } finally {
+        ctx.mocks.sheets.service.spreadsheets.get._resetImpl();
+        ctx.mocks.docs.service.documents.get._resetImpl();
+        ctx.mocks.drive.service.about.get._resetImpl();
       }
     });
 

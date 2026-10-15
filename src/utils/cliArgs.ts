@@ -88,5 +88,12 @@ export function loadRuntimeConfig(argv: string[] = process.argv.slice(2)): Runti
     }
   }
 
+  // 0 means "off" for retryMax and apiTimeout, but there is no "off" to express
+  // here: express.json({ limit: 0 }) answers every POST with 413, including an
+  // empty object. Anything below one byte falls back to the default rather than
+  // bricking the HTTP transport. Placed after the CLI loop so a flag is covered
+  // as well as the environment variable.
+  if (cfg.maxBodyBytes < 1) cfg.maxBodyBytes = DEFAULTS.maxBodyBytes;
+
   return cfg;
 }

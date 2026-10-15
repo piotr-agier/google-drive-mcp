@@ -259,10 +259,6 @@ describe('the raised limit is scoped to authenticated /mcp', () => {
     assert.equal(res.status, 401, 'must not reach the JSON parser before the guard');
   });
 
-  // Our JSON-RPC body handler is scoped to /mcp. At the root it also answered
-  // the OAuth routes, which speak OAuth rather than JSON-RPC and are parsed by
-  // the SDK's own parsers — so it stated a limit and a remedy belonging to a
-  // different route.
   // The point of the scoping: the routes an unauthenticated caller can reach
   // keep body-parser's default. Without this, raising the non-/mcp parser to
   // the /mcp limit passes every other test in this file.
@@ -276,6 +272,10 @@ describe('the raised limit is scoped to authenticated /mcp', () => {
     assert.equal(res.status, 413, 'an unauthenticated route must not accept 200 KiB');
   });
 
+  // JSON-RPC body errors are mapped inside the /mcp route's own parser. A
+  // handler mounted at the root also answered the OAuth routes, which speak
+  // OAuth rather than JSON-RPC and are parsed by the SDK's own parsers — so it
+  // stated a limit and a remedy belonging to a different route.
   it('does not answer an OAuth route with a JSON-RPC envelope', async () => {
     const res = await fetch(`${teamBaseUrl}/register`, {
       method: 'POST',

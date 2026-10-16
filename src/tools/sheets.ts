@@ -1038,58 +1038,93 @@ export async function handleTool(
           `To update it, use updateGoogleSheet with spreadsheetId: ${existingFileId}`
         );
       }
-      const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+      // Create in the resolved destination: editor creation would first create
+      // in personal Drive, which is not available to every account.
+      let spreadsheetId: string | undefined;
+      try {
+        const file = await withRetry(
+          (signal) => ctx.getDrive().files.create({
+            requestBody: {
+              name: a.name,
+              mimeType: 'application/vnd.google-apps.spreadsheet',
+              parents: [parentFolderId]
+            },
+            fields: 'id',
+            supportsAllDrives: true
+          }, { signal }),
+          { ...ctx.runtimeConfig, retryMax: 0 },
+          'drive.files.create(googleSheet)',
+          ctx.log
+        );
+        spreadsheetId = file.data.id || undefined;
+      } catch {
+        return errorResponse('Google Sheet creation failed; the creation outcome may be uncertain. Check the destination before retrying.');
+      }
+      if (!spreadsheetId) {
+        return errorResponse('Google Sheet creation returned no file ID. Check the destination before retrying; initialization was not attempted.');
+      }
 
-      // Create spreadsheet with initial sheet
-      const spreadsheet = await withRetry(
-        (signal) => sheets.spreadsheets.create({
-          requestBody: {
-            properties: { title: a.name },
-            sheets: [{
+      let stage = 'spreadsheet metadata';
+      try {
+        const sheets = ctx.google.sheets({ version: 'v4', auth: ctx.authClient });
+        const spreadsheet = await withRetry(
+          (signal) => sheets.spreadsheets.get({
+            spreadsheetId,
+            fields: 'sheets(properties(sheetId,title,gridProperties))'
+          }, { signal }),
+          ctx.runtimeConfig,
+          'sheets.spreadsheets.get(createdSheet)',
+          (message) => ctx.log(message)
+        );
+        // Drive chooses the tab ID and may localize its title. Use its actual
+        // properties, then retain the tool's Sheet1 and minimum grid contract.
+        const tab = spreadsheet.data.sheets?.[0]?.properties;
+        if (tab?.sheetId == null) {
+          return errorResponse(`Google Sheet initialization failed during ${stage}: no sheet ID returned.\nID: ${spreadsheetId}\nThe file exists but initialization is incomplete. Inspect it before retrying.`);
+        }
+        const columnCount = a.data.reduce((width, row) => Math.max(width, row.length), 26);
+        stage = 'sheet initialization';
+        await withRetry(
+          (signal) => sheets.spreadsheets.batchUpdate({
+            spreadsheetId,
+            requestBody: { requests: [{ updateSheetProperties: {
               properties: {
-                sheetId: 0,
+                sheetId: tab.sheetId,
                 title: 'Sheet1',
                 gridProperties: {
-                  rowCount: Math.max(a.data.length, 1000),
-                  columnCount: Math.max(a.data[0]?.length || 0, 26)
+                  rowCount: Math.max(a.data.length, 1000, tab.gridProperties?.rowCount || 0),
+                  columnCount: Math.max(columnCount, tab.gridProperties?.columnCount || 0)
                 }
-              }
-            }]
-          }
-        }, { signal }),
-        { ...ctx.runtimeConfig, retryMax: 0 },
-        'sheets.spreadsheets.create',
-        ctx.log
-      );
+              },
+              fields: 'title,gridProperties.rowCount,gridProperties.columnCount'
+            } }] }
+          }, { signal }),
+          { ...ctx.runtimeConfig, retryMax: 0 },
+          'sheets.spreadsheets.batchUpdate(initializeSheet)',
+          ctx.log
+        );
 
-      await withRetry(
-        (signal) => ctx.getDrive().files.update({
-          fileId: spreadsheet.data.spreadsheetId || '',
-          addParents: parentFolderId,
-          removeParents: 'root',
-          fields: 'id, name, webViewLink',
-          supportsAllDrives: true
-        }, { signal }),
-        { ...ctx.runtimeConfig, retryMax: 0 },
-        'drive.files.update(reparent)',
-        ctx.log
-      );
-
-      // Now update with data
-      await withRetry(
-        (signal) => sheets.spreadsheets.values.update({
-          spreadsheetId: spreadsheet.data.spreadsheetId!,
-          range: 'Sheet1!A1',
-          valueInputOption: a.valueInputOption || 'RAW',
-          requestBody: { values: a.data }
-        }, { signal }),
-        { ...ctx.runtimeConfig, retryMax: 0 },
-        'sheets.spreadsheets.values.update',
-        ctx.log
-      );
+        if (a.data.some(row => row.length > 0)) {
+          stage = 'data insertion';
+          await withRetry(
+            (signal) => sheets.spreadsheets.values.update({
+              spreadsheetId,
+              range: 'Sheet1!A1',
+              valueInputOption: a.valueInputOption || 'RAW',
+              requestBody: { values: a.data }
+            }, { signal }),
+            { ...ctx.runtimeConfig, retryMax: 0 },
+            'sheets.spreadsheets.values.update',
+            ctx.log
+          );
+        }
+      } catch {
+        // Do not log SDK errors: they may carry request content or credentials.
+        return errorResponse(`Google Sheet initialization failed during ${stage}.\nID: ${spreadsheetId}\nThe file exists but initialization is incomplete. Inspect it before retrying.`);
+      }
 
       return {
-        content: [{ type: "text", text: `Created Google Sheet: ${a.name}\nID: ${spreadsheet.data.spreadsheetId}` }],
+        content: [{ type: "text", text: `Created Google Sheet: ${a.name}\nID: ${spreadsheetId}` }],
         isError: false
       };
     }

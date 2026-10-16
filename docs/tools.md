@@ -405,11 +405,12 @@ different identifiers; neither is accepted as a lock.
 ### Google Sheets
 
 #### Create and Update
-- **createGoogleSheet** - Create a Google Sheet
+- **createGoogleSheet** - Create a Google Sheet directly in the resolved Drive destination (including shared drives). Initializes `Sheet1` with at least 1000 rows and 26 columns, growing to fit all supplied data. Empty data creates a blank sheet.
   - `name`: Spreadsheet name
   - `data`: 2D array of cell values
   - `parentFolderId`: Parent folder ID (optional)
   - `valueInputOption`: `RAW` (default, safe) or `USER_ENTERED` (evaluates formulas) (optional)
+  - Creation and initialization mutations are attempted once. If initialization fails after creation, the error reports the file ID and failed stage; the partial file remains for inspection and recovery. If creation fails or returns no ID, check the destination before retrying because a file may already exist.
 
 - **updateGoogleSheet** - Update a Google Sheet
   - `spreadsheetId`: Spreadsheet ID
@@ -604,10 +605,11 @@ different identifiers; neither is accepted as a lock.
 ### Google Slides
 
 #### Create and Update
-- **createGoogleSlides** - Create a presentation
+- **createGoogleSlides** - Create a presentation directly in the resolved Drive destination (including shared drives). Replaces any initial starter slides with the requested `TITLE_AND_BODY` slides.
   - `name`: Presentation name
   - `slides`: Array of slides with title and content
   - `parentFolderId`: Parent folder ID (optional)
+  - Creation and initialization mutations are attempted once. If initialization fails after creation, the error reports the file ID and failed stage; the partial presentation remains for inspection and recovery. If creation fails or returns no ID, check the destination before retrying because a file may already exist.
 
 - **updateGoogleSlides** - Update an existing presentation
   - `presentationId`: Presentation ID

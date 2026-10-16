@@ -27,9 +27,6 @@ describe('Sheets tools', () => {
   describe('createGoogleSheet', () => {
     it('happy path', async () => {
       ctx.mocks.drive.service.files.list._setImpl(async () => ({ data: { files: [] } }));
-      ctx.mocks.sheets.service.spreadsheets.create._setImpl(async () => ({
-        data: { spreadsheetId: 'sheet-new' },
-      }));
       const res = await callTool(ctx.client, 'createGoogleSheet', {
         name: 'My Sheet', data: [['A', 'B'], ['1', '2']],
       });

@@ -22,9 +22,6 @@ describe('Slides tools', () => {
   describe('createGoogleSlides', () => {
     it('happy path', async () => {
       ctx.mocks.drive.service.files.list._setImpl(async () => ({ data: { files: [] } }));
-      ctx.mocks.slides.service.presentations.create._setImpl(async () => ({
-        data: { presentationId: 'pres-new' },
-      }));
       const res = await callTool(ctx.client, 'createGoogleSlides', {
         name: 'My Presentation',
         slides: [{ title: 'Slide 1', content: 'Content 1' }],

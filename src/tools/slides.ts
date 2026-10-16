@@ -798,87 +798,131 @@ export async function handleTool(
         );
       }
 
-      const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
-      const presentation = await withRetry(
-        (signal) => slidesService.presentations.create({
-          requestBody: { title: a.name },
-        }, { signal }),
-        { ...ctx.runtimeConfig, retryMax: 0 },
-        'slides.presentations.create',
-        ctx.log
-      );
-
-      await withRetry(
-        (signal) => ctx.getDrive().files.update({
-          fileId: presentation.data.presentationId!,
-          addParents: parentFolderId,
-          removeParents: 'root',
-          supportsAllDrives: true
-        }, { signal }),
-        { ...ctx.runtimeConfig, retryMax: 0 },
-        'drive.files.update(reparent)',
-        ctx.log
-      );
-
-      for (const slide of a.slides) {
-        const slideObjectId = `slide_${uuidv4().substring(0, 8)}`;
-        await withRetry(
-          (signal) => slidesService.presentations.batchUpdate({
-            presentationId: presentation.data.presentationId!,
+      let presentationId: string | undefined;
+      try {
+        const file = await withRetry(
+          (signal) => ctx.getDrive().files.create({
             requestBody: {
-              requests: [{
-                createSlide: {
-                  objectId: slideObjectId,
-                  slideLayoutReference: { predefinedLayout: 'TITLE_AND_BODY' },
-                }
-              }]
+              name: a.name,
+              mimeType: 'application/vnd.google-apps.presentation',
+              parents: [parentFolderId]
             },
+            fields: 'id',
+            supportsAllDrives: true
           }, { signal }),
           { ...ctx.runtimeConfig, retryMax: 0 },
-          'slides.presentations.batchUpdate(createSlide)',
+          'drive.files.create(googleSlides)',
           ctx.log
         );
+        presentationId = file.data.id || undefined;
+      } catch {
+        return errorResponse('Google Slides creation failed; the creation outcome may be uncertain. Check the destination before retrying.');
+      }
+      if (!presentationId) {
+        return errorResponse('Google Slides creation returned no file ID. Check the destination before retrying; initialization was not attempted.');
+      }
 
-        const slidePage = await withRetry(
-          (signal) => slidesService.presentations.pages.get({
-            presentationId: presentation.data.presentationId!,
-            pageObjectId: slideObjectId,
+      let stage = 'presentation metadata';
+      try {
+        const slidesService = ctx.google.slides({ version: 'v1', auth: ctx.authClient });
+        const presentation = await withRetry(
+          (signal) => slidesService.presentations.get({
+            presentationId,
+            fields: 'slides(objectId)'
           }, { signal }),
           ctx.runtimeConfig,
-          'slides.presentations.pages.get',
-          ctx.log
+          'slides.presentations.get(createdPresentation)',
+          (message) => ctx.log(message)
         );
+        // Drive-created presentations can contain a starter slide. Remove only
+        // the slides returned for this newly created file, using their real IDs.
+        const initialSlides = presentation.data.slides || [];
+        if (initialSlides.some(slide => !slide.objectId)) {
+          return errorResponse(`Google Slides initialization failed during ${stage}: no slide ID returned.\nID: ${presentationId}\nThe file exists but initialization is incomplete. Inspect it before retrying.`);
+        }
+        if (initialSlides.length > 0) {
+          stage = 'starter slide removal';
+          await withRetry(
+            (signal) => slidesService.presentations.batchUpdate({
+              presentationId,
+              requestBody: { requests: initialSlides.map(slide => ({ deleteObject: { objectId: slide.objectId } })) }
+            }, { signal }),
+            { ...ctx.runtimeConfig, retryMax: 0 },
+            'slides.presentations.batchUpdate(removeStarterSlides)',
+            ctx.log
+          );
+        }
 
-        let titlePlaceholderId = '';
-        let bodyPlaceholderId = '';
-        slidePage.data.pageElements?.forEach((el) => {
-          if (el.shape?.placeholder?.type === 'TITLE') {
-            titlePlaceholderId = el.objectId!;
-          } else if (el.shape?.placeholder?.type === 'BODY') {
-            bodyPlaceholderId = el.objectId!;
+        for (const slide of a.slides) {
+          const slideObjectId = `slide_${uuidv4().substring(0, 8)}`;
+          stage = 'slide creation';
+          await withRetry(
+            (signal) => slidesService.presentations.batchUpdate({
+              presentationId,
+              requestBody: {
+                requests: [{
+                  createSlide: {
+                    objectId: slideObjectId,
+                    slideLayoutReference: { predefinedLayout: 'TITLE_AND_BODY' },
+                  }
+                }]
+              },
+            }, { signal }),
+            { ...ctx.runtimeConfig, retryMax: 0 },
+            'slides.presentations.batchUpdate(createSlide)',
+            ctx.log
+          );
+
+          stage = 'placeholder lookup';
+          const slidePage = await withRetry(
+            (signal) => slidesService.presentations.pages.get({
+              presentationId,
+              pageObjectId: slideObjectId,
+            }, { signal }),
+            ctx.runtimeConfig,
+            'slides.presentations.pages.get',
+            (message) => ctx.log(message)
+          );
+
+          let titlePlaceholderId = '';
+          let bodyPlaceholderId = '';
+          slidePage.data.pageElements?.forEach((el) => {
+            if (el.shape?.placeholder?.type === 'TITLE') {
+              titlePlaceholderId = el.objectId!;
+            } else if (el.shape?.placeholder?.type === 'BODY') {
+              bodyPlaceholderId = el.objectId!;
+            }
+          });
+
+          if (!titlePlaceholderId || !bodyPlaceholderId) {
+            return errorResponse(`Google Slides initialization failed during ${stage}: title or body placeholder missing.\nID: ${presentationId}\nThe file exists but initialization is incomplete. Inspect it before retrying.`);
           }
-        });
 
-        await withRetry(
-          (signal) => slidesService.presentations.batchUpdate({
-            presentationId: presentation.data.presentationId!,
-            requestBody: {
-              requests: [
-                { insertText: { objectId: titlePlaceholderId, text: slide.title, insertionIndex: 0 } },
-                { insertText: { objectId: bodyPlaceholderId, text: slide.content, insertionIndex: 0 } }
-              ]
-            },
-          }, { signal }),
-          { ...ctx.runtimeConfig, retryMax: 0 },
-          'slides.presentations.batchUpdate(insertText)',
-          ctx.log
-        );
+          stage = 'text insertion';
+          await withRetry(
+            (signal) => slidesService.presentations.batchUpdate({
+              presentationId,
+              requestBody: {
+                requests: [
+                  { insertText: { objectId: titlePlaceholderId, text: slide.title, insertionIndex: 0 } },
+                  { insertText: { objectId: bodyPlaceholderId, text: slide.content, insertionIndex: 0 } }
+                ]
+              },
+            }, { signal }),
+            { ...ctx.runtimeConfig, retryMax: 0 },
+            'slides.presentations.batchUpdate(insertText)',
+            ctx.log
+          );
+        }
+      } catch {
+        // Keep a safe recovery receipt without exposing the SDK error payload.
+        return errorResponse(`Google Slides initialization failed during ${stage}.\nID: ${presentationId}\nThe file exists but initialization is incomplete. Inspect it before retrying.`);
       }
 
       return {
         content: [{
           type: 'text',
-          text: `Created Google Slides presentation: ${a.name}\nID: ${presentation.data.presentationId}\nLink: https://docs.google.com/presentation/d/${presentation.data.presentationId}`,
+          text: `Created Google Slides presentation: ${a.name}\nID: ${presentationId}\nLink: https://docs.google.com/presentation/d/${presentationId}`,
         }],
         isError: false,
       };

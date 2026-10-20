@@ -22,16 +22,22 @@ Use stdio for local desktop clients. Use Streamable HTTP for hosted single-ident
 
 ### Building the Docker Image
 
-1. **Build the project** (required before Docker build):
-   ```bash
-   npm install
-   npm run build
-   ```
+The Dockerfile builds the TypeScript application inside the image, so no local
+Node.js build is required:
 
-2. **Build the Docker image**:
-   ```bash
-   docker build -t google-drive-mcp .
-   ```
+```bash
+docker build -t google-drive-mcp .
+```
+
+Images are also published for `linux/amd64` and `linux/arm64` to GitHub
+Container Registry when a commit reaches `master` or a `v*` tag is created:
+
+```text
+ghcr.io/piotr-agier/google-drive-mcp:latest
+```
+
+Release tags additionally publish full-version and major/minor tags. Pull
+requests build the image without publishing it.
 
 ### Running the Docker Container
 
@@ -101,6 +107,26 @@ Creates and removes a new container on every client restart:
 - Uses `--rm` to automatically remove the container after exit
 - No port mapping needed (MCP uses stdio, not HTTP)
 - Environment variables are set in the Dockerfile
+
+### Dokploy
+
+Create an application from the GHCR image and expose container port `3100`.
+Configure at least:
+
+```text
+MCP_TRANSPORT=http
+MCP_HTTP_HOST=0.0.0.0
+MCP_HTTP_PORT=3100
+```
+
+For team mode, also configure `MCP_TEAM_MODE=true`,
+`MCP_TEAM_ISSUER_URL=https://<your-domain>`, `MCP_TRUST_PROXY=1`, and the
+Google OAuth client credentials described below. Mount persistent storage at
+`/config` to preserve the team store. For a single-identity deployment, mount
+the OAuth credentials and token files there instead.
+
+If the GHCR package is private, add GitHub registry credentials in Dokploy or
+change the package visibility to public in GitHub after its first publication.
 
 ## Streamable HTTP Transport
 

@@ -1,31 +1,35 @@
-# Use Node.js LTS as base image
-FROM node:20-slim
+FROM node:22-slim AS build
 
-# Set working directory
 WORKDIR /app
 
-# Copy package files
 COPY package*.json ./
+RUN npm ci --ignore-scripts
 
-# Install production dependencies only, skipping lifecycle scripts
-RUN npm ci --only=production --ignore-scripts
+COPY tsconfig.json ./
+COPY scripts ./scripts
+COPY src ./src
 
-# Copy built distribution files
-COPY dist ./dist
+RUN npm run build
 
-# Create directory for config files
-RUN mkdir -p /config
+FROM node:22-slim AS runtime
 
-# Set environment variables
-ENV NODE_ENV=production
-ENV GOOGLE_DRIVE_OAUTH_CREDENTIALS=/config/gcp-oauth.keys.json
-ENV GOOGLE_DRIVE_MCP_TOKEN_PATH=/config/tokens.json
+WORKDIR /app
 
-# Make the main script executable
-RUN chmod +x dist/index.js
+COPY package*.json ./
+RUN npm ci --omit=dev --ignore-scripts \
+    && npm cache clean --force
 
-# Run as non-root user
+COPY --from=build --chown=node:node /app/dist ./dist
+
+RUN mkdir -p /config \
+    && chown node:node /config
+
+ENV NODE_ENV=production \
+    GOOGLE_DRIVE_OAUTH_CREDENTIALS=/config/gcp-oauth.keys.json \
+    GOOGLE_DRIVE_MCP_TOKEN_PATH=/config/tokens.json
+
 USER node
 
-# Start the server
+EXPOSE 3100
+
 ENTRYPOINT ["node", "dist/index.js"]

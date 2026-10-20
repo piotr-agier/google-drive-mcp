@@ -152,6 +152,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
   setRowHeight: write(SHEETS_WRITE_SCOPES),
   autoResizeColumns: write(SHEETS_WRITE_SCOPES),
   autoResizeRows: write(SHEETS_WRITE_SCOPES),
+  insertSheetDimension: write(SHEETS_WRITE_SCOPES),
   hideSheetDimension: write(SHEETS_WRITE_SCOPES),
   showSheetDimension: write(SHEETS_WRITE_SCOPES),
   addDimensionGroup: write(SHEETS_WRITE_SCOPES),

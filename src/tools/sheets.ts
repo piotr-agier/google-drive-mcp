@@ -102,6 +102,19 @@ const startBeforeEnd = {
 const DimensionRangeSchema = z.object(dimensionRangeFields)
   .refine(startBeforeEnd.check, { message: startBeforeEnd.message });
 
+/**
+ * insertSheetDimension: new empty rows/columns at [startIndex, endIndex) — what is there now moves down/right.
+ * `inheritFromBefore` takes the formatting of the row/column before the insertion point (after it when false);
+ * it cannot be true at index 0, where there is nothing before.
+ */
+const InsertSheetDimensionSchema = z.object({
+  ...dimensionRangeFields,
+  inheritFromBefore: z.boolean().optional()
+}).refine(startBeforeEnd.check, { message: startBeforeEnd.message })
+  .refine((a) => !(a.inheritFromBefore && a.startIndex === 0), {
+    message: "inheritFromBefore cannot be true when inserting at index 0 (there is nothing before it)"
+  });
+
 const UpdateDimensionGroupSchema = z.object({
   ...dimensionRangeFields,
   depth: z.number().int().min(1, "depth must be at least 1").optional().default(1),
@@ -924,6 +937,22 @@ export const toolDefinitions: ToolDefinition[] = [
         dimension: { type: "string", description: "Which dimension to hide", enum: ["COLUMNS", "ROWS"] },
         startIndex: { type: "number", description: "0-based start index (inclusive)" },
         endIndex: { type: "number", description: "0-based end index (exclusive); must be greater than startIndex" }
+      },
+      required: ["spreadsheetId", "sheetId", "dimension", "startIndex", "endIndex"]
+    }
+  },
+  {
+    name: "insertSheetDimension",
+    description: "Insert empty rows or columns at a position in a sheet (one spreadsheets.batchUpdate); what is there now moves down (rows) or right (columns), and formulas referring to it follow. Indices are 0-based and the interval is half-open [startIndex, endIndex): to insert 3 rows before row 5 (0-based; the 6th row), pass startIndex: 5, endIndex: 8. To add rows at the end instead, appendSpreadsheetRows is simpler. Fill the new cells afterwards with updateGoogleSheet / batchUpdateGoogleSheetValues.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "Spreadsheet ID" },
+        sheetId: { type: "number", description: "Sheet ID (from getSpreadsheetInfo / listSheets). The default first sheet is usually 0." },
+        dimension: { type: "string", description: "Insert rows or columns", enum: ["COLUMNS", "ROWS"] },
+        startIndex: { type: "number", description: "0-based index where the first new row/column goes (inclusive)" },
+        endIndex: { type: "number", description: "0-based end index (exclusive); endIndex - startIndex rows/columns are inserted" },
+        inheritFromBefore: { type: "boolean", description: "Take formatting from the row/column before the insertion point (default: true when startIndex > 0, else from the one after)" }
       },
       required: ["spreadsheetId", "sheetId", "dimension", "startIndex", "endIndex"]
     }
@@ -2440,6 +2469,25 @@ export async function handleTool(
       });
 
       return { content: [{ type: 'text', text: `Auto-resized rows [${a.startRow}, ${a.endRow}) on sheet ${a.sheetId}.` }], isError: false };
+    }
+
+    case "insertSheetDimension": {
+      const validation = InsertSheetDimensionSchema.safeParse(args);
+      if (!validation.success) return errorResponse(validation.error.errors[0].message);
+      const a = validation.data;
+      // Like the Sheets UI: new rows/columns look like their neighbours above / to the left, when there are any.
+      const inheritFromBefore = a.inheritFromBefore ?? a.startIndex > 0;
+
+      await batchUpdateOne(ctx, a.spreadsheetId, {
+        insertDimension: {
+          range: dimensionRange(a.sheetId, a.dimension, a.startIndex, a.endIndex),
+          inheritFromBefore,
+        },
+      });
+
+      const n = a.endIndex - a.startIndex;
+      const what = a.dimension === 'ROWS' ? (n === 1 ? 'row' : 'rows') : (n === 1 ? 'column' : 'columns');
+      return { content: [{ type: 'text', text: `Inserted ${n} ${what} at [${a.startIndex}, ${a.endIndex}) on sheet ${a.sheetId} (formatting from the ${inheritFromBefore ? 'one before' : 'one after'}).` }], isError: false };
     }
 
     case "hideSheetDimension":

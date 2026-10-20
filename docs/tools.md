@@ -1,6 +1,6 @@
 # Tool reference
 
-This server exposes 130 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
+This server exposes 131 MCP tools across Google Drive, Docs, Sheets, Slides, and Calendar. Tool availability can depend on the granted OAuth scopes. Unless noted otherwise, every tool also accepts the optional top-level `account` parameter described in [Authentication](authentication.md#per-tool-account-selection).
 
 ## Available Tools
 
@@ -520,6 +520,12 @@ different identifiers; neither is accepted as a lock.
 - **autoResizeRows** - Resize rows to fit their contents
   - `spreadsheetId`, `sheetId`: Spreadsheet and sheet IDs
   - `startRow`, `endRow`: 0-based half-open row range
+
+- **insertSheetDimension** - Insert empty rows or columns at a position (existing ones move down / right)
+  - `spreadsheetId`, `sheetId`: Spreadsheet and sheet IDs
+  - `dimension`: `COLUMNS` or `ROWS`
+  - `startIndex`, `endIndex`: 0-based half-open range of the new rows/columns
+  - `inheritFromBefore` (optional): Take formatting from the row/column before (default: true unless inserting at 0)
 
 - **hideSheetDimension** - Hide rows or columns
   - `spreadsheetId`, `sheetId`: Spreadsheet and sheet IDs

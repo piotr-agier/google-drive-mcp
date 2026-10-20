@@ -551,6 +551,39 @@ describe('Sheets tools', () => {
       assert.equal(req.updateDimensionProperties.fields, 'hiddenByUser');
     });
 
+    it('insertSheetDimension inserts rows, inheriting from the row before', async () => {
+      const res = await callTool(ctx.client, 'insertSheetDimension', {
+        spreadsheetId: 'sheet-1', sheetId: 0, dimension: 'ROWS', startIndex: 5, endIndex: 8,
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text!.includes('Inserted 3 rows at [5, 8)'));
+      const req = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate')[0].args[0].requestBody.requests[0];
+      assert.deepEqual(req.insertDimension, { range: { sheetId: 0, dimension: 'ROWS', startIndex: 5, endIndex: 8 }, inheritFromBefore: true });
+    });
+
+    it('insertSheetDimension at index 0 takes formatting from after', async () => {
+      const res = await callTool(ctx.client, 'insertSheetDimension', {
+        spreadsheetId: 'sheet-1', sheetId: 3, dimension: 'COLUMNS', startIndex: 0, endIndex: 1,
+      });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text!.includes('Inserted 1 column'));
+      const req = ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate')[0].args[0].requestBody.requests[0];
+      assert.deepEqual(req.insertDimension, { range: { sheetId: 3, dimension: 'COLUMNS', startIndex: 0, endIndex: 1 }, inheritFromBefore: false });
+    });
+
+    it('insertSheetDimension rejects inheritFromBefore at index 0 and a reversed range', async () => {
+      const at0 = await callTool(ctx.client, 'insertSheetDimension', {
+        spreadsheetId: 'sheet-1', sheetId: 0, dimension: 'ROWS', startIndex: 0, endIndex: 2, inheritFromBefore: true,
+      });
+      assert.equal(at0.isError, true);
+      assert.ok(at0.content[0].text!.includes('nothing before it'));
+      const reversed = await callTool(ctx.client, 'insertSheetDimension', {
+        spreadsheetId: 'sheet-1', sheetId: 0, dimension: 'ROWS', startIndex: 4, endIndex: 4,
+      });
+      assert.equal(reversed.isError, true);
+      assert.equal(ctx.mocks.sheets.tracker.getCalls('spreadsheets.batchUpdate').length, 0);
+    });
+
     it('hideSheetDimension validation error', async () => {
       const res = await callTool(ctx.client, 'hideSheetDimension', {});
       assert.equal(res.isError, true);

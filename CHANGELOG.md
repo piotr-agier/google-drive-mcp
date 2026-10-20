@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **sheets:** `insertSheetDimension` inserts empty rows or columns at a position (`insertDimension` in `spreadsheets.batchUpdate`); what is there moves down or right and formulas referring to it follow, which `appendSpreadsheetRows` (end of the data only) and rewriting values below the insertion point (formatting and references lost) could not do. It takes the same 0-based half-open `DimensionRange` as the other dimension tools, and new rows / columns take the formatting of the one before the insertion point, as the Sheets UI does, unless `inheritFromBefore: false` — or when inserting at index 0, where there is nothing before. Taking the server from 130 tools to 131
+
 ## [2.13.0](https://github.com/piotr-agier/google-drive-mcp/compare/v2.12.0...v2.13.0) (2026-10-15)
 
 ### Added

@@ -15,6 +15,7 @@
 // ---------------------------------------------------------------------------
 
 import { Credentials, OAuth2Client } from 'google-auth-library';
+import { applyApiBaseUrl } from '../utils/apiBaseUrl.js';
 import { TimeoutError } from '../utils/retry.js';
 import { AccountStore } from './accountStore.js';
 import { loadCredentials } from './client.js';
@@ -69,10 +70,10 @@ export class AccountClientFactory {
     if (existing) return existing;
 
     const base = await this.loadBaseCredentials();
-    const client = new OAuth2Client({
+    const client = applyApiBaseUrl(new OAuth2Client({
       clientId: base.client_id,
       clientSecret: base.client_secret || undefined,
-    });
+    }));
     client.setCredentials({
       access_token: record.accessToken || undefined,
       refresh_token: record.refreshToken || undefined,

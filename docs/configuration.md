@@ -55,6 +55,7 @@ The environment-variable equivalents in [Resources, timeout, and retry](#resourc
 | `GOOGLE_DRIVE_MCP_TOKEN_PATH` | `$XDG_CONFIG_HOME/google-drive-mcp/tokens.json` | Override the local token store |
 | `GOOGLE_DRIVE_MCP_AUTH_PORT` | `3000` | First of five consecutive loopback callback ports |
 | `GOOGLE_DRIVE_MCP_SCOPES` | full configured set | Comma-separated scope aliases or full HTTPS scope URLs |
+| `GOOGLE_DRIVE_MCP_API_BASE_URL` | unset | Comma-separated `host=url` pairs sending `www.googleapis.com`, `docs.googleapis.com` and `sheets.googleapis.com` calls to a base of your own (an egress proxy). The base may carry a path prefix, which is kept. Token refresh is not rewritten |
 | `XDG_CONFIG_HOME` | `~/.config` | Base directory used for credentials, tokens, and the default team store |
 
 Credentials lookup order is:

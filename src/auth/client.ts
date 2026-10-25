@@ -1,4 +1,5 @@
 import { OAuth2Client } from 'google-auth-library';
+import { applyApiBaseUrl } from '../utils/apiBaseUrl.js';
 import * as fs from 'fs/promises';
 import { describeErrorForLog, getKeysFilePaths, generateCredentialsErrorMessage, OAuthCredentials } from './utils.js';
 
@@ -74,11 +75,11 @@ export async function initializeOAuth2Client(): Promise<OAuth2Client> {
     const credentials = await loadCredentialsWithFallback();
     
     // Use the first redirect URI as the default for the base client
-    return new OAuth2Client({
+    return applyApiBaseUrl(new OAuth2Client({
       clientId: credentials.client_id,
       clientSecret: credentials.client_secret || undefined,
       redirectUri: credentials.redirect_uris?.[0] || 'http://127.0.0.1:3000/oauth2callback',
-    });
+    }));
   } catch (error) {
     throw new Error(`Error loading OAuth keys: ${error instanceof Error ? error.message : error}`);
   }

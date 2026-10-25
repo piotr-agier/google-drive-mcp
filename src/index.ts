@@ -1073,6 +1073,7 @@ Environment Variables:
 
   Common Configuration:
   GOOGLE_DRIVE_MCP_SCOPES               Comma-separated scopes to request (aliases or full URLs; defaults to all Drive/Docs/Sheets/Slides/Calendar scopes). Applies to local OAuth, external OAuth, and service account modes.
+  GOOGLE_DRIVE_MCP_API_BASE_URL         Comma-separated host=url pairs sending www/docs/sheets.googleapis.com calls to a base of your own, path prefix kept (egress proxy). Token refresh is not rewritten.
   GOOGLE_DRIVE_MCP_DISABLE_RESOURCES    Disable the MCP resource protocol (gdrive:/// listing/reading); tools stay available. Accepts 1/0, true/false, yes/no, on/off. Mirrored by the --no-resources[=<bool>] flag. (default: enabled)
 
   Transport Configuration:

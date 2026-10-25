@@ -12,6 +12,7 @@
 
 import { OAuth2Client } from 'google-auth-library';
 import { calendar_v3, drive_v3, google } from 'googleapis';
+import { applyApiBaseUrl } from '../../utils/apiBaseUrl.js';
 import { TimeoutError } from '../../utils/retry.js';
 import {
   DEFAULT_TOKEN_REFRESH_CONFIG,
@@ -92,10 +93,10 @@ export class TeamClientFactory {
     const existing = this.clients.get(sub);
     if (existing) return existing;
 
-    const client = new OAuth2Client({
+    const client = applyApiBaseUrl(new OAuth2Client({
       clientId: this.credentials.client_id,
       clientSecret: this.credentials.client_secret,
-    });
+    }));
     client.setCredentials({
       access_token: user.googleAccessToken || undefined,
       refresh_token: user.googleRefreshToken,

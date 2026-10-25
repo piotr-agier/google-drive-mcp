@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { OAuth2Client } from 'google-auth-library';
 import { GoogleAuth, GoogleAuthOptions } from 'google-auth-library';
 import { resolveOAuthScopes } from './scopes.js';
+import { applyApiBaseUrl } from '../utils/apiBaseUrl.js';
 
 // ---------------------------------------------------------------------------
 // Service Account mode
@@ -214,7 +215,7 @@ export async function createServiceAccountAuth(): Promise<any> {
   validateCredentialsFile(options.keyFile as string, subject);
 
   const auth = new GoogleAuth(options);
-  const client = await auth.getClient();
+  const client = applyApiBaseUrl((await auth.getClient()) as OAuth2Client);
   console.error('Service account authentication successful');
   return client;
 }
@@ -291,7 +292,7 @@ export function createExternalOAuth2Client(): OAuth2Client {
   const clientId = process.env.GOOGLE_DRIVE_MCP_CLIENT_ID?.trim();
   const clientSecret = process.env.GOOGLE_DRIVE_MCP_CLIENT_SECRET?.trim();
 
-  const oauth2Client = new OAuth2Client(clientId, clientSecret);
+  const oauth2Client = applyApiBaseUrl(new OAuth2Client(clientId, clientSecret));
 
   if (refreshToken) {
     // Deliberately without the access token. A Google access token lives about

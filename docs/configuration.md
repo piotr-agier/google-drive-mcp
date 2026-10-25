@@ -55,6 +55,7 @@ The environment-variable equivalents in [Resources, timeout, and retry](#resourc
 | `GOOGLE_DRIVE_MCP_TOKEN_PATH` | `$XDG_CONFIG_HOME/google-drive-mcp/tokens.json` | Override the local token store |
 | `GOOGLE_DRIVE_MCP_AUTH_PORT` | `3000` | First of five consecutive loopback callback ports |
 | `GOOGLE_DRIVE_MCP_SCOPES` | full configured set | Comma-separated scope aliases or full HTTPS scope URLs |
+| `GOOGLE_DRIVE_MCP_ENABLED_TOOLS` | unset (every tool) | Comma-separated tool names: `tools/list` shows only these and a call to any other is refused. An unknown name fails the server at start. Mirrored by `--enable-tools=a,b`, which wins |
 | `XDG_CONFIG_HOME` | `~/.config` | Base directory used for credentials, tokens, and the default team store |
 
 Credentials lookup order is:

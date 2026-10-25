@@ -47,6 +47,7 @@ import {
 import type { AccountOps, AddAccountResult, ToolContext, ToolResult } from './types.js';
 import { errorResponse } from './types.js';
 import { loadRuntimeConfig, parseBoolEnv, type RuntimeConfig } from './utils/cliArgs.js';
+import { checkEnabledTools, isToolEnabled, parseEnabledTools } from './utils/enabledTools.js';
 import { allAuthModeOverrideEnvVars } from './auth/externalAuth.js';
 import { GOOGLE_CALLBACK_PATH, isLoopbackHost, loadTeamConfig } from './auth/team/config.js';
 import { createTeamRuntime, type TeamRuntime } from './auth/team/runtime.js';
@@ -472,6 +473,10 @@ async function checkFileExists(name: string, parentFolderId: string = 'root', dr
 // -----------------------------------------------------------------------------
 const domainModules = [driveTools, docsTools, sheetsTools, slidesTools, calendarTools];
 
+// Read once at start: an unknown name fails the server before it serves.
+const enabledTools = parseEnabledTools();
+checkEnabledTools(enabledTools, domainModules.flatMap((m) => m.toolDefinitions.map((d) => d.name)));
+
 // -----------------------------------------------------------------------------
 // Per-tool `account` parameter plumbing
 // -----------------------------------------------------------------------------
@@ -824,7 +829,9 @@ function createMcpServer(config: RuntimeConfig = runtimeConfig): Server {
   }
 
   s.setRequestHandler(ListToolsRequestSchema, async () => {
-    const definitions = domainModules.flatMap((m) => m.toolDefinitions);
+    const definitions = domainModules
+      .flatMap((m) => m.toolDefinitions)
+      .filter((d) => isToolEnabled(enabledTools, d.name));
     if (teamRuntime) {
       // Team mode: identity comes from the bearer, so the `account` parameter
       // is never injected and local account management is not offered. Local
@@ -840,6 +847,9 @@ function createMcpServer(config: RuntimeConfig = runtimeConfig): Server {
   });
 
   s.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    if (!isToolEnabled(enabledTools, request.params.name)) {
+      return errorResponse(`Tool not enabled: ${request.params.name}`);
+    }
     if (teamRuntime) {
       return handleTeamToolCall(request.params.name, request.params.arguments ?? {}, extra);
     }
@@ -1073,6 +1083,7 @@ Environment Variables:
 
   Common Configuration:
   GOOGLE_DRIVE_MCP_SCOPES               Comma-separated scopes to request (aliases or full URLs; defaults to all Drive/Docs/Sheets/Slides/Calendar scopes). Applies to local OAuth, external OAuth, and service account modes.
+  GOOGLE_DRIVE_MCP_ENABLED_TOOLS        Comma-separated tool names to offer; any other is hidden and refused, an unknown name fails at start. Mirrored by --enable-tools=a,b. (default: every tool)
   GOOGLE_DRIVE_MCP_DISABLE_RESOURCES    Disable the MCP resource protocol (gdrive:/// listing/reading); tools stay available. Accepts 1/0, true/false, yes/no, on/off. Mirrored by the --no-resources[=<bool>] flag. (default: enabled)
 
   Transport Configuration:
